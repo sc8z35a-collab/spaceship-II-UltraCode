@@ -29,7 +29,8 @@ float cloudDensityAt(vec3 dEcef, vec2 gx, vec2 gy){
   vec3 d = vec3(c * dEcef.x + s * dEcef.z, dEcef.y, -s * dEcef.x + c * dEcef.z);
   vec2 uv = dirToUv(d);
   float v = textureGrad(tData, uv, gx, gy).b;
-  return smoothstep(0.1, 0.8, v);
+  // thin haze in the cloud map is left out: it hid most of the land under a white veil
+  return smoothstep(0.3, 0.9, v);
 }
 `;
 
@@ -85,6 +86,23 @@ void main(){
   float lightsV = dat.g;
   col = sampleSurface(uv, gx, gy, col, lightsV);
   vec3 albedo = col.rgb;
+  float landK = 1.0 - smoothstep(0.35, 0.65, col.a);
+  {
+    // Blue Marble is muted and the haze mutes it further: more contrast and saturation on land
+    float l0 = dot(albedo, vec3(0.299, 0.587, 0.114));
+    vec3 g0 = max(mix(vec3(l0), albedo, 1.3), 0.0);
+    g0 = pow(g0, vec3(1.08)) * 1.12;
+    albedo = mix(albedo, g0, landK);
+    // kilometre-scale texture from orbit: fields, forest, relief shading break up the soft tiles
+    float midF = smoothstep(2200000.0, 160000.0, vViewDist) * landK;
+    if (midF > 0.001){
+      float m1 = pfbm(vDetail, 1.0 / 14000.0, 3);
+      float m2 = pfbm(vDetail, 1.0 / 2600.0, 2);
+      float gr = clamp((albedo.g - albedo.r) * 14.0 + 0.4, 0.0, 1.0);
+      albedo *= mix(1.0, 0.82 + 0.3 * (m1 * 0.5 + 0.5) + 0.14 * m2, midF);
+      albedo = mix(albedo, albedo * mix(vec3(0.82, 0.95, 0.8), vec3(1.12, 1.08, 0.86), smoothstep(-0.2, 0.3, m1 + m2 * 0.6)), gr * midF * 0.6);
+    }
+  }
   float near = smoothstep(9000.0, 1200.0, vViewDist);
   float water = mix(col.a, vHW.y, near);
   water = smoothstep(0.35, 0.65, water);
@@ -187,7 +205,7 @@ void main(){
   // ---- aerial perspective ----
   vec3 ins, tr;
   aerialPerspective(roKm, pKm, ins, tr);
-  vec3 outc = radiance * tr + ins;
+  vec3 outc = radiance * tr + ins * 0.88;
   if (uDebug > 0.5) outc = uDebug < 1.5 ? vec3(dat.g) : (uDebug < 2.5 ? vec3(night) : vec3(lights));
   gl_FragColor = vec4(outc, 1.0);
 }

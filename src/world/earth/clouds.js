@@ -55,7 +55,7 @@ void main(){
   }
   n = n / wsum; // ~[-0.5,0.5]
   float cov = dens;
-  float d2 = clamp((cov * 1.25 - 0.18 + n * 1.1) / 0.55, 0.0, 1.0);
+  float d2 = clamp((cov * 1.2 - 0.24 + n * 1.0) / 0.6, 0.0, 1.0);
   dens = mix(cov, d2 * d2 * (3.0 - 2.0 * d2), 0.85);
   if (dens < 0.01) discard;
   float muS = dot(up, uSunDir);
@@ -80,7 +80,7 @@ void main(){
   vec3 ins, tr;
   aerialPerspective(ro, pKm, ins, tr);
   vec3 outc = col * tr + ins * dens;
-  float a = clamp(pow(dens, 0.85) * 0.97, 0.0, 1.0);
+  float a = clamp(pow(dens, 1.05) * 0.94, 0.0, 1.0);
   gl_FragColor = vec4(outc * a, a);
 }
 `;
