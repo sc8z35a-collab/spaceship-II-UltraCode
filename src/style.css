@@ -16,6 +16,7 @@ html, body {
   background: radial-gradient(ellipse at 50% 120%, #0b1830 0%, #03060c 55%, #000 100%);
   z-index: 50; transition: opacity 1.2s ease;
 }
+#boot.ready { background: radial-gradient(ellipse at 50% 50%, rgba(0, 0, 0, 0.05) 0%, rgba(0, 0, 0, 0.35) 60%, rgba(0, 0, 0, 0.75) 100%); }
 #boot.fade { opacity: 0; pointer-events: none; }
 .boot-inner { text-align: center; }
 .logo {

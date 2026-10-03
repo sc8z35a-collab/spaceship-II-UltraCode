@@ -82,7 +82,8 @@ export class Monitors {
       bez.matrixAutoUpdate = false; bez.layers.set(LAYER_NEAR);
       bez.castShadow = true; bez.receiveShadow = true;
       root.add(bez);
-      const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate: slot.id === 'nav' || slot.id === 'cam' ? 10 : 6, tab: 0, boot: 0 };
+      const rate = { nav: 8, status: 6, cam: 3, airlock: 6 }[slot.id] || 4;
+      const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, tab: 0, boot: 0 };
       this.list.push(m);
       this.byId[slot.id] = m;
       g.interact.addMesh(mesh, (hit) => this.tap(m, hit), { maxDist: 2.6 });
@@ -141,12 +142,22 @@ export class Monitors {
     const servers = g.damage ? g.damage.health.servers : 1;
     const time = performance.now() / 1000;
     let feedWanted = false;
+    // only screens in front of the viewer are redrawn
+    const cam = g.engine.camera;
+    this._frustum = this._frustum || new THREE.Frustum();
+    this._pm = this._pm || new THREE.Matrix4();
+    this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
+    this._frustum.setFromProjectionMatrix(this._pm);
+    this._sph = this._sph || new THREE.Sphere();
     for (const m of this.list) {
       const d = m.slot.pos.distanceTo(eye);
+      this._sph.center.copy(m.slot.pos).applyMatrix4(g.shipVis.root.matrixWorld);
+      this._sph.radius = Math.max(m.slot.w, m.slot.h);
+      const inView = this._frustum.intersectsSphere(this._sph);
       m.mat.uniforms.uTime.value = time % 100;
       m.mat.uniforms.uPower.value = power < 0.15 ? (Math.random() < 0.02 ? 0.3 : 0) : Math.min(1, 0.4 + power * 0.6);
       m.mat.uniforms.uGlitch.value = servers < 0.6 ? (0.6 - servers) * 1.6 * (0.5 + 0.5 * Math.sin(time * 3)) : 0;
-      if (d > 7 && g.mode !== 'camera') continue;
+      if ((d > 7 || !inView) && g.mode !== 'camera' && m.boot >= 1) continue;
       m.t += dt;
       if (m.t < 1 / m.rate) continue;
       m.t = 0;

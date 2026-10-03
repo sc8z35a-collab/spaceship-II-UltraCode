@@ -16,7 +16,9 @@ function makeSystem(additive) {
     vertexShader: /* glsl */`
       attribute vec4 color; attribute float size; uniform float uScale; varying vec4 vC;
       void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); gl_Position = projectionMatrix * mv;
-        gl_PointSize = clamp(size * uScale / max(-mv.z, 0.05), 1.0, 256.0); vC = color; }`,
+        gl_PointSize = clamp(size * uScale / max(-mv.z, 0.05), 1.0, 256.0); vC = color;
+        // fade out what drifts right in front of the eye (would fill the screen)
+        vC.a *= smoothstep(0.12, 0.45, -mv.z); }`,
     fragmentShader: /* glsl */`
       varying vec4 vC;
       void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float r = dot(p,p); if (r > 1.0) discard;

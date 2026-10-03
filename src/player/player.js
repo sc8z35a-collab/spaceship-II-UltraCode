@@ -179,9 +179,12 @@ export class Player {
         this.thrusting = true;
       } else {
         this.thrusting = false;
-        // grab nearby handrails
+        // grab nearby handrails; otherwise the pack's auto-hold slowly nulls drift (uses a little gas)
         if (env.nearRail) this.vel.multiplyScalar(Math.exp(-dt * 2.5));
-        else this.vel.multiplyScalar(Math.exp(-dt * 0.05));
+        else if (this.suitFuel > 0 && this.vel.lengthSq() > 1e-4) {
+          this.vel.multiplyScalar(Math.exp(-dt * 0.18));
+          this.suitFuel = Math.max(0, this.suitFuel - dt * 0.00012);
+        }
       }
       this.vel.addScaledVector(gLocal, dt);
     }
@@ -195,7 +198,7 @@ export class Player {
     if (env.liftDelta) delta.add(env.liftDelta);
     this.canClimb = !!env.climb;
     this.kcc.enableSnapToGround(walking && !env.climb ? 0.15 : 0);
-    if (walking) this.kcc.enableAutostep(0.25, 0.15, false); else this.kcc.disableAutostep();
+    if (walking) this.kcc.enableAutostep(env.stepUp || 0.25, 0.12, false); else this.kcc.disableAutostep();
     this.kcc.computeColliderMovement(this.colStand, { x: delta.x, y: delta.y, z: delta.z });
     const mv = this.kcc.computedMovement();
     this.grounded = this.kcc.computedGrounded();

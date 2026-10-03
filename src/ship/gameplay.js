@@ -88,6 +88,22 @@ export class Gameplay {
     this.vm.add(kit, cup);
     kit.visible = cup.visible = false;
     setLayersDeep(this.vm, LAYER_NEAR);
+    // Kaito's arms while flying: hands on the side stick and the throttle
+    this.arms = new THREE.Group();
+    const sleeve = new THREE.MeshStandardMaterial({ color: 0x2d3a52, roughness: 0.85 });
+    const glove = new THREE.MeshStandardMaterial({ color: 0x1b1c1f, roughness: 0.6 });
+    this.armParts = [];
+    for (let k = 0; k < 2; k++) {
+      const upper = new THREE.Mesh(new THREE.CapsuleGeometry(0.048, 0.26, 4, 10), sleeve);
+      const fore = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.24, 4, 10), sleeve);
+      const hand = new THREE.Mesh(new THREE.SphereGeometry(0.045, 12, 8), glove);
+      hand.scale.set(1, 0.8, 1.35);
+      this.arms.add(upper, fore, hand);
+      this.armParts.push({ upper, fore, hand });
+    }
+    setLayersDeep(this.arms, LAYER_NEAR);
+    this.arms.visible = false;
+    g.shipVis.root.add(this.arms);
     // exterior floodlights (EVA / external cameras at night)
     this.flood = [];
     const fl = g.shipVis.extLights;
@@ -187,7 +203,8 @@ export class Gameplay {
     const inShaft = p.x > LIFT.x0 && p.x < LIFT.x1 && p.z > LIFT.z0 && p.z < LIFT.z1;
     const inHatchway = p.x > ENG_HATCH.x0 - 0.1 && p.x < ENG_HATCH.x1 + 0.1 && p.z > ENG_HATCH.z0 - 0.1 && p.z < ENG_HATCH.z1 + 0.1;
     const nearHatch = p.distanceTo(HATCH.center) < 1.25;
-    env.lowCeiling = (p.y < DECK_Y - 0.1 && !inShaft && !inHatchway && (pl.state === 'walk' || pl.state === 'evaWalk')) || (nearHatch && gMag > 2);
+    env.lowCeiling = (p.y < DECK_Y - 0.1 && !inShaft && !inHatchway && (pl.state === 'walk' || pl.state === 'evaWalk')) || nearHatch;
+    if (nearHatch) env.stepUp = 0.45;    // step over the hatch sill
     // ladders: the engineering floor hatch inside, hull rails / boarding ladder outside
     env.climb = false;
     if (gMag > 2) {
@@ -363,6 +380,7 @@ export class Gameplay {
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {
       if (pl.state === 'float' || pl.state === 'walk') pl.state = g.gLocal.length() > 2 ? 'evaWalk' : 'eva';
+      if (pl.vel.length() > 0.5) pl.vel.setLength(0.5);   // a gentle push off the hatch rim
       if (!g.flight.landed) g.asphalt.say('eva_out', {}, { minGap: 120 });
     } else if (!pl.outside && wasOut) {
       if (pl.state === 'eva' || pl.state === 'evaWalk') pl.state = 'float';
@@ -478,6 +496,7 @@ export class Gameplay {
         if (g.audio.ready) g.audio._burst(null, { dur: 2.5, freq: 120, q: 0.6, gain: 0.5, type: 'brown', filter: 'lowpass', sweep: 3, direct: true });
         g.shake = Math.max(g.shake, 0.6);
       } else if (e === 'ultra_off') g.asphalt.say('ultra_off', {}, { force: true });
+      else if (e === 'ultra_stage') { g.shake = Math.max(g.shake, 0.35); if (g.audio.ready) g.audio._burst(null, { dur: 0.6, freq: 90, q: 0.7, gain: 0.35, type: 'brown', filter: 'lowpass', direct: true }); }
       else if (e === 'ultra_denied') { g.asphalt.say('ultra_denied', {}, { force: true }); g.audio.denied(V(0, 0.8, -10.6)); }
       else if (e === 'touchdown' || e === 'splashdown') {
         if (!this.landingSaid) setTimeout(() => g.asphalt.say(e === 'splashdown' ? 'splash' : 'landing', {}, { force: true }), 1500);
@@ -489,6 +508,7 @@ export class Gameplay {
 
   raise(level) {
     const al = this.g.systems.alarm;
+    if (this.sleeping) this.wake();
     if (!al.active) al.silenced = false;
     al.active = true;
     al.level = Math.max(al.level || 0, level);
@@ -518,10 +538,10 @@ export class Gameplay {
     if (g.flight.hullTemp > 1300) hazards.push(1);
     if (g.player.suit && g.player.suitO2 < 0.15) hazards.push(0.7);
     for (const a of this.watched) if (!a.hit && !a.dead && a.dist < 3500) hazards.push(0.9);
-    const activeIssues = g.damage.issues.some((i) => i.state === 'active' && i.sev > 0.15);
     if (hazards.length) { const h = Math.max(...hazards); if (!al.active || h > al.level + 0.05) this.raise(h); }
     al.t += dt;
-    if (!hazards.length && !activeIssues && al.t > 20) { al.active = false; al.level = 0; }
+    // events ring for a while; ongoing hazards keep it going (lasting damage alone does not)
+    if (!hazards.length && al.t > 25) { al.active = false; al.level = 0; }
     const on = al.active && !al.silenced;
     if (on) {
       g.audio.alarm(true);
@@ -633,12 +653,14 @@ export class Gameplay {
   toggleSleep() {
     if (this.sleeping) { this.wake(); return; }
     const g = this.g;
-    if (g.systems.alarm.active) { g.asphalt.say('sleep_denied', {}, { force: true }); return; }
+    if (g.systems.alarm.active && !g.systems.alarm.silenced) { g.asphalt.say('sleep_denied', {}, { force: true }); return; }
     const bunk = g.layout.seats.find((s) => s.kind === 'bed');
     this.fadeAction(() => {
       if (bunk && g.player.seat !== bunk) { if (g.player.state === 'seated') g.systems.exitPressed(); g.systems.sit(bunk); }
       this.sleeping = true;
       this.sleepStart = g.time;
+      this.prevLight = g.systems.lightMode;
+      g.systems.lightMode = 'night';
       g.systems.sleeping = true;
       g.timeScale = 240;
       g.asphalt.say('sleep', {}, { force: true });
@@ -651,6 +673,7 @@ export class Gameplay {
     this.sleeping = false;
     g.systems.sleeping = false;
     g.timeScale = 1;
+    if (this.prevLight) { g.systems.lightMode = this.prevLight; this.prevLight = null; }
     g.hud.setFade(0);
     const h = (g.time - this.sleepStart) / 3.6e6;
     g.asphalt.say('wake', { h: h < 1 ? Math.round(h * 60) + '分' : h.toFixed(1) + '時間' }, { force: true });
@@ -854,6 +877,33 @@ export class Gameplay {
     for (const s of this.flood) s.intensity += (want - s.intensity) * Math.min(1, dt * 3);
   }
 
+  // ================================================================== pilot arms
+  updateArms() {
+    const g = this.g, pl = g.player, c = g.systems.controls;
+    const on = g.mode === 'pilot' && pl.state === 'seated' && pl.seat && pl.seat.kind === 'pilot' && c.stick;
+    this.arms.visible = !!on;
+    if (!on) return;
+    const seg = (m, a, b, len) => {
+      const d = b.clone().sub(a);
+      m.position.copy(a).addScaledVector(d, 0.5);
+      m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+      m.scale.y = a.distanceTo(b) / len;
+    };
+    const eye = pl.seat.eye;
+    // grip points follow the animated controls
+    const stickGrip = V(0, 0.15, 0).applyEuler(c.stick.rotation).add(c.stick.position).add(c.stick.parent.position);
+    const thrGrip = V(0, 0.125, 0).applyEuler(c.throttle.rotation).add(c.throttle.position).add(c.throttle.parent.position);
+    [[1, stickGrip], [-1, thrGrip]].forEach(([side, grip], i) => {
+      const P = this.armParts[i];
+      const sh = eye.clone().add(V(side * 0.2, -0.27, 0.06));
+      const elbow = sh.clone().lerp(grip, 0.5).add(V(side * 0.09, -0.13, 0.07));
+      seg(P.upper, sh, elbow, 0.36);
+      seg(P.fore, elbow, grip.clone().add(V(0, 0.01, 0.04)), 0.32);
+      P.hand.position.copy(grip).add(V(0, 0.0, 0.01));
+      P.hand.quaternion.setFromUnitVectors(V(0, 0, 1), grip.clone().sub(elbow).normalize());
+    });
+  }
+
   // ================================================================== viewmodel
   updateViewmodel(dt) {
     const g = this.g, pl = g.player;
@@ -995,6 +1045,16 @@ export class Gameplay {
     // ventilation sound follows the fans
     const fansOn = ls.fans.on && ls.fans.health > 0.2 && (g.systems.power ?? 1) > 0.2;
     for (const [id, v] of [['ventMain', 0.035], ['ventCockpit', 0.02], ['lsFans', 0.04]]) g.audio.setLoopGain(id, fansOn ? v : 0, 0.8);
+    // sunrise / sunset: the hull creaks as it heats and cools
+    const lit = g.space.sunColor.r > 0.25;
+    if (this.wasLit !== undefined && lit !== this.wasLit && !g.flight.landed) {
+      for (let i = 0; i < 3; i++) {
+        const p = V((Math.random() - 0.5) * 4, Math.random() * 2.4, -10 + Math.random() * 18);
+        setTimeout(() => g.audio.creak(p, 0.3 + Math.random() * 0.4), 1500 + Math.random() * 20000);
+      }
+      if (lit && !this.sleeping) g.asphalt.say('sunrise', {}, { minGap: 5400 });
+    }
+    this.wasLit = lit;
     // window condensation while the cabin air is falling
     g.shipVis.setFrost(Math.min(1, ls.z[ls.zoneOfPlayer].fog * 2));
     g.asphalt.update(dt, !g.systems.alarm.active && g.mode !== 'camera' && !this.sleeping);
@@ -1002,7 +1062,7 @@ export class Gameplay {
 
   updateVisual(dt) {
     this.updateExterior(dt);
-    if (this.g.running) this.updateViewmodel(dt);
+    if (this.g.running) { this.updateViewmodel(dt); this.updateArms(); }
   }
 
   // ================================================================== persistence

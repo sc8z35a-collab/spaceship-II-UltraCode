@@ -344,7 +344,7 @@ export function buildExterior(M) {
   }
 
   // ---------- collision: outer skin (hatch cut out) + main external modules ----------
-  b.colMesh(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch));
+  b.colMesh(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch, 0.06));
   b.colCyl(1.72, 0.5, [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0]);
   b.colCyl(1.5, zR1 - zR0, [0, 0.4, (zR0 + zR1) / 2], [Math.PI / 2, 0, 0]);
   b.colCyl(1.9, 0.22, [0, 0.4, zR0 - 0.15], [Math.PI / 2, 0, 0]);

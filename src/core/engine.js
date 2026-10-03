@@ -52,6 +52,31 @@ class MultiFrustumPass extends Pass {
   }
 }
 
+/** replaces NaN / Inf pixels of the HDR scene before bloom and exposure can spread them */
+class SanitizePass extends Pass {
+  constructor() {
+    super('SanitizePass');
+    this.fullscreenMaterial = new THREE.ShaderMaterial({
+      uniforms: { inputBuffer: { value: null } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 1.0, 1.0); }',
+      fragmentShader: /* glsl */`
+        uniform sampler2D inputBuffer; varying vec2 vUv;
+        void main(){
+          vec3 c = texture2D(inputBuffer, vUv).rgb;
+          if (!(c.r == c.r && c.g == c.g && c.b == c.b) || any(isinf(c))) c = vec3(0.0);
+          gl_FragColor = vec4(clamp(c, 0.0, 60000.0), 1.0);
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+  }
+
+  render(renderer, inputBuffer, outputBuffer) {
+    this.fullscreenMaterial.uniforms.inputBuffer.value = inputBuffer.texture;
+    renderer.setRenderTarget(this.renderToScreen ? null : outputBuffer);
+    renderer.render(this.scene, this.camera);
+  }
+}
+
 class AutoExposurePass extends Pass {
   constructor() {
     super('AutoExposurePass');
@@ -216,8 +241,9 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     float rim = smoothstep(0.18, 0.36, r2 * vec2(1.0, 1.6).y + dc.x * dc.x * 0.4);
     col = mix(col, col * vec3(0.92, 0.97, 1.02), uVisor);
     col *= 1.0 - rim * 0.85 * uVisor;
-    float streak = smoothstep(0.02, 0.0, abs(dc.y + dc.x * 0.6 - 0.28)) * 0.04;
-    col += vec3(streak) * uVisor;
+    // faint curved glare from the visor dome (only noticeable against dark backgrounds)
+    float glare = exp(-pow((length(dc * vec2(1.0, 1.7) - vec2(-0.25, 0.32)) - 0.42) * 22.0, 2.0)) * 0.006;
+    col += vec3(0.8, 0.9, 1.0) * glare * uVisor;
   }
   // vignette
   col *= 1.0 - uVignette * smoothstep(0.12, 0.62, r2);
@@ -286,6 +312,7 @@ export class Engine {
     this.grade = new GradeEffect();
     this.exposure.onTexture = (t) => this.grade.set('tLum', t);
     this.composer.addPass(this.mfPass);
+    this.composer.addPass(new SanitizePass());
     this.composer.addPass(this.exposure);
     this.composer.addPass(new EffectPass(this.camera, this.bloom, this.grade));
     this.smaa = new SMAAEffect({ preset: SMAAPreset.HIGH });

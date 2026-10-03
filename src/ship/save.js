@@ -1,7 +1,7 @@
 // Persistence: autosave + manual save in localStorage. On load the world keeps going: the time
 // that passed in real life is simulated (orbit / autopilot travel, life support, damage).
 import * as THREE from 'three';
-import { MU_EARTH } from '../core/astro.js';
+import { MU_EARTH, OMEGA_EARTH } from '../core/astro.js';
 
 const KEY = 'b29.save.v1';
 const SAFE = 'b29.save.safe.v1';
@@ -11,7 +11,10 @@ export class SaveSystem {
     this.g = game;
     this.timer = 0;
     this.enabled = true;
-    window.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') this.save(); });
+    window.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden') { this.save(); this.hiddenAt = Date.now(); }
+      else if (this.hiddenAt) this.resume();
+    });
     window.addEventListener('pagehide', () => this.save());
   }
 
@@ -79,15 +82,32 @@ export class SaveSystem {
     return true;
   }
 
-  catchUp(gap, apTarget) {
+  /** back from the background (app switched / screen off): the world kept going meanwhile */
+  resume() {
+    const g = this.g;
+    const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - this.hiddenAt) / 1000));
+    this.hiddenAt = 0;
+    if (!g.running || !this.enabled || gap < 8 || g.player.state === 'dead') return;
+    const ap = g.autopilot.state !== 'off' && g.autopilot.target ? g.autopilot.target.id : null;
+    const rep = this.catchUp(gap, ap, true);
+    g.last = 0;
+    if (gap > 60) {
+      const h = gap / 3600;
+      const ht = h < 1 ? Math.round(gap / 60) + '分' : h < 48 ? h.toFixed(1) + '時間' : (h / 24).toFixed(1) + '日';
+      g.asphalt.say('back', { h: ht }, { force: true });
+      if (rep.hits) g.asphalt.say('offline_hits', { n: rep.hits }, { force: true });
+    }
+  }
+
+  catchUp(gap, apTarget, engaged = false) {
     const g = this.g, f = g.flight;
     const report = { gap, hits: 0 };
     if (gap < 5) return report;
     g.time += gap * 1000;
     const terrain = (pos) => g.terrainAt(pos);
-    if (apTarget && g.autopilot.engage(apTarget)) {
+    if (apTarget && (engaged || g.autopilot.engage(apTarget))) {
       // fly the autopilot in coarse steps
-      g.asphalt.queue.length = 0; g.asphalt.log.pop();
+      if (!engaged) { g.asphalt.queue.length = 0; g.asphalt.log.pop(); }
       let t = 0;
       const step = gap > 86400 ? 4 : 1;
       const tStart = g.time - gap * 1000;
@@ -105,7 +125,12 @@ export class SaveSystem {
           break;
         }
       }
-    } else if (!f.landed) {
+    } else if (f.landed || f.alt < 100000) {
+      // resting on the ground / hovering with the air: turn with the Earth
+      const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), OMEGA_EARTH * gap);
+      f.pos.applyQuaternion(q); f.vel.applyQuaternion(q); f.hRef.applyQuaternion(q);
+      f.updateAttitude();
+    } else {
       this._coast(gap);
     }
     // life support + damage evolution in coarse steps (Asphalt keeps the crew zone sealed)

@@ -88,7 +88,7 @@ export function buildInteriorShell(M) {
   const inner = loftGeometry(z0, z1, 230, 140, INSET, true);
   b.add(inner, 'wall');
   // collision shell: lower resolution, open at the airlock hatch so EVA is possible
-  b.colMesh(cutOpeningTris(loftGeometry(z0, z1, 120, 72, INSET, true), OPENINGS.find((o) => o.kind === 'hatch')));
+  b.colMesh(cutOpeningTris(loftGeometry(z0, z1, 120, 72, INSET, true), OPENINGS.find((o) => o.kind === 'hatch'), 0.06));
   // nose cap closure inside (small dome) — the loft already closes near the tip
   // ---------- ribs (frames) every 0.8 m ----------
   for (let z = -11.6; z <= 9.2; z += 0.8) {

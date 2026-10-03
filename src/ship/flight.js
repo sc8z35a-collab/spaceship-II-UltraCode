@@ -108,6 +108,7 @@ export class Flight {
     if (on) {
       if (this.engineHealth < 0.45) { this.events.push('ultra_denied'); return; }
       this.ultra = true;
+      this.ultraAuto = true;                 // spools up to full ULTRA speed unless the pilot takes over
       this.preUltraSpeed = Math.min(this.setSpeed, NORMAL_MAX);
       this.ultraDown = null;
       this.events.push('ultra_on');
@@ -170,13 +171,15 @@ export class Flight {
     if (inp && !this.autopilot) {
       const rate = this.ultra ? 6 : 4;
       this.setSpeed += inp.throttle * rate * dt * (Math.abs(this.setSpeed) < 5 ? 0.5 : 1);
+      if (Math.abs(inp.throttle) > 0.25) this.ultraAuto = false;
     }
+    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(ULTRA_MAX, this.setSpeed + 6 * dt);
     if (this.ultraDown) {
       const u = this.ultraDown;
       const target = u.steps[u.i];
       // each stage: ramp at ~2.5 m/s^2 then hold briefly
-      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 3.0 * dt);
-      else { u.hold += dt; if (u.hold > 1.6) { u.i++; u.hold = 0; if (u.i >= u.steps.length) this.ultraDown = null; } }
+      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 9.0 * dt);
+      else { u.hold += dt; if (u.hold > 0.9) { u.i++; u.hold = 0; this.events.push('ultra_stage'); if (u.i >= u.steps.length) this.ultraDown = null; } }
     }
     this.speedLimit = this.ultra ? ULTRA_MAX : (this.ultraDown ? Math.max(NORMAL_MAX, this.setSpeed) : NORMAL_MAX);
     this.speedLimit *= Math.max(0.2, this.engineHealth);
@@ -213,7 +216,7 @@ export class Flight {
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     const tau = 2.5;
     let aCorr = vDes.clone().sub(vel).divideScalar(tau);
-    const comfort = (this.ultra || this.ultraDown ? 2.6 : 1.3) * Math.max(0.3, this.engineHealth);
+    const comfort = (this.ultraDown ? 7.0 : this.ultra ? 2.6 : 1.3) * Math.max(0.3, this.engineHealth);
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
     if (aCorr.length() > corrLim) aCorr.setLength(corrLim);

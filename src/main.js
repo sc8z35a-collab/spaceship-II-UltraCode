@@ -65,11 +65,14 @@ async function boot() {
   $('btn-continue').classList.toggle('hidden', !hasSave);
   $('boot-btns').classList.remove('hidden');
   $('progress').classList.add('hidden');
+  $('boot').classList.add('ready');   // the live 3D scene shows through behind the title
   game.startIdle();
 
-  const start = async (cont) => {
-    await enterFullscreen();
+  const start = (cont) => {
+    // audio + speech must be unlocked synchronously inside the tap (iOS)
     game.audio.unlock();
+    if (game.asphalt) game.asphalt.unlock();
+    enterFullscreen();
     $('boot').classList.add('fade');
     setTimeout(() => $('boot').classList.add('hidden'), 1300);
     $('hud').classList.remove('hidden');
