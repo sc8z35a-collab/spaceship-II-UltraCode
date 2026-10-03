@@ -180,6 +180,7 @@ export class Builder {
       mesh.name = key;
       mesh.castShadow = castShadow && !mat.transparent;
       mesh.receiveShadow = receiveShadow;
+      if (mat.userData && mat.userData.depthMat) mesh.customDepthMaterial = mat.userData.depthMat;
       mesh.matrixAutoUpdate = false;
       group.add(mesh);
     }

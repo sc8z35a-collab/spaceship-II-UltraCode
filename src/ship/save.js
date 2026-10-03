@@ -103,19 +103,17 @@ export class SaveSystem {
     const g = this.g, f = g.flight;
     const report = { gap, hits: 0 };
     if (gap < 5) return report;
-    g.time += gap * 1000;
+    const tStart = g.time;
     const terrain = (pos) => g.terrainAt(pos);
     if (apTarget && (engaged || g.autopilot.engage(apTarget))) {
-      // fly the autopilot in coarse steps
+      // fly the autopilot in coarse steps (the simulation clock advances with it)
       if (!engaged) { g.asphalt.queue.length = 0; g.asphalt.log.pop(); }
       let t = 0;
       const step = gap > 86400 ? 4 : 1;
-      const tStart = g.time - gap * 1000;
-      const st = g.autopilot.target;
       while (t < gap) {
         const h = Math.min(step, gap - t);
-        g.stations.orbitPos(st.r, st.n, st.phi0, 0, tStart + t * 1000, st.pos, st.vel);
-        g.autopilot.update(h);
+        g.time = tStart + t * 1000;
+        g.autopilot.update(h, g.time);
         f._step(h, null, terrain);
         t += h;
         if (g.autopilot.state === 'hold' && f.vel.distanceTo(g.autopilot.target.vel) < 1) {
@@ -133,6 +131,7 @@ export class SaveSystem {
     } else {
       this._coast(gap);
     }
+    g.time = tStart + gap * 1000;
     // life support + damage evolution in coarse steps (Asphalt keeps the crew zone sealed)
     const dt = gap > 3600 ? 30 : 5;
     let left = gap;

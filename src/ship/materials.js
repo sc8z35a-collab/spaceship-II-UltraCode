@@ -101,6 +101,13 @@ float breachMask(vec3 p, out float rim){
   }
   return m;
 }
+vec2 panelAt(vec2 pg, float size){
+  vec2 cell = pg / size;
+  vec2 off = vec2(0.5 * floor(cell.y), 0.0);
+  vec2 f = abs(fract(cell + off) - 0.5);
+  float seam = smoothstep(0.012, 0.0, min(0.5 - f.x, 0.5 - f.y) * size);
+  return vec2(seam, hash12(floor(cell + off)));
+}
 float scorchAt(vec3 p){
   float s = 0.0;
   for (int i = 0; i < 8; i++){
@@ -113,6 +120,51 @@ float scorchAt(vec3 p){
 }
 `;
 
+// shadow-map pass for surfaces with windows / canopy / breaches: the light gets through the holes
+const DEPTH_FRAG_PARS = /* glsl */`
+uniform mat4 uOpen[${MAX_OPEN}];
+uniform int uOpenCount;
+uniform vec4 uBreach[${MAX_BREACH}];
+uniform vec4 uCanopy;
+uniform highp sampler3D tNoise3D;
+varying vec3 vShipPos;
+float sn(vec3 p){ return texture(tNoise3D, p).g * 2.0 - 1.0; }
+bool holeAt(vec3 p){
+  for (int i = 0; i < ${MAX_OPEN}; i++){
+    if (i >= uOpenCount) break;
+    mat4 O = uOpen[i];
+    vec3 d = p - O[0].xyz;
+    if (abs(dot(d, O[3].xyz)) > O[3].w) continue;
+    vec2 q = vec2(dot(d, O[1].xyz), dot(d, O[2].xyz));
+    vec2 k = abs(q) - vec2(O[0].w, O[1].w) + O[2].w;
+    if (length(max(k, 0.0)) + min(max(k.x, k.y), 0.0) - O[2].w < 0.0) return true;
+  }
+  if (p.z < -9.3 && p.z > -14.0 && abs(p.x) < 3.3 && p.y > -2.6 && p.y < 3.3 && dot(p, uCanopy.xyz) + uCanopy.w > 0.0
+      && !(abs(p.x + 0.62) < 0.04 || abs(p.x - 0.62) < 0.04 || abs(p.y - 1.78) < 0.04)) return true;
+  for (int i = 0; i < ${MAX_BREACH}; i++){
+    vec4 B = uBreach[i];
+    if (B.w <= 0.0) continue;
+    if (length(p - B.xyz) < B.w * (1.0 + 0.45 * sn(p * 1.1 + B.xyz) + 0.2 * sn(p * 3.9))) return true;
+  }
+  return false;
+}
+`;
+
+function openingDepthMaterial() {
+  const m = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
+  m.onBeforeCompile = (sh) => {
+    Object.assign(sh.uniforms, shipUniforms);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nuniform mat4 uWorldToShip;\nvarying vec3 vShipPos;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvShipPos = (uWorldToShip * modelMatrix * vec4(position, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\n' + DEPTH_FRAG_PARS)
+      .replace('void main() {', 'void main() {\n  if (holeAt(vShipPos)) discard;');
+  };
+  m.customProgramCacheKey = () => 'shipHoleDepth';
+  return m;
+}
+
 /**
  * opts: { dentable, openings (discard windows/breaches), wear (0..1), panels (scale or 0),
  *         grime (0..1), heat (bool), triScale }
@@ -120,6 +172,7 @@ float scorchAt(vec3 p){
 export function patchShipMaterial(mat, opts = {}) {
   const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0 }, opts);
   mat.userData.shipPatched = true;
+  if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, shipUniforms);
@@ -182,13 +235,13 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb *= mix(1.0, 0.62 + 0.38 * (1.0 - grime), ${o.grime.toFixed(3)});
           diffuseColor.rgb *= 1.0 + 0.06 * g2 * ${o.wear.toFixed(3)};
           ${o.panels > 0 ? `
-          // panel seams (grid in ship space projected by dominant axis)
-          vec2 pg = N.x > N.y && N.x > N.z ? P.yz : (N.y > N.z ? P.xz : P.xy);
-          vec2 cell = pg / ${o.panels.toFixed(3)};
-          vec2 f = abs(fract(cell + vec2(0.5 * floor(cell.y), 0.0)) - 0.5);
-          float seam = smoothstep(0.012, 0.0, min(0.5 - f.x, 0.5 - f.y) * ${o.panels.toFixed(3)});
+          // panel seams (grid in ship space), blended across the three projections so curved
+          // surfaces do not get jagged seams where the dominant axis flips
+          vec3 bw = N * N * N * N; bw /= (bw.x + bw.y + bw.z + 1e-5);
+          vec2 pa = panelAt(P.yz, ${o.panels.toFixed(3)}), pb = panelAt(P.xz, ${o.panels.toFixed(3)}), pc = panelAt(P.xy, ${o.panels.toFixed(3)});
+          float seam = pa.x * bw.x + pb.x * bw.y + pc.x * bw.z;
+          float tint = pa.y * bw.x + pb.y * bw.y + pc.y * bw.z;
           diffuseColor.rgb *= 1.0 - 0.45 * seam;
-          float tint = hash12(floor(cell + vec2(0.5 * floor(cell.y), 0.0)));
           diffuseColor.rgb *= 0.93 + 0.1 * tint;` : ''}
           float sc = scorchAt(vShipPos);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85);

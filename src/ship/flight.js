@@ -190,11 +190,11 @@ export class Flight {
     const vRef = this.refVelocity(pos, new THREE.Vector3());
     let vDes = vRef.clone().addScaledVector(fwd, this.setSpeed);
     if (this.autopilot && this.autopilot.vRel) vDes = vRef.clone().add(this.autopilot.vRel);
-    // feed-forward: change of the reference field along our path, minus gravity
+    // feed-forward: the curvature of a constant-altitude path at our horizontal speed
+    // (equals gravity at orbital speed: no thrust needed; hovering in air: full support)
     const g = this.gravity(pos, new THREE.Vector3());
-    const ahead = pos.clone().addScaledVector(vel, 0.5);
-    const vRef2 = this.refVelocity(ahead, new THREE.Vector3());
-    const ffwd = vRef2.sub(vRef).multiplyScalar(2.0);
+    const vh = vel.clone().addScaledVector(up, -vel.dot(up));
+    const ffwd = this.autopilot && this.autopilot.aff ? this.autopilot.aff.clone() : up.clone().multiplyScalar(-vh.lengthSq() / r);
     // --- drag
     const rho = airDensity(alt);
     const vAir = _v3.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
@@ -214,12 +214,20 @@ export class Flight {
     const aMaxEngine = 15 * Math.max(0, this.engineHealth);
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
-    const tau = 2.5;
-    let aCorr = vDes.clone().sub(vel).divideScalar(tau);
+    const tau = Math.max(2.5, dt * 1.5);   // stays stable for coarse (catch-up) steps too
     const comfort = (this.ultraDown ? 7.0 : this.ultra ? 2.6 : 1.3) * Math.max(0.3, this.engineHealth);
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
-    if (aCorr.length() > corrLim) aCorr.setLength(corrLim);
+    // altitude (radial) errors are corrected first, the rest of the budget goes to the
+    // horizontal velocity — a long speed change never lets the ship sink or climb away
+    const err = vDes.clone().sub(vel);
+    const errR = err.dot(up);
+    let aR = errR / tau;
+    if (Math.abs(aR) > corrLim) aR = Math.sign(aR) * corrLim;
+    const aH = err.addScaledVector(up, -errR).divideScalar(tau);
+    const remH = Math.sqrt(Math.max(0, corrLim * corrLim - aR * aR));
+    if (aH.length() > remH) aH.setLength(remH);
+    let aCorr = aH.addScaledVector(up, aR);
     let thrust = aComp.add(aCorr);
     if (this.landed && this.setSpeed <= 0.5 && !(inp && inp.throttle > 0.2) && !this.autopilot) thrust.set(0, 0, 0);
     // in deep space above the atmosphere with no command and FA holding: fine
@@ -254,8 +262,9 @@ export class Flight {
         return;
       }
     }
+    // second-order position update (no systematic sink on a curved path, even with big steps)
+    pos.addScaledVector(vel, dt).addScaledVector(acc, 0.5 * dt * dt);
     vel.addScaledVector(acc, dt);
-    pos.addScaledVector(vel, dt);
     this.properAcc.copy(thrust).add(drag);
     this.vertSpeed = vel.clone().sub(vAir).dot(up);
 

@@ -140,16 +140,23 @@ export class Gameplay {
     // re-entry plasma sheath
     const plasmaMat = new THREE.ShaderMaterial({
       uniforms: { uT: { value: 0 }, uH: { value: 0 }, uDir: { value: new THREE.Vector3(0, 0, -1) } },
-      vertexShader: 'varying vec3 vP; varying vec3 vN; void main(){ vP = position; vN = normal; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform float uT; uniform float uH; uniform vec3 uDir; varying vec3 vP; varying vec3 vN;
+      vertexShader: 'varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw; void main(){ vP = position; vN = normal; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vNw = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }',
+      fragmentShader: `uniform float uT; uniform float uH; uniform vec3 uDir; varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw;
         float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898,78.233,45.164))) * 43758.5453); }
         float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
           return mix(mix(mix(h(i), h(i+vec3(1,0,0)), f.x), mix(h(i+vec3(0,1,0)), h(i+vec3(1,1,0)), f.x), f.y), mix(mix(h(i+vec3(0,0,1)), h(i+vec3(1,0,1)), f.x), mix(h(i+vec3(0,1,1)), h(i+vec3(1,1,1)), f.x), f.y), f.z); }
         void main(){
-          float front = smoothstep(-0.2, 0.95, dot(normalize(vN), uDir));
-          float n = n3(vP * 0.6 - uDir * uT * 9.0) * 0.6 + n3(vP * 2.1 - uDir * uT * 14.0) * 0.4;
-          float a = uH * (0.15 + front) * (0.35 + n);
-          vec3 c = mix(vec3(1.0, 0.22, 0.04), vec3(1.0, 0.82, 0.55), front * n) * a * 3.0;
+          vec3 N = normalize(vN);
+          float facing = dot(N, uDir);
+          float bow = pow(max(facing, 0.0), 3.0);                 // shock layer in front
+          vec3 V = normalize(cameraPosition - vW);
+          float rim = 1.0 - abs(dot(V, normalize(vNw)));          // glowing shell, see-through middle
+          // streaks flowing back along the hull
+          vec3 q = vP - uDir * dot(vP, uDir);
+          float s = n3(q * 2.4 + uDir * (dot(vP, uDir) * 0.35 - uT * 6.0)) * 0.65 + n3(vP * 5.0 - uDir * uT * 15.0) * 0.35;
+          float wake = smoothstep(0.2, -0.6, facing) * rim * rim * s;
+          float a = uH * (bow * (0.6 + 0.6 * s) + rim * rim * 0.45 * smoothstep(-0.3, 0.6, facing) * (0.4 + s) + wake * 0.5);
+          vec3 c = mix(vec3(1.0, 0.25, 0.06), vec3(1.0, 0.86, 0.62), clamp(bow * 1.3, 0.0, 1.0)) * a * 2.2;
           gl_FragColor = vec4(c, 1.0); }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
     });
@@ -790,8 +797,8 @@ export class Gameplay {
     if (sp > 1e-3) travel.divideScalar(sp); else travel.set(0, 0, -1);
     g.shipVis.setHeat(heat, travel);
     g.engine.grade.set('uHeat', Math.min(1, heat * 0.8));
-    const plasma = Math.min(1.5, q / 6e4);
-    this.sheath.visible = plasma > 0.03;
+    const plasma = Math.min(1.3, Math.max(0, q - 1.2e4) / 2.2e5);
+    this.sheath.visible = plasma > 0.01;
     this.sheath.material.uniforms.uH.value = plasma;
     this.sheath.material.uniforms.uT.value = performance.now() / 1000 % 100;
     this.sheath.material.uniforms.uDir.value.copy(travel);
@@ -824,6 +831,14 @@ export class Gameplay {
       g.audio.setLoopFreq('wind', 300 + Math.min(2500, sp * 3));
       if (gain > 0.05) g.shake = Math.max(g.shake, gain * 0.6);
     } else if (g.audio.loops.has('wind')) g.audio.setLoopGain('wind', f.landed ? 0.02 : 0, 1);
+    // ground proximity tones: faster as the ground comes up while sinking
+    if (!f.landed && f.groundAlt < 300 && f.vertSpeed < -2.5) {
+      this.gpwsT = (this.gpwsT || 0) - dt;
+      if (this.gpwsT <= 0) {
+        this.gpwsT = Math.max(0.12, Math.min(1.2, f.groundAlt / 220));
+        g.audio.beep(f.vertSpeed < -8 ? 1250 : 980, 0.07, 0.09, { pos: V(0, 1.9, -10.0) });
+      }
+    }
     // gravity notice
     if (g.gLocal.length() > 3 && !this.gravityAnnounced) { this.gravityAnnounced = true; g.asphalt.say('gravity', {}, { minGap: 60 }); }
     if (g.gLocal.length() < 1) this.gravityAnnounced = false;

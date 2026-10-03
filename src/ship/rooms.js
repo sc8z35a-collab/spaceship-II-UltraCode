@@ -361,6 +361,13 @@ export function buildAirlock(b, L) {
   L.lamps.push({ pos: V(1.6, 2.05, -1.0), color: 0xf2f6ff, intensity: 1.2, room: 'airlock' });
   // tether reel
   b.cyl(0.1, 0.1, 0.08, 'plasticY', [2.4, 1.0, 0.45], [0, 0, Math.PI / 2], 16);
+  // three low steps up to the outer hatch sill, and a sill plate bridging the hatch tunnel
+  for (let k = 0; k < 3; k++) {
+    const h = 0.11 * (k + 1), x0 = 2.1 + k * 0.22;
+    b.box(0.24, h, 0.82, 'metalDark', [x0 + 0.12, h / 2, -1.05], null, 0.008, 2, true);
+    b.box(0.03, 0.008, 0.8, 'plasticY', [x0 + 0.015, h + 0.003, -1.05], null, 0.002);
+  }
+  b.box(0.54, 0.025, 0.78, 'steel', [2.81, 0.318, -1.05], null, 0.005, 2, true);
 }
 
 // ------------------------------------------------------------------ life support room

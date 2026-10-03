@@ -56,7 +56,7 @@ export function sectionNormal(z, t, inset = 0, out = new THREE.Vector3()) {
   const p = sectionPoint(z, t, inset);
   const pt = sectionPoint(z, t + dt, inset).sub(p);
   const pz = sectionPoint(z + dz, t, inset).sub(p);
-  return out.crossVectors(pz, pt).normalize();
+  return out.crossVectors(pt, pz).normalize();
 }
 
 /** half width of the section at height y (0 if outside) */

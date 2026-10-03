@@ -295,10 +295,18 @@ export class Monitors {
     K.text('速度', X + 10, 52, { size: 10, color: COL.dim });
     K.text(sp.toFixed(1), X + 10, 82, { size: 28, color: f.ultra ? COL.amber : COL.text, weight: 300, mono: true });
     K.text('m/s', X + 104, 82, { size: 11, color: COL.dim });
-    K.text('高度', X + 140, 52, { size: 10, color: COL.dim });
     const alt = f.alt / 1000;
-    K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + 192, 76, { size: 16, color: COL.text, align: 'right', mono: true });
-    K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
+    if (f.groundAlt < 8000 || f.landed) {
+      // close to the surface: radar altitude in metres + vertical speed
+      K.text('対地', X + 140, 52, { size: 10, color: COL.dim });
+      const ga = Math.max(0, f.groundAlt);
+      K.text(ga.toFixed(0), X + 192, 74, { size: 16, color: ga < 100 && f.vertSpeed < -4 ? COL.red : COL.text, align: 'right', mono: true });
+      K.text('m  ' + (f.vertSpeed >= 0 ? '↑' : '↓') + Math.abs(f.vertSpeed).toFixed(1), X + 192, 92, { size: 9, color: f.vertSpeed < -6 ? COL.amber : COL.dim, align: 'right', mono: true });
+    } else {
+      K.text('高度', X + 140, 52, { size: 10, color: COL.dim });
+      K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + 192, 76, { size: 16, color: COL.text, align: 'right', mono: true });
+      K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
+    }
     K.bar(X + 10, 96, 182, 5, sp / 300, f.ultra ? COL.amber : COL.cyan);
     // ULTRA button
     const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 ? 'disabled' : 'normal');

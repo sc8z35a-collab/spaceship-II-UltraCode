@@ -120,6 +120,20 @@ void main(){
     vec3 e2 = cross(up, e1);
     float hx = pnoise3(vDetail * (1.0 / 64.0), vec3(256.0));
     n = normalize(n + (e1 * (n2 - n1) * 0.25 + e2 * (n3 - hx) * 0.18) * detailF * (0.4 + rock));
+    // standing on it: grass tufts, bare soil, pebbles (metre scale and below)
+    float nearF = smoothstep(450.0, 25.0, vViewDist);
+    if (nearF > 0.001){
+      float m1 = pnoise3(vDetail * (1.0 / 6.0), vec3(256.0));
+      float m2 = pnoise3(vDetail * (1.0 / 1.7), vec3(256.0));
+      float m3 = pnoise3(vDetail * (1.0 / 0.45), vec3(256.0));
+      float soil = smoothstep(0.18, 0.42, m1 + m2 * 0.35) * (0.35 + 0.65 * green);
+      vec3 grass = albedo * (0.72 + 0.5 * (m2 * 0.5 + 0.5)) * vec3(0.95, 1.05, 0.9);
+      vec3 dirt = mix(vec3(0.24, 0.19, 0.13), vec3(0.33, 0.28, 0.2), m3 * 0.5 + 0.5);
+      vec3 nearAlb = mix(grass, dirt, soil * 0.75);
+      nearAlb *= 0.88 + 0.24 * (m3 * 0.5 + 0.5);
+      albedo = mix(albedo, nearAlb, nearF * (1.0 - rock * 0.6) * (1.0 - snow));
+      n = normalize(n + (e1 * m3 + e2 * (m2 - m3)) * 0.22 * nearF);
+    }
   }
 
   vec3 roKm = cameraPosition * 0.001 - uEarthCenterKm;

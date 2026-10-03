@@ -18,8 +18,10 @@ page.on('console', (m) => { const t = m.text(); if (!/vite|DevTools|requestFulls
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(0, 6).join('\n')}`));
 const t0 = Date.now();
 await page.goto(`${BASE}?${query}`, { waitUntil: 'load', timeout: 180000 });
-await page.waitForFunction(() => window.__game && window.__game.running, null, { timeout: 240000 });
-logs.push(`[runner] game running after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+if (!process.env.NO_WAIT) {
+  await page.waitForFunction(() => window.__game && window.__game.running, null, { timeout: 240000 });
+  logs.push(`[runner] game running after ${((Date.now() - t0) / 1000).toFixed(1)} s`);
+}
 for (const [i, s] of steps.entries()) {
   if (s.goto) {
     await page.goto(`${BASE}?${s.goto}`, { waitUntil: 'load', timeout: 180000 });
