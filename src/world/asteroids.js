@@ -79,12 +79,21 @@ export class Asteroids {
     // approach direction (ECI): random, biased to the front hemisphere of the ship
     const dirLocal = from ? from.clone().normalize() : new THREE.Vector3((Math.random() - 0.5) * 2, (Math.random() - 0.5) * 1.2, -Math.random() * 1.4 - 0.1).normalize();
     const dirEci = dirLocal.clone().applyQuaternion(f.quat);
-    // aim point near the ship centre (+ miss offset perpendicular to the path)
+    // aim point near the ship centre (+ miss offset perpendicular to the path). Rock and ship
+    // are on (slightly) different orbits, so a straight-line aim would drift metres off over the
+    // approach: predict where the ship will be on arrival and fly the rock's orbit backwards
+    // from there with the same integrator the update uses (exactly reversible).
     const off = new THREE.Vector3().randomDirection().projectOnPlane(dirEci).setLength(miss);
     const aimLocal = new THREE.Vector3((Math.random() - 0.5) * 3, (Math.random() - 0.5) * 2, (Math.random() - 0.5) * 12);
-    const aimEci = f.pos.clone().add(aimLocal.applyQuaternion(f.quat)).add(off);
-    const pos = aimEci.clone().addScaledVector(dirEci, dist);
-    const vel = f.vel.clone().addScaledVector(dirEci, -speed);
+    const T = dist / speed, h = 0.05, steps = Math.max(1, Math.round(T / h));
+    const sp = f.pos.clone(), sv = f.vel.clone();
+    const grav = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
+    const acc = new THREE.Vector3();
+    // same second-order step as the flight model (and the rock update below)
+    for (let i = 0; i < steps; i++) { grav(sp, acc); sp.addScaledVector(sv, h).addScaledVector(acc, 0.5 * h * h); sv.addScaledVector(acc, h); }
+    const pos = sp.clone().add(aimLocal.applyQuaternion(f.quat)).add(off);
+    const vel = sv.clone().addScaledVector(dirEci, -speed);
+    for (let i = 0; i < steps; i++) { grav(pos, acc); pos.addScaledVector(vel, -h).addScaledVector(acc, 0.5 * h * h); vel.addScaledVector(grav(pos, acc), -h); }
     const density = 2600;
     const mass = density * (4 / 3) * Math.PI * Math.pow(radius * 0.8, 3);
     const spin = new THREE.Vector3().randomDirection().multiplyScalar(0.1 + Math.random() * 0.6);
@@ -144,12 +153,17 @@ export class Asteroids {
     const invQ = f.quat.clone().invert();
     for (const a of this.list) {
       a.age += dt;
-      const prevRel = a.pos.clone().sub(f.pos);
-      // rocks fall around the Earth like the ship does
+      // previous position relative to the ship as it was then (the ship itself moved ~400 m
+      // along its orbit this frame; sweeping from rock(old) - ship(new) would cast along the orbit)
+      const prevRel = a.rel ? a.rel.clone() : a.pos.clone().sub(f.pos);
+      // rocks fall around the Earth like the ship does (same second-order step as the flight model,
+      // otherwise the two drift metres apart during an approach)
       const r = a.pos.length();
-      a.vel.addScaledVector(a.pos, -MU_EARTH / (r * r * r) * dt);
-      a.pos.addScaledVector(a.vel, dt);
+      const ga = a.pos.clone().multiplyScalar(-MU_EARTH / (r * r * r));
+      a.pos.addScaledVector(a.vel, dt).addScaledVector(ga, 0.5 * dt * dt);
+      a.vel.addScaledVector(ga, dt);
       const rel = a.pos.clone().sub(f.pos);
+      a.rel = rel.clone();
       a.q.multiply(new THREE.Quaternion().setFromAxisAngle(a.spin.clone().normalize(), a.spin.length() * dt));
       a.mesh.matrix.compose(rel, a.q, new THREE.Vector3(a.radius, a.radius, a.radius));
       a.mesh.matrixWorld.copy(a.mesh.matrix);
