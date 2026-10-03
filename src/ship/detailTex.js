@@ -8,7 +8,7 @@ import * as THREE from 'three';
 import { rng } from './geom.js';
 
 const S = 1024;
-export const DETAIL_TILE = { panel: 1.2, pad: 0.8, floor: 1.2 };
+export const DETAIL_TILE = { panel: 1.2, pad: 0.8, floor: 1.2, hull: 2.4, rad: 1.0, mli: 0.5 };
 
 function layer() {
   const c = document.createElement('canvas');
@@ -219,8 +219,73 @@ function makeFloor() {
   return pack(H, A, Rg, I);
 }
 
+function makeHull() {
+  // exterior plating: staggered 1.2 x 0.6 m panels, rivet rows, access covers, stencils
+  const R = rng(4409);
+  const H = layer(), A = layer(), Rg = layer(), I = layer();
+  I.fillStyle = grey(0); I.fillRect(0, 0, S, S);
+  const px = S / DETAIL_TILE.hull, pw = 1.2 * px, ph = 0.6 * px;
+  H.fillStyle = grey(140); H.fillRect(0, 0, S, S);
+  for (let row = 0; row < 4; row++) {
+    const off = row % 2 ? pw / 2 : 0;
+    for (let col = -1; col < 3; col++) {
+      const x = col * pw + off, y = row * ph;
+      const tint = 128 + (R() - 0.5) * 12;
+      wrapped((dx, dy) => {
+        A.fillStyle = grey(tint); A.fillRect(x + dx, y + dy, pw, ph);
+        Rg.fillStyle = grey(124 + (R() - 0.5) * 16); Rg.fillRect(x + dx, y + dy, pw, ph);
+        // panel line (recessed) and rivet rows inside each edge
+        H.fillStyle = grey(60); H.fillRect(x + dx, y + dy, pw, 2.2); H.fillRect(x + dx, y + dy, 2.2, ph);
+        A.fillStyle = grey(84); A.fillRect(x + dx, y + dy, pw, 2); A.fillRect(x + dx, y + dy, 2, ph);
+        for (let t = 14; t < pw - 8; t += 17) for (const yy of [7, ph - 6]) { H.fillStyle = grey(176); H.beginPath(); H.arc(x + dx + t, y + dy + yy, 1.6, 0, Math.PI * 2); H.fill(); }
+        for (let t = 14; t < ph - 8; t += 17) for (const xx of [7, pw - 6]) { H.fillStyle = grey(176); H.beginPath(); H.arc(x + dx + xx, y + dy + t, 1.6, 0, Math.PI * 2); H.fill(); }
+      });
+      // access cover in some panels
+      if (R() < 0.45) {
+        const cw = 50 + R() * 60, ch = 34 + R() * 40, cx = x + 30 + R() * (pw - cw - 60), cy = y + 26 + R() * (ph - ch - 52);
+        wrapped((dx, dy) => {
+          H.strokeStyle = grey(78); H.lineWidth = 1.6; rr(H, cx + dx, cy + dy, cw, ch, 4); H.stroke();
+          for (const [fx, fy] of [[5, 5], [cw - 5, 5], [5, ch - 5], [cw - 5, ch - 5]]) { H.fillStyle = grey(182); H.beginPath(); H.arc(cx + dx + fx, cy + dy + fy, 2.4, 0, Math.PI * 2); H.fill(); }
+          A.fillStyle = grey(tint - 8); rr(A, cx + dx + 1, cy + dy + 1, cw - 2, ch - 2, 4); A.fill();
+        });
+      }
+      // stencils: NO STEP plates, arrows, numbers
+      const k = R();
+      I.fillStyle = grey(255); I.strokeStyle = grey(255);
+      if (k < 0.18) { const sx = x + 40 + R() * (pw - 160), sy = y + 30 + R() * (ph - 80); wrapped((dx, dy) => { I.lineWidth = 2; I.strokeRect(sx + dx, sy + dy, 110, 26); fakeText(I, R, sx + dx + 8, sy + dy + 8, 94, 1, 9); }); }
+      else if (k < 0.32) { const sx = x + 50 + R() * (pw - 120), sy = y + 40 + R() * (ph - 80); wrapped((dx, dy) => { I.beginPath(); I.moveTo(sx + dx, sy + dy); I.lineTo(sx + dx + 30, sy + dy + 12); I.lineTo(sx + dx, sy + dy + 24); I.closePath(); I.fill(); I.fillRect(sx + dx - 36, sy + dy + 9, 36, 6); }); }
+      else if (k < 0.46) { const sx = x + 40 + R() * (pw - 120), sy = y + ph - 40; wrapped((dx, dy) => fakeText(I, R, sx + dx, sy + dy, 70, 1, 11)); }
+    }
+  }
+  // streaks of grime running down the hull, micro scratches
+  for (let k = 0; k < 90; k++) { const x = R() * S, y = R() * S, l = 30 + R() * 160; wrapped((dx, dy) => { const gr = A.createLinearGradient(0, y + dy, 0, y + dy + l); gr.addColorStop(0, greyA(70, 0.18)); gr.addColorStop(1, greyA(70, 0)); A.fillStyle = gr; A.fillRect(x + dx, y + dy, 2 + R() * 5, l); }); }
+  for (let k = 0; k < 120; k++) { const x = R() * S, y = R() * S, a = R() * Math.PI, l = 6 + R() * 30; wrapped((dx, dy) => { Rg.strokeStyle = greyA(70, 0.5); Rg.lineWidth = 0.8; Rg.beginPath(); Rg.moveTo(x + dx, y + dy); Rg.lineTo(x + dx + Math.cos(a) * l, y + dy + Math.sin(a) * l); Rg.stroke(); }); }
+  noise(A, R, 6); noise(Rg, R, 14); noise(H, R, 2);
+  return pack(H, A, Rg, I);
+}
+
+function makeRad() {
+  // radiator panel: raised fluid channels between thin fins, header tubes, panel joints
+  const R = rng(5501);
+  const H = layer(), A = layer(), Rg = layer(), I = layer();
+  I.fillStyle = grey(0); I.fillRect(0, 0, S, S);
+  H.fillStyle = grey(110); H.fillRect(0, 0, S, S);
+  Rg.fillStyle = grey(110); Rg.fillRect(0, 0, S, S);
+  for (let x = 0; x < S; x += 32) {
+    const g = H.createLinearGradient(x, 0, x + 12, 0);
+    g.addColorStop(0, grey(110)); g.addColorStop(0.5, grey(200)); g.addColorStop(1, grey(110));
+    H.fillStyle = g; H.fillRect(x, 0, 12, S);
+    A.fillStyle = grey(140); A.fillRect(x + 3, 0, 6, S);
+    Rg.fillStyle = grey(80); Rg.fillRect(x + 3, 0, 6, S);
+  }
+  for (const y of [0, S / 2]) { H.fillStyle = grey(210); H.fillRect(0, y, S, 14); H.fillStyle = grey(60); H.fillRect(0, y + 16, S, 3); A.fillStyle = grey(150); A.fillRect(0, y, S, 14); }
+  noise(A, R, 6); noise(H, R, 2);
+  return pack(H, A, Rg, I);
+}
+
 let CACHE = null;
 export function detailTextures() {
-  if (!CACHE) CACHE = { panel: makePanel(), pad: makePad(), floor: makeFloor() };
+  if (!CACHE) CACHE = { panel: makePanel(), pad: makePad(), floor: makeFloor(), hull: makeHull(), rad: makeRad() };
+  CACHE.mli = CACHE.pad;
   return CACHE;
 }

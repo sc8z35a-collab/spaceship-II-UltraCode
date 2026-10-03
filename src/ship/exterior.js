@@ -344,6 +344,22 @@ export function buildExterior(M) {
     b.add(g, 'decal');
   }
 
+  // ---------- surface detail: greebles, conduit runs, engine bell cooling tubes ----------
+  hullGreebles(b);
+  {
+    const zE2 = 15.4;
+    const prof = [];
+    for (let i = 0; i <= 18; i++) { const f = i / 18; prof.push([0.28 + 0.92 * Math.pow(f, 0.62), f * 2.1]); }
+    b.push([0, 0.4, zE2 + 1.25], [Math.PI / 2, 0, 0]);
+    for (let k = 0; k < 64; k++) {
+      const a = k / 64 * Math.PI * 2;
+      const pts = prof.filter((_, i) => i % 2 === 0).map(([r, y]) => new THREE.Vector3(Math.cos(a) * (r + 0.012), y, Math.sin(a) * (r + 0.012)));
+      b.tube(pts, 0.011, 'nozzle', { radial: 4, seg: 18 });
+    }
+    for (const f of [0.25, 0.55, 0.85]) { const r = 0.28 + 0.92 * Math.pow(f, 0.62); b.torus(r + 0.03, 0.025, 'metalDark', [0, f * 2.1, 0], [Math.PI / 2, 0, 0], 48); }
+    b.pop();
+  }
+
   // ---------- collision: outer skin (hatch cut out) + main external modules ----------
   b.colMesh(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch, 0.06));
   b.colCyl(1.72, 0.5, [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0]);
@@ -353,6 +369,106 @@ export function buildExterior(M) {
   b.colCyl(1.3, 3.4, [0, 0.4, zE + 1.7], [Math.PI / 2, 0, 0]);
   const group = b.build(M);
   return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders };
+}
+
+/**
+ * Hundreds of small parts on the skin: equipment boxes, canisters, vent grilles, sensor domes,
+ * star trackers, cameras, cable conduits with clamps. Kept off windows, the hatch, the canopy,
+ * the rails, the lettering and the heat-shielded belly.
+ */
+function hullGreebles(b) {
+  const R = rng(2929);
+  const railT = [Math.PI / 2 + 0.75, Math.PI / 2 - 0.75, -0.68, Math.PI + 0.68];
+  const clear = (z, t, m) => {
+    const p = sectionPoint(z, t, 0);
+    if (inCanopy(p) || p.z < -10.2 || p.z > 10.0) return false;
+    if (p.y < -0.85) return false;                                     // belly: heat-shield tiles only
+    for (const o of OPENINGS) {
+      const d = p.clone().sub(o.center);
+      if (Math.abs(d.dot(o.normal)) > 0.8) continue;
+      if (Math.abs(d.dot(o.u)) < o.halfW + m && Math.abs(d.dot(o.v)) < o.halfH + m) return false;
+    }
+    for (const rt of railT) if (Math.abs(t - rt) < 0.09 || Math.abs(t - rt - Math.PI * 2) < 0.09) return false;
+    if (Math.abs(p.z + 5.6) < 1.5 && Math.abs(Math.abs(t > Math.PI ? t - Math.PI * 2 : t) - 0.32) < 0.4 && p.x > 0) return false;   // lettering
+    if (Math.abs(p.z + 5.6) < 1.5 && Math.abs(t - (Math.PI - 0.32)) < 0.4) return false;
+    if (Math.abs(p.z - 0.8) < 1.1 && Math.abs(t - Math.PI / 2) < 0.35) return false;    // docking port
+    if ((Math.abs(p.z - 2.6) < 0.5 || Math.abs(p.z + 2.8) < 0.8) && Math.abs(t - Math.PI / 2) < 0.3) return false;   // mast, array
+    for (const zr of [-7.6, 6.2]) if (Math.abs(p.z - zr) < 0.45) for (const tr of [1, 3, 5, 7]) if (Math.abs(t - tr * Math.PI / 4) < 0.18 || Math.abs(t + (8 - tr) * Math.PI / 4) < 0.18) return false;
+    return true;
+  };
+  const frame = (z, t) => {
+    const p = sectionPoint(z, t, 0), n = sectionNormal(z, t, 0);
+    const zAxis = new THREE.Vector3(0, 0, 1).addScaledVector(n, -n.z).normalize();
+    const xAxis = new THREE.Vector3().crossVectors(n, zAxis).normalize();
+    const m = new THREE.Matrix4().makeBasis(xAxis, n, zAxis).setPosition(p);
+    const e = new THREE.Euler().setFromRotationMatrix(m, 'YXZ');
+    return { p, n, e };
+  };
+  const keys = ['hullDark', 'hullDark', 'metal', 'mli', 'hull', 'metalDark'];
+  let placed = 0, tries = 0;
+  while (placed < 230 && tries < 4000) {
+    tries++;
+    const z = -9.8 + R() * 19.4, t = R() * Math.PI * 2 - Math.PI / 2;
+    if (!clear(z, t, 0.22)) continue;
+    const { p, e } = frame(z, t);
+    b.push(p.toArray(), [e.x, e.y, e.z]);
+    const k = R();
+    if (k < 0.34) {                                                   // equipment box with a lid line
+      const w = 0.16 + R() * 0.34, h = 0.05 + R() * 0.1, d = 0.14 + R() * 0.38;
+      const key = keys[Math.floor(R() * keys.length)];
+      b.box(w, h, d, key, [0, h / 2 - 0.01, 0], null, Math.min(0.02, h * 0.3), 2);
+      b.box(w * 0.8, 0.006, d * 0.04, 'metalDark', [0, h - 0.005, d * 0.3], null, 0);
+      if (R() < 0.5) for (const sx of [-1, 1]) b.cyl(0.008, 0.008, 0.012, 'steel', [sx * w * 0.4, h, -d * 0.4], null, 6);
+    } else if (k < 0.5) {                                            // canister pair on a cradle
+      const r = 0.04 + R() * 0.06, l = 0.25 + R() * 0.35;
+      b.box(r * 5, 0.025, l * 0.6, 'metalDark', [0, 0.012, 0], null, 0.005);
+      for (const sx of [-1, 1]) {
+        b.cyl(r, r, l, R() < 0.5 ? 'hull' : 'mli', [sx * r * 1.15, r + 0.03, 0], [Math.PI / 2, 0, 0], 12);
+        b.sphere(r, 'hull', [sx * r * 1.15, r + 0.03, l / 2], 10, [1, 1, 0.5]);
+      }
+      for (const zz of [-l * 0.3, l * 0.3]) b.box(r * 5, 0.018, 0.025, 'steel', [0, r * 2 + 0.035, zz], null, 0.004);
+    } else if (k < 0.62) {                                           // vent grille
+      const w = 0.2 + R() * 0.25, d = 0.12 + R() * 0.2;
+      b.box(w, 0.03, d, 'metalDark', [0, 0.012, 0], null, 0.008);
+      for (let i = 0; i < 6; i++) b.box(w * 0.85, 0.012, 0.012, 'black', [0, 0.03, -d * 0.4 + i * d * 0.16], null, 0);
+    } else if (k < 0.72) {                                           // sensor dome on a base
+      b.cyl(0.07, 0.09, 0.05, 'hullDark', [0, 0.025, 0], null, 14);
+      b.sphere(0.06, R() < 0.5 ? 'black' : 'plasticW', [0, 0.06, 0], 14, [1, 0.8, 1]);
+    } else if (k < 0.8) {                                            // star tracker: baffle tube
+      b.box(0.14, 0.08, 0.14, 'hullDark', [0, 0.04, 0], null, 0.01);
+      b.cyl(0.045, 0.055, 0.18, 'black', [0, 0.14, 0.03], [0.5, 0, 0], 14, true);
+      b.torus(0.05, 0.008, 'metal', [0, 0.22, 0.075], [0.5 + Math.PI / 2, 0, 0], 14);
+    } else if (k < 0.88) {                                           // camera on a short mast
+      b.cyl(0.015, 0.02, 0.18, 'metal', [0, 0.09, 0], null, 8);
+      b.box(0.07, 0.06, 0.12, 'plasticW', [0, 0.2, 0.02], null, 0.012);
+      b.cyl(0.022, 0.022, 0.02, 'black', [0, 0.2, 0.085], [Math.PI / 2, 0, 0], 12);
+    } else {                                                         // flush panel cover with fasteners
+      const w = 0.3 + R() * 0.4, d = 0.2 + R() * 0.35;
+      b.box(w, 0.012, d, R() < 0.5 ? 'hull' : 'hullDark', [0, 0.004, 0], null, 0.004);
+      for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.01, 0.01, 0.008, 'steel', [sx * (w / 2 - 0.025), 0.012, sz * (d / 2 - 0.025)], null, 6);
+    }
+    b.pop();
+    placed++;
+  }
+  // conduit runs along the flanks (broken around openings), clamped every 0.55 m
+  for (const t of [0.95, Math.PI - 0.95, -0.38, Math.PI + 0.38, Math.PI / 2 + 0.32, Math.PI / 2 - 0.32]) {
+    for (const [r, key, off] of [[0.035, 'hullDark', 0.06], [0.022, 'mli', 0.11]]) {
+      let run = [];
+      const flush = () => {
+        if (run.length > 3) {
+          b.tube(run.map((q) => q.p), r, key, { radial: 8, seg: run.length * 3 });
+          for (let i = 0; i < run.length; i += 2) b.box(0.07, 0.03, 0.04, 'metalDark', run[i].c.toArray(), null, 0.006);
+        }
+        run = [];
+      };
+      for (let z = -9.2; z <= 9.6; z += 0.275) {
+        if (!clear(z, t, 0.3)) { flush(); continue; }
+        const pp = sectionPoint(z, t, 0), n = sectionNormal(z, t, 0);
+        run.push({ p: pp.clone().addScaledVector(n, off), c: pp.clone().addScaledVector(n, off * 0.5) });
+      }
+      flush();
+    }
+  }
 }
 
 /** glass panes for all windows (outer and inner pane) */

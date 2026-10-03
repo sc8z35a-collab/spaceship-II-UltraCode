@@ -231,7 +231,7 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004 }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false }, opts);
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
@@ -310,6 +310,19 @@ export function patchShipMaterial(mat, opts = {}) {
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.08, 0.085, 0.09), (1.0 - D.a) * 0.6);
             _detailRough = (D.b - 0.5) * 0.55;
           }` : ''}
+          ${o.belly ? `
+          {
+            // re-entry heat shield: dark ceramic tiles over the belly
+            float bel = smoothstep(-0.75, -1.45, vShipPos.y) * smoothstep(-13.6, -12.6, vShipPos.z) * (1.0 - smoothstep(10.2, 10.8, vShipPos.z));
+            vec2 tp = vec2(vShipPos.z, vShipPos.x) / 0.16 + vec2(0.0, floor(vShipPos.z / 0.16) * 0.5);
+            vec2 tf = abs(fract(tp) - 0.5);
+            float tseam = smoothstep(0.455, 0.49, max(tf.x, tf.y));
+            float tid = hash12(floor(tp));
+            vec3 tileCol = vec3(0.075, 0.075, 0.08) * (0.7 + 0.6 * tid) + vec3(0.03, 0.02, 0.01) * step(0.93, tid);
+            diffuseColor.rgb = mix(diffuseColor.rgb, mix(tileCol, vec3(0.2, 0.2, 0.21), tseam), bel);
+            _bumpH -= tseam * 0.002 * bel;
+            _detailRough += bel * (0.35 + 0.1 * tid);
+          }` : ''}
           ${o.panels > 0 ? `
           // panel seams (grid in ship space), blended across the three projections so curved
           // surfaces do not get jagged seams where the dominant axis flips
@@ -327,7 +340,7 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        ${o.panels > 0 || o.detail ? `
+        ${o.panels > 0 || o.detail || o.belly ? `
         {
           // relief: recessed panel seams + faint waviness (derivative bump, view space)
           vec2 dH = vec2(dFdx(_bumpH), dFdy(_bumpH));
@@ -389,14 +402,14 @@ function canvasTex(size, draw, repeat = 1, srgb = true) {
 export function createMaterials() {
   const M = {};
   // ---- exterior ----
-  M.hull = patchShipMaterial(std(0xd9dbd7, 0.55, 0.15), { dentable: true, openings: true, wear: 0.8, panels: 1.25, grime: 0.55, heat: true, ao: false });
+  M.hull = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true });
   M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true, ao: false });
   M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true, ao: false });
   M.metal = patchShipMaterial(std(0xa8adb3, 0.32, 0.9), { wear: 0.6, grime: 0.3 });
   M.metalDark = patchShipMaterial(std(0x3a3d42, 0.45, 0.8), { wear: 0.5, grime: 0.3 });
   M.gold = patchShipMaterial(std(0xc8a24a, 0.28, 1.0), { wear: 0.8, grime: 0.15, heat: true });
-  M.mli = patchShipMaterial(std(0xd8c27a, 0.42, 0.85), { wear: 0.9, grime: 0.2 }); // insulation blanket foil
-  M.radiator = patchShipMaterial(std(0xe6e8ea, 0.35, 0.05, { emissive: new THREE.Color(0.9, 0.18, 0.05), emissiveIntensity: 0.0 }), { wear: 0.5, grime: 0.4, panels: 0.35 });
+  M.mli = patchShipMaterial(std(0xd8c27a, 0.38, 0.85), { wear: 0.9, grime: 0.2, detail: 'mli', detailDepth: 0.012, ao: false }); // insulation blanket foil (quilted)
+  M.radiator = patchShipMaterial(std(0xe2e5e8, 0.32, 0.25, { emissive: new THREE.Color(0.9, 0.18, 0.05), emissiveIntensity: 0.0 }), { wear: 0.5, grime: 0.4, detail: 'rad', detailDepth: 0.004, ao: false });
   M.nozzle = patchShipMaterial(std(0x55504a, 0.4, 0.95, { emissive: new THREE.Color(1.0, 0.35, 0.1), emissiveIntensity: 0.0 }), { wear: 0.9, grime: 0.6, heat: true });
   M.solar = std(0x1a2a55, 0.25, 0.6);
   // ---- interior ----
