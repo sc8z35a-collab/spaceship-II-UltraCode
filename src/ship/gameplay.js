@@ -619,9 +619,10 @@ export class Gameplay {
     pl.health = Math.max(0, Math.min(1, pl.health - hurt + (hurt === 0 && hyp === 0 ? dt / 900 : 0)));
     const gr = g.engine.grade;
     gr.set('uHypoxia', Math.max(hyp * 0.85, pl.health < 0.5 ? (0.5 - pl.health) * 1.6 : 0));
-    gr.set('uBlur', Math.max(blur * 0.6, hyp * 0.4, this.underwater * 0.7));
+    const wet = (g.machines && g.machines.shower && g.machines.shower.wet) || 0;   // in the shower
+    gr.set('uBlur', Math.max(blur * 0.6, hyp * 0.4, this.underwater * 0.7, wet * 0.32));
     gr.set('uDesat', Math.min(0.8, (1 - pl.health) * 0.8));
-    gr.get('uTint').set(1 - this.underwater * 0.55, 1 - this.underwater * 0.25, 1 - this.underwater * 0.05);
+    gr.get('uTint').set(1 - this.underwater * 0.55 + wet * 0.05, 1 - this.underwater * 0.25 + wet * 0.02, 1 - this.underwater * 0.05 - wet * 0.03);
     if (hyp > 0.3 || pl.health < 0.6) g.audio.heartbeat(70 + 70 * Math.max(hyp, 1 - pl.health));
     // what the ears hear: cabin air, suit, or outside air
     g.audio.setAir(pl.outside ? ls.ambient : ls.pressure(ls.zoneOfPlayer), pl.suit);

@@ -59,7 +59,7 @@ export class Machines {
     this.buildSuit();
     this.buildEngHatch();
     setLayersDeep(this.root, LAYER_NEAR);
-    this.root.traverse((o) => { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; } });
+    this.root.traverse((o) => { if (o.isMesh && !o.userData.noShadow) { o.castShadow = true; o.receiveShadow = true; } });
   }
 
   // ------------------------------------------------------------------ lift
@@ -348,6 +348,29 @@ export class Machines {
     this.root.add(door);
     this.shower.door = door;
     this.shower.pos = sc.clone();
+    // the falling water: thin streaks scrolling down a faint cone under the head
+    const sprayMat = new THREE.ShaderMaterial({
+      uniforms: { uT: { value: 0 }, uA: { value: 0 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+      fragmentShader: `uniform float uT; uniform float uA; varying vec2 vUv;
+        float h(float x){ return fract(sin(x * 127.1) * 43758.5453); }
+        void main(){
+          float k = vUv.x * 110.0, col = floor(k);
+          float sp = 0.7 + h(col) * 0.6;
+          float y = fract(vUv.y * (1.2 + h(col + 3.0)) + uT * 2.4 * sp + h(col + 7.0));
+          float streak = smoothstep(0.0, 0.05, y) * (1.0 - smoothstep(0.05, 0.45, y));
+          float edge = smoothstep(0.1, 0.4, fract(k)) * (1.0 - smoothstep(0.6, 0.9, fract(k)));
+          float a = streak * edge * uA * (0.3 + 0.7 * vUv.y) * step(0.35, h(col + 11.0));
+          gl_FragColor = vec4(vec3(0.78, 0.87, 0.96), a * 0.55);
+        }`,
+      transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
+    const spray = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.3, 1.8, 32, 1, true), sprayMat);
+    spray.position.set(sc.x, 0.99, sc.z);
+    spray.visible = false;
+    spray.userData.noShadow = true;
+    this.root.add(spray);
+    this.shower.spray = spray;
     g.interact.addSphere(V(sc.x - 0.3, 1.1, sc.z), 0.35, () => this.toggleShower(), { maxDist: 2.0 });
   }
 
@@ -357,8 +380,10 @@ export class Machines {
     if (!s.on && g.lifeSupport.water < 2) { g.audio.denied(s.pos); return; }
     s.on = !s.on;
     if (s.on) {
-      s.emitter = g.fx.emitter('water', s.pos.clone().add(V(0, 1.88, 0)), V(0, -1, 0), 120, { speed: 1.4, spread: 0.25 });
+      // drops live about as long as the fall to the tray (the drain's air flow takes them in zero-g)
+      s.emitter = g.fx.emitter('water', s.pos.clone().add(V(0, 1.88, 0)), V(0, -1, 0), 120, { speed: 1.4, spread: 0.25, life: 0.12 });
       s.steam = g.fx.emitter('steam', s.pos.clone().add(V(0, 1.2, 0)), V(0, 1, 0), 6, { speed: 0.1, spread: 1 });
+      g.asphalt.say(g.player.state === 'float' ? 'shower_zero_g' : 'shower', {}, { minGap: 900 });
     } else {
       g.fx.removeEmitter(s.emitter); g.fx.removeEmitter(s.steam);
       s.emitter = s.steam = null;
@@ -370,6 +395,16 @@ export class Machines {
     const s = this.shower, g = this.g;
     if (!s.door) return;
     s.door.rotation.y += ((s.on ? 0 : Math.PI * 0.8) - s.door.rotation.y) * Math.min(1, dt * 3);
+    // standing under the running water: steam and drops on the eyes (read by the crew effects)
+    const pp = g.player.pos;
+    const under = s.on && Math.hypot(pp.x - s.pos.x, pp.z - s.pos.z) < 0.5 && pp.y > s.pos.y - 0.2 && pp.y < s.pos.y + 2.1;
+    s.wet = (s.wet || 0) + ((under ? 1 : 0) - (s.wet || 0)) * Math.min(1, dt * (under ? 0.8 : 0.35));
+    if (s.spray) {
+      const u = s.spray.material.uniforms;
+      u.uA.value += ((s.on ? 1 : 0) - u.uA.value) * Math.min(1, dt * 4);
+      u.uT.value = (u.uT.value + dt) % 1000;
+      s.spray.visible = u.uA.value > 0.01;
+    }
     if (s.on) {
       g.audio.noiseLoop('shower', { pos: s.pos.clone().add(V(0, 1, 0)), type: 'white', freq: 3500, q: 0.4, gain: 0.12 });
       g.lifeSupport.water = Math.max(0, g.lifeSupport.water - dt * 0.004); // recycled ~90%
