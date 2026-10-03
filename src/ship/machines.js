@@ -498,6 +498,35 @@ export class Machines {
     };
     for (const p of g.layout.spots.fans || []) mk(p.clone().add(V(-0.01, 0, 0)), 'x', 0.14);
     for (const p of g.layout.spots.pumps || []) mk(p, 'x', 0.11);
+    const U = g.layout.spots.under || {};
+    for (const p of U.ahuFans || []) mk(p, 'x', 0.13);
+    // reaction wheel: heavy spoked flywheel spinning behind the housing window
+    if (U.wheel) {
+      const w = new THREE.Group();
+      const rim = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.035, 12, 48), M.steel);
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.14, 20), M.brass);
+      hub.rotation.x = Math.PI / 2;
+      w.add(rim, hub);
+      for (let k = 0; k < 6; k++) {
+        const sp = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.025, 0.02), M.metal);
+        sp.position.set(Math.cos(k / 6 * Math.PI * 2) * 0.12, Math.sin(k / 6 * Math.PI * 2) * 0.12, 0);
+        sp.rotation.z = k / 6 * Math.PI * 2;
+        w.add(sp);
+      }
+      for (let k = 0; k < 3; k++) {   // balance weights make the spin readable
+        const bw = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.03, 0.06), M.plasticR);
+        bw.position.set(Math.cos(k / 3 * Math.PI * 2) * 0.2, Math.sin(k / 3 * Math.PI * 2) * 0.2, 0);
+        bw.rotation.z = k / 3 * Math.PI * 2;
+        w.add(bw);
+      }
+      const holder = new THREE.Group();
+      holder.position.copy(U.wheel);
+      holder.rotation.y = Math.PI / 2;      // wheel axis along ship x (faces the window)
+      holder.add(w);
+      this.root.add(holder);
+      this.wheel = w;
+    }
+    this.under = U;
     // O2 electrolysis column: glass tube + bubbles emitter
     const oc = g.layout.spots.o2col;
     if (oc) {
@@ -677,6 +706,14 @@ export class Machines {
     // bubbles in the O2 column
     if (this.o2col && g.fx && g.lifeSupport.o2gen.on && Math.random() < dt * 12 * g.lifeSupport.o2gen.health) {
       g.fx._one('water', this.o2col.clone().add(V((Math.random() - 0.5) * 0.12, -0.5, (Math.random() - 0.5) * 0.12)), V(0, 0.25 + Math.random() * 0.2, 0), { color: [0.85, 0.95, 1], life: 0.35 });
+    }
+    // underfloor machinery: reaction wheel spin (slows when power sags), bubbles in the
+    // water recycler columns and the algae coil
+    if (this.wheel) this.wheel.rotation.z += dt * 22 * Math.max(0.05, power);
+    const U = this.under;
+    if (U && g.fx && g.player.pos.y < -0.2) {
+      if (U.recycler) for (const p of U.recycler) if (Math.random() < dt * 5) g.fx._one('water', p.clone().add(V((Math.random() - 0.5) * 0.08, 0, (Math.random() - 0.5) * 0.08)), V(0, 0.18 + Math.random() * 0.1, 0), { color: [0.7, 0.95, 1], life: 0.3 });
+      if (U.algae && Math.random() < dt * 3) { const p = U.algae[0].clone().lerp(U.algae[1], Math.random()); g.fx._one('water', p, V(0, 0.08, (Math.random() - 0.5) * 0.1), { color: [0.75, 1, 0.75], life: 0.25 }); }
     }
     // eng hatch
     const h = this.engHatch;

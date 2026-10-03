@@ -5,6 +5,7 @@ import { rng } from './geom.js';
 import { heightRangeAt, halfWidthAt, DECK_Y, LOWER_Y } from './hullShape.js';
 import { INSET, LIFT, ENG_HATCH } from './interior.js';
 import { valveWheel, gauge, cableBundle, sticker } from './props.js';
+import { buildUnderfloorDetail, boltedFlange } from './underfloorDetail.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -74,9 +75,11 @@ export function buildUnderfloor(b, L) {
     for (let i = 1; i < nC; i++) {
       const t = i / nC;
       const p = curve.getPointAt(t), tg = curve.getTangentAt(t);
-      const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), tg);
-      const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
-      b.cyl(S.r * 1.25, S.r * 1.25, 0.03, run.sys === 'air' ? 'metal' : 'steel', p.toArray(), [e.x, e.y, e.z], 12);
+      if (run.sys === 'air') {
+        const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), tg);
+        const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+        b.cyl(S.r * 1.12, S.r * 1.12, 0.035, 'metal', p.toArray(), [e.x, e.y, e.z], 16);
+      } else boltedFlange(b, p, tg, S.r, i % 2 === 0);
     }
     // collision: capsules along the run
     const nCap = Math.max(1, Math.ceil(len / 0.6));
@@ -150,5 +153,6 @@ export function buildUnderfloor(b, L) {
     b.box(0.25, 0.2, 0.12, 'panelDark', [0.32, -0.42, z], null, 0.01);
     b.box(0.03, 0.03, 0.01, R() > 0.5 ? 'ledGreen' : 'ledAmber', [0.32, -0.36, z + 0.065], null, 0);
   }
+  buildUnderfloorDetail(b, L, R);
   return { segs };
 }

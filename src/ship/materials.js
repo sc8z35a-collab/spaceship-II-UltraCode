@@ -390,6 +390,13 @@ export function createMaterials() {
   M.pipeRed = patchShipMaterial(std(0xa52a22, 0.55, 0.1), { wear: 0.6, grime: 0.45 });
   M.insul = patchShipMaterial(std(0xcfcab8, 0.95, 0.0), { wear: 0.5, grime: 0.5, triScale: 4.0 });
   M.grate = std(0x55595e, 0.55, 0.8, { alphaMap: grateTexture(), alphaTest: 0.5, side: THREE.DoubleSide });
+  // underfloor machinery: glass, glowing process fluids, hazard striping
+  M.glassProp = new THREE.MeshStandardMaterial({ color: 0xcfe3ee, roughness: 0.04, metalness: 0.0, transparent: true, opacity: 0.22, depthWrite: false });
+  M.fluidBlue = new THREE.MeshStandardMaterial({ color: 0x0a2a3a, emissive: new THREE.Color(0.15, 0.6, 1.0), emissiveIntensity: 2.2, roughness: 0.1 });
+  M.fluidGreen = new THREE.MeshStandardMaterial({ color: 0x0a2a10, emissive: new THREE.Color(0.25, 1.0, 0.3), emissiveIntensity: 1.8, roughness: 0.15 });
+  M.uvLamp = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.55, 0.3, 1.0), emissiveIntensity: 6.0 });
+  M.hazard = patchShipMaterial(std(0xffffff, 0.6, 0.1, { map: hazardTexture() }), { wear: 0.8, grime: 0.5 });
+  M.rubberHose = patchShipMaterial(std(0x26282b, 0.8, 0.0), { wear: 0.3, grime: 0.3 });
   M.plant = std(0x3e7a2e, 0.7, 0.0);
   M.plant2 = std(0x5c9a3a, 0.7, 0.0);
   M.soil = std(0x3a2a1c, 0.95, 0.0);
@@ -435,6 +442,14 @@ function woodTexture() {
       for (let x = 0; x <= s; x += 16) g.lineTo(x, y + Math.sin(x * 0.02 + i) * 4 + Math.sin(x * 0.003 + i * 0.7) * 10);
       g.stroke();
     }
+  }, 1);
+}
+
+function hazardTexture() {
+  return canvasTex(128, (g, s) => {
+    g.fillStyle = '#d9a514'; g.fillRect(0, 0, s, s);
+    g.fillStyle = '#16171a';
+    for (let i = -2; i < 4; i++) { g.beginPath(); g.moveTo(i * s / 2, 0); g.lineTo(i * s / 2 + s / 4, 0); g.lineTo(i * s / 2 + s / 4 + s, s); g.lineTo(i * s / 2 + s, s); g.closePath(); g.fill(); }
   }, 1);
 }
 
