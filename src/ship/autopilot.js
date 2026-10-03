@@ -40,7 +40,7 @@ export class Autopilot {
     if (f.landed) { this.disengage(true); return; }
     const s = this.target;
     // keep the target's orbit current with the simulation clock (also while time is accelerated)
-    this.g.stations.orbitPos(s.r, s.n, s.phi0, 0, tShip, s.pos, s.vel);
+    this.g.stations.posOf(s, tShip, s.pos, s.vel);
     const rel = s.pos.clone().sub(f.pos);
     const dist = rel.length();
     this.dist = dist;

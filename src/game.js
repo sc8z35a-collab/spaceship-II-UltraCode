@@ -20,6 +20,7 @@ import { Asphalt } from './ship/asphalt.js';
 import { LifeSupport } from './ship/lifeSupport.js';
 import { Damage } from './ship/damage.js';
 import { Stations } from './world/stations.js';
+import { SpaceElevator } from './world/elevator.js';
 import { Autopilot } from './ship/autopilot.js';
 import { Asteroids } from './world/asteroids.js';
 import { Monitors } from './ui/monitors.js';
@@ -89,6 +90,7 @@ export class Game {
     this.lifeSupport = new LifeSupport(this);
     this.damage = new Damage(this);
     this.stations = new Stations(this.engine, this.shipVis.M, START_TIME);
+    this.elevator = new SpaceElevator(this.engine, this.stations.M);
     this.autopilot = new Autopilot(this);
     this.asteroids = new Asteroids(this);
     this.asteroids.setHull(this.shipVis.exterior.children.filter((m) => m.isMesh && !m.material.transparent));
@@ -310,6 +312,8 @@ export class Game {
     // world
     this.space.update(f.pos, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
     this.stations.update(this.time, f.pos, this.camWorld, dt);
+    this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
+    this.elevator.update(this.time, f.pos, this.camWorld, this.space.sunDir, dt);
     this.shipVis.update(dt, this.time / 1000);
     // particles: point size scale from the projection
     const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));

@@ -1,7 +1,7 @@
 // "Asphalt" — B-29's onboard AI. Speaks Japanese through speech synthesis (no on-screen text),
 // keeps a message log for the monitors, and occasionally chats when things are calm.
 const LINES = {
-  welcome: ['2041年6月1日、地球低軌道、高度420キロ。…ついに出発ですね、カイト。私はアスファルト。この船の管理AIです。これから、よろしくお願いします。'],
+  welcome: ['2041年6月1日、地球低軌道、高度420キロ。シラサギ・ステーションを離れました。…ついに出発ですね、カイト。私はアスファルト。この船の管理AIです。これから、よろしくお願いします。'],
   boot: ['おはようございます、カイト。B-29、全システム起動しました。'],
   back: ['おかえりなさい、カイト。前回から{h}が経過しました。'],
   offline_hits: ['留守のあいだに{n}回、衝突がありました。損傷を確認してください。'],

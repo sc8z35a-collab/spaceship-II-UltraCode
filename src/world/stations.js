@@ -2,7 +2,7 @@
 // network of 5G relay base stations on circular orbits, rendered as 3D models up close and
 // blinking lights far away.
 import * as THREE from 'three';
-import { MU_EARTH, R_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
+import { MU_EARTH, R_EARTH, OMEGA_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
 import { Builder, rng } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR, setLayersDeep } from '../core/layers.js';
 
@@ -21,57 +21,175 @@ export function referenceFrame(startTime) {
 }
 
 export const STATION_DEFS = [
-  { id: 'shirasagi', name: 'シラサギ・ステーション', en: 'SHIRASAGI', alt: 426e3, phase: 2.3, size: 1.0, kind: 'hub' },
+  // Shirasagi is the orbital port B-29 just left: same orbit, a few kilometres ahead at the start
+  { id: 'shirasagi', name: 'シラサギ・ステーション', en: 'SHIRASAGI', alt: 420e3, phase: 0.011, size: 1.0, kind: 'hub' },
   { id: 'nagi', name: 'ナギ中継局', en: 'NAGI RELAY', alt: 515e3, phase: -9, size: 0.7, kind: 'relay' },
   { id: 'kaguya', name: 'カグヤ中継基地', en: 'KAGUYA', alt: 2000e3, phase: 40, size: 1.2, kind: 'relay' },
-  { id: 'amaterasu', name: 'アマテラス静止港', en: 'AMATERASU GEO', alt: 35786e3, phase: 120, size: 1.6, kind: 'hub' },
+  // the geostationary port hangs on the space elevator's ribbon (turns with the Earth)
+  { id: 'amaterasu', name: 'アマテラス静止港', en: 'AMATERASU GEO', alt: 35786e3, phase: 0, size: 1.6, kind: 'hub', geoLon: 146.5 },
   { id: 'tsukuyomi', name: 'ツクヨミ・ドック（修理基地）', en: 'TSUKUYOMI DOCK', alt: 260000e3, phase: 200, size: 2.2, kind: 'dock' },
 ];
 
+// ---------------------------------------------------------------------------- station models
+function solarTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 256;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0d1a3a'; g.fillRect(0, 0, 256, 256);
+  for (let y = 0; y < 8; y++) for (let x = 0; x < 4; x++) {
+    const gr = g.createLinearGradient(x * 64, y * 32, x * 64 + 64, y * 32 + 32);
+    gr.addColorStop(0, '#1a2f63'); gr.addColorStop(1, '#0e1d45');
+    g.fillStyle = gr; g.fillRect(x * 64 + 2, y * 32 + 2, 60, 28);
+  }
+  g.strokeStyle = 'rgba(200,210,230,0.55)'; g.lineWidth = 1;
+  for (let i = 0; i <= 256; i += 16) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 256); g.stroke(); }
+  const t = new THREE.CanvasTexture(c);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+export function stationMaterials() {
+  const solar = solarTexture();
+  solar.repeat.set(3, 10);
+  return {
+    solarPanel: new THREE.MeshStandardMaterial({ map: solar, roughness: 0.3, metalness: 0.6, color: 0xffffff }),
+    windowLit: new THREE.MeshStandardMaterial({ color: 0x111111, emissive: new THREE.Color(1.0, 0.8, 0.52), emissiveIntensity: 4.0, roughness: 0.3 }),
+    strobe: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 }),
+    navR: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1, 0.08, 0.04), emissiveIntensity: 6 }),
+    navG: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.1, 1, 0.25), emissiveIntensity: 6 }),
+    flood: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.95, 0.97, 1), emissiveIntensity: 5 }),
+    dish: new THREE.MeshStandardMaterial({ color: 0xeceee8, roughness: 0.55, metalness: 0.1 }),
+    radiatorPanel: new THREE.MeshStandardMaterial({ color: 0xf0f0ea, roughness: 0.42, metalness: 0.05 }),
+  };
+}
+
+/** square lattice truss along local z (length L, width w), centred at the builder origin */
+function truss(b, L, w, t = 0.25, key = 'metal', keyD = 'metalDark') {
+  const bays = Math.max(1, Math.round(L / w));
+  const bl = L / bays;
+  for (const [x, y] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) b.box(t, t, L, key, [x * w / 2, y * w / 2, 0], null, 0);
+  for (let k = 0; k <= bays; k++) {
+    const z = -L / 2 + k * bl;
+    b.box(w, t * 0.8, t * 0.8, keyD, [0, w / 2, z], null, 0); b.box(w, t * 0.8, t * 0.8, keyD, [0, -w / 2, z], null, 0);
+    b.box(t * 0.8, w, t * 0.8, keyD, [w / 2, 0, z], null, 0); b.box(t * 0.8, w, t * 0.8, keyD, [-w / 2, 0, z], null, 0);
+  }
+  const dl = Math.hypot(w, bl), ang = Math.atan2(w, bl);
+  for (let k = 0; k < bays; k++) {
+    const z = -L / 2 + (k + 0.5) * bl, sg = k % 2 ? 1 : -1;
+    b.box(t * 0.6, t * 0.6, dl, keyD, [0, w / 2, z], [0, sg * ang, 0], 0);
+    b.box(t * 0.6, t * 0.6, dl, keyD, [0, -w / 2, z], [0, -sg * ang, 0], 0);
+    b.box(t * 0.6, t * 0.6, dl, keyD, [w / 2, 0, z], [sg * ang, 0, 0], 0);
+    b.box(t * 0.6, t * 0.6, dl, keyD, [-w / 2, 0, z], [-sg * ang, 0, 0], 0);
+  }
+}
+
+/** pressurised module along local z: cylinder with domed ends, insulation bands and lit windows */
+function module(b, r, L, key = 'hull', windows = 8) {
+  b.cyl(r, r, L, key, [0, 0, 0], [Math.PI / 2, 0, 0], 36);
+  b.sphere(r, key, [0, 0, -L / 2], 36, [1, 1, 0.45]);
+  b.sphere(r, key, [0, 0, L / 2], 36, [1, 1, 0.45]);
+  for (const z of [-L / 2 + 0.6, L / 2 - 0.6]) b.torus(r + 0.04, 0.12, 'gold', [0, 0, z], [0, 0, 0], 36);
+  for (let k = 0; k < windows; k++) {
+    const z = -L / 2 + 1.5 + (L - 3) * ((k + 0.5) / windows);
+    for (const a of [Math.PI * 0.32, Math.PI * 0.68]) b.box(0.55, 0.12, 0.38, 'windowLit', [Math.cos(a) * (r + 0.02), Math.sin(a) * (r + 0.02), z], [0, 0, a - Math.PI / 2], 0.02);
+  }
+}
+
+function solarWing(b, len, wid, side) {
+  b.cyl(0.35, 0.35, 6, 'metal', [side * 3, 0, 0], [0, 0, Math.PI / 2], 10);
+  b.box(len, 0.12, wid, 'solarPanel', [side * (6 + len / 2), 0, 0], null, 0);
+  b.box(len, 0.2, 0.25, 'metalDark', [side * (6 + len / 2), 0, 0], null, 0);
+  for (let k = 0; k <= 4; k++) b.box(0.18, 0.18, wid, 'metalDark', [side * (6 + len * k / 4), 0, 0], null, 0);
+}
+
+function dish(b, r, pos, rot) {
+  const pts = [];
+  for (let i = 0; i <= 12; i++) { const x = r * i / 12; pts.push(new THREE.Vector2(Math.max(0.001, x), (x * x) / (4 * r * 0.6))); }
+  b.push(pos, rot);
+  b.add(new THREE.LatheGeometry(pts, 32), 'dish');
+  b.cyl(0.08, 0.08, r * 0.7, 'metal', [0, r * 0.35, 0], null, 8);
+  b.sphere(0.25, 'metalDark', [0, r * 0.7, 0], 10);
+  b.pop();
+}
+
 function stationModel(def, M) {
   const b = new Builder();
-  const R = rng(def.id.length * 97 + 13);
   const s = def.size;
-  // core modules along Z
-  const n = 3 + Math.floor(R() * 3);
-  for (let i = 0; i < n; i++) {
-    const L = 7 + R() * 5;
-    b.cyl(2.1 * s, 2.1 * s, L * s, i % 2 ? 'hull' : 'hullDark', [0, 0, (i - n / 2) * 9 * s], [Math.PI / 2, 0, 0], 28);
-    b.torus(2.12 * s, 0.12 * s, 'metal', [0, 0, (i - n / 2) * 9 * s + L * s / 2], [0, 0, 0], 28);
+  const strobes = [];
+  b.push([0, 0, 0], [0, 0, 0], [s, s, s]);
+  const hub = def.kind !== 'relay';
+  const spineL = hub ? 150 : 80;
+  // spine truss through everything
+  truss(b, spineL, 4.2, 0.28);
+  // core module cluster around the middle
+  b.push([0, 0, 4]); module(b, 3.4, 26, 'hull', 10); b.pop();
+  for (const [ax, ay, k] of [[1, 0, 'hull'], [-1, 0, 'hullDark'], [0, 1, 'hull'], [0, -1, 'hull']]) {
+    const rot = ax ? [0, ax * Math.PI / 2, 0] : [ay > 0 ? -Math.PI / 2 : Math.PI / 2, 0, 0];
+    b.push([ax * 10.5, ay * 10.5, 6], rot);
+    module(b, 2.4, 13, k, 5);
+    b.cyl(1.25, 1.25, 2.2, 'hullOrange', [0, 0, 7.6], [Math.PI / 2, 0, 0], 24);
+    b.torus(1.3, 0.1, 'navR', [0, 0, 8.7], [0, 0, 0], 24);
+    b.pop();
   }
-  // truss
-  const tl = n * 9 * s + 20;
-  b.box(1.2 * s, 1.2 * s, tl, 'metalDark', [0, 4 * s, -2], null, 0.05);
-  for (let k = -3; k <= 3; k++) b.box(30 * s, 0.4 * s, 0.4 * s, 'metal', [0, 4 * s, k * 6 * s], null, 0.02);
-  // solar wings
-  for (const side of [-1, 1]) for (let k = -2; k <= 2; k += 2) {
-    b.box(12 * s, 0.1, 4.5 * s, 'solar', [side * 22 * s, 4 * s, k * 6 * s], null, 0.01);
-    b.box(12 * s, 0.12, 0.15, 'metal', [side * 22 * s, 4 * s, k * 6 * s], null, 0.01);
+  b.sphere(3.6, 'hull', [0, 0, -12], 32);
+  b.sphere(3.0, 'hullDark', [0, 0, 20], 32);
+  // radiators and antennas
+  for (const sy of [-1, 1]) b.box(0.22, 24, 8, 'radiatorPanel', [0, sy * 16, 26], null, 0);
+  for (const sy of [-1, 1]) b.box(0.6, 6, 0.6, 'metal', [0, sy * 4, 26], null, 0);
+  dish(b, 4.2, [7, 6, 40], [0, 0, -0.6]);
+  dish(b, 2.6, [-6, 5, 44], [0.3, 0, 0.7]);
+  // 5G relay array (this network is what the whole station is about)
+  for (let k = 0; k < 8; k++) {
+    const a = k / 8 * Math.PI * 2;
+    b.box(3.2, 4.4, 0.25, 'hullDark', [Math.cos(a) * 6.5, Math.sin(a) * 6.5, spineL / 2 - 6], [0, 0, a + Math.PI / 2], 0.05);
   }
-  // rotating habitat ring for hubs / dock
-  let ring = null;
-  if (def.kind !== 'relay') {
-    const rb = new Builder();
-    rb.torus(14 * s, 1.6 * s, 'hull', [0, 0, 0], [0, 0, 0], 64);
-    for (let k = 0; k < 6; k++) { const a = k * Math.PI / 3; rb.box(0.5 * s, 14 * s, 0.5 * s, 'metalDark', [Math.cos(a) * 7 * s, Math.sin(a) * 7 * s, 0], [0, 0, a - Math.PI / 2], 0.05); }
-    ring = rb.build(M);
-    ring.position.set(0, 0, -n * 4.5 * s);
-  }
-  // docking port with lights
-  b.cyl(1.4 * s, 1.4 * s, 2.5 * s, 'hullOrange', [0, 0, n * 4.5 * s + 4], [Math.PI / 2, 0, 0], 24);
-  b.sphere(0.25 * s, 'navWhite', [0, 1.6 * s, n * 4.5 * s + 5], 8);
-  b.sphere(0.25 * s, 'navRed', [-1.6 * s, 0, n * 4.5 * s + 5], 8);
-  b.sphere(0.25 * s, 'navGreen', [1.6 * s, 0, n * 4.5 * s + 5], 8);
-  // dock: big repair bay frame
+  // solar wings at both ends of the spine
+  for (const z of [spineL / 2 - 16, -spineL / 2 + 14]) for (const side of [-1, 1]) { b.push([0, 0, z]); solarWing(b, hub ? 44 : 26, hub ? 12 : 9, side); b.pop(); }
+  // a docked shuttle on the top port
+  b.cyl(1.6, 1.6, 7, 'hull', [0, 22.6, 6], null, 24);
+  b.cyl(0.45, 1.6, 2.4, 'hull', [0, 27.3, 6], null, 24);
+  b.box(7.5, 2.2, 0.15, 'solarPanel', [0, 22.6, 6], null, 0);
+  b.sphere(0.25, 'navG', [3.75, 22.6, 6], 8);
+  b.sphere(0.25, 'navR', [-3.75, 22.6, 6], 8);
+  // floodlights around the docking face and strobes at the extremities
+  for (const [x, y] of [[3, 3], [-3, 3], [3, -3], [-3, -3]]) b.cyl(0.35, 0.35, 0.1, 'flood', [x, y, spineL / 2 + 0.1], [Math.PI / 2, 0, 0], 12);
+  for (const z of [spineL / 2, -spineL / 2]) for (const [x, y] of [[2.1, 2.1], [-2.1, -2.1]]) { b.sphere(0.45, 'strobe', [x, y, z], 10); strobes.push([x * s, y * s, z * s]); }
+  b.sphere(0.4, 'navR', [-2.1, 2.1, spineL / 2], 10);
+  b.sphere(0.4, 'navG', [2.1, -2.1, spineL / 2], 10);
+  // repair dock: an open gantry frame big enough to swallow a ship
   if (def.kind === 'dock') {
-    for (let k = 0; k < 5; k++) b.box(26, 1.2, 1.2, 'plasticY', [0, -12, -20 + k * 10], null, 0.1);
-    b.box(1.2, 24, 50, 'metalDark', [-13, 0, 0], null, 0.1);
-    b.box(1.2, 24, 50, 'metalDark', [13, 0, 0], null, 0.1);
+    b.push([0, -22, 10]);
+    for (let k = 0; k < 6; k++) b.box(30, 1.4, 1.4, 'plasticY', [0, -8, -25 + k * 10], null, 0.1);
+    for (const x of [-15, 15]) b.box(1.4, 18, 52, 'metalDark', [x, 0, 0], null, 0.1);
+    for (const x of [-14, 14]) for (let k = 0; k < 5; k++) b.cyl(0.4, 0.4, 0.15, 'flood', [x * 0.95, 6, -20 + k * 10], [0, 0, Math.PI / 2], 10);
+    b.pop();
   }
+  b.pop();
   const g = b.build(M, { castShadow: false });
-  if (ring) g.add(ring);
+  // rotating habitat ring (hubs and the dock)
+  let ring = null;
+  if (hub) {
+    const rb = new Builder();
+    rb.push([0, 0, 0], [0, 0, 0], [s, s, s]);
+    rb.torus(46, 3.1, 'hull', [0, 0, 0], [0, 0, 0], 96);
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; rb.cyl(0.9, 0.9, 41, 'hullDark', [Math.cos(a) * 24, Math.sin(a) * 24, 0], [0, 0, a - Math.PI / 2], 12); }
+    rb.cyl(4.6, 4.6, 7, 'hull', [0, 0, 0], [Math.PI / 2, 0, 0], 32);
+    for (let k = 0; k < 120; k++) {
+      const a = k / 120 * Math.PI * 2;
+      rb.box(0.5, 1.2, 0.7, 'windowLit', [Math.cos(a) * 42.85, Math.sin(a) * 42.85, (k % 2 ? 1 : -1) * 0.9], [0, 0, a], 0.05);
+    }
+    for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2 + 0.4; rb.sphere(0.5, 'strobe', [Math.cos(a) * 49.3, Math.sin(a) * 49.3, 0], 10); }
+    rb.pop();
+    ring = rb.build(M, { castShadow: false });
+    ring.position.set(0, 0, -36 * s);
+    g.add(ring);
+  }
   g.userData.ring = ring;
-  g.userData.portOffset = new THREE.Vector3(0, 0, n * 4.5 * s + 6);
+  g.userData.strobes = strobes;
+  g.userData.portOffset = new THREE.Vector3(0, 0, (spineL / 2 + 8) * s);
+  g.userData.radius = (hub ? 95 : 60) * s;
   return g;
 }
 
@@ -93,6 +211,8 @@ export class Stations {
     // plain copies of the ship materials (no ship-space dents / window cut-outs)
     const M = {};
     for (const [k, m] of Object.entries(shipM)) M[k] = m.userData && m.userData.shipPatched ? m.clone() : m;
+    this.SM = stationMaterials();
+    Object.assign(M, this.SM);
     this.M = M;
     this.list = STATION_DEFS.map((d) => {
       const r = R_EARTH + d.alt;
@@ -154,6 +274,49 @@ export class Stations {
     this.lights.layers.set(LAYER_FAR);
     this.lights.layers.enable(LAYER_MID);
     this.scene.add(this.lights);
+    // station beacons: visible from far away as a strobing white light and a warm window glow,
+    // so the stations can be found in the sky long before their structure resolves
+    const SN = this.list.length * 2;
+    const sg = new THREE.BufferGeometry();
+    this.stPos = new Float32Array(SN * 3);
+    const stCol = new Float32Array(SN * 3), stKind = new Float32Array(SN);
+    for (let i = 0; i < this.list.length; i++) {
+      stCol.set([1, 1, 1], i * 6); stKind[i * 2] = 1;
+      stCol.set([1, 0.78, 0.5], i * 6 + 3); stKind[i * 2 + 1] = 0;
+    }
+    sg.setAttribute('position', new THREE.BufferAttribute(this.stPos, 3));
+    sg.setAttribute('color', new THREE.BufferAttribute(stCol, 3));
+    sg.setAttribute('kind', new THREE.BufferAttribute(stKind, 1));
+    this.stLightsMat = new THREE.ShaderMaterial({
+      uniforms: { uTime: { value: 0 }, uScale: { value: 1 } },
+      vertexShader: /* glsl */`
+        attribute vec3 color; attribute float kind; uniform float uTime; uniform float uScale;
+        varying vec3 vC; varying float vA;
+        void main(){
+          vec4 mv = modelViewMatrix * vec4(position, 1.0);
+          gl_Position = projectionMatrix * mv;
+          float d = length(mv.xyz);
+          float t = fract(uTime / 1.6);
+          float flash = kind > 0.5 ? max(step(t, 0.05), step(0.16, t) * step(t, 0.21)) : 1.0;
+          float fadeNear = smoothstep(1500.0, 6000.0, d);      // close up the model's own lamps take over
+          vA = flash * fadeNear * (kind > 0.5 ? 1.6 : 0.6) * clamp(4.0e6 / d, 0.12, 1.0);
+          gl_PointSize = (kind > 0.5 ? 2.0 + 4.0 * flash : 2.4) * uScale * clamp(2.0e5 / d, 0.6, 1.6);
+          vC = color;
+        }`,
+      fragmentShader: /* glsl */`
+        varying vec3 vC; varying float vA;
+        void main(){
+          vec2 p = gl_PointCoord * 2.0 - 1.0; float g = exp(-dot(p, p) * 3.0);
+          gl_FragColor = vec4(vC * vA * g * 5.0, 1.0);
+        }`,
+      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
+    });
+    this.stLights = new THREE.Points(sg, this.stLightsMat);
+    this.stLights.frustumCulled = false;
+    this.stLights.matrixAutoUpdate = false;
+    this.stLights.layers.set(LAYER_FAR);
+    this.stLights.layers.enable(LAYER_MID);
+    this.scene.add(this.stLights);
     // near relay models (instanced)
     const rb = relayModel(M);
     const rg = rb.build(M, { castShadow: false });
@@ -167,6 +330,16 @@ export class Stations {
       this.relayInst.push(im);
     });
     this._m = new THREE.Matrix4();
+  }
+
+  /** ECI position / velocity of a named station at time t (ms) */
+  posOf(s, t, pos, vel) {
+    if (s.geoLon !== undefined) {
+      ecefToEci(latLonToUnit(0, s.geoLon * Math.PI / 180), gmst(t), pos).normalize().multiplyScalar(s.r);
+      if (vel) vel.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
+      return pos;
+    }
+    return this.orbitPos(s.r, s.n, s.phi0, 0, t, pos, vel);
   }
 
   /** ECI position/velocity of a body on a circular reference orbit */
@@ -185,7 +358,7 @@ export class Stations {
   update(t, origin, camWorld, dt) {
     const camEci = camWorld.clone().add(origin);
     for (const s of this.list) {
-      this.orbitPos(s.r, s.n, s.phi0, 0, t, s.pos, s.vel);
+      this.posOf(s, t, s.pos, s.vel);
       const rel = s.pos.clone().sub(origin);
       const d = rel.distanceTo(camWorld);
       s.dist = s.pos.distanceTo(origin);
@@ -201,10 +374,21 @@ export class Stations {
         const ring = s.model.userData.ring;
         if (ring) { ring.rotation.z += dt * 0.12; ring.updateMatrix(); }
         s.model.updateMatrixWorld(true);
-        const R = 70 * s.size;
+        const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });
       }
     }
+    // beacons + strobes (double flash every 1.6 s)
+    for (let i = 0; i < this.list.length; i++) {
+      const rel = this.list[i].pos.clone().sub(origin);
+      this.stPos.set([rel.x, rel.y, rel.z], i * 6);
+      this.stPos.set([rel.x, rel.y + 3, rel.z], i * 6 + 3);
+    }
+    this.stLights.geometry.attributes.position.needsUpdate = true;
+    const tt = (t / 1000) % 10000;
+    this.stLightsMat.uniforms.uTime.value = tt;
+    const ph = (tt / 1.6) % 1;
+    this.SM.strobe.emissiveIntensity = ph < 0.05 || (ph > 0.16 && ph < 0.21) ? 40 : 0;
     // relays
     let k = 0;
     const near = [];
@@ -236,6 +420,11 @@ export class Stations {
       for (const im of this.relayInst) im.setMatrixAt(i, this._m);
     }
     for (const im of this.relayInst) im.instanceMatrix.needsUpdate = true;
+  }
+
+  setPixelScale(pr) {
+    this.lightsMat.uniforms.uScale.value = pr;
+    this.stLightsMat.uniforms.uScale.value = pr;
   }
 
   byId(id) { return this.list.find((s) => s.id === id); }
