@@ -21,10 +21,10 @@ html, body {
 .boot-inner { text-align: center; }
 .logo {
   font-size: min(18vh, 15vw); font-weight: 200; letter-spacing: 0.18em; color: #e9eef8;
-  text-shadow: 0 0 28px rgba(120, 170, 255, 0.35);
+  text-shadow: 0 0 28px rgba(120, 170, 255, 0.35), 0 2px 18px rgba(0, 0, 0, 0.55);
   font-family: "Avenir Next", "Helvetica Neue", -apple-system, sans-serif;
 }
-.sub { margin-top: 0.4em; font-size: 2.6vh; letter-spacing: 0.5em; color: #8fa3c3; }
+.sub { margin-top: 0.4em; font-size: 2.6vh; letter-spacing: 0.5em; color: #a9bad6; text-shadow: 0 0 6px rgba(0, 0, 0, 0.9), 0 0 14px rgba(0, 0, 0, 0.7); }
 #progress { margin: 5vh auto 0; width: 34vw; height: 2px; background: rgba(255, 255, 255, 0.08); border-radius: 2px; overflow: hidden; }
 #progress-bar { width: 0%; height: 100%; background: linear-gradient(90deg, #5d8cff, #bfe0ff); transition: width 0.25s; }
 #boot-btns { margin-top: 5vh; display: flex; gap: 3vw; justify-content: center; }
@@ -37,7 +37,7 @@ html, body {
 .bbtn svg { width: 3.2vh; height: 3.2vh; fill: #cfe0ff; }
 .bbtn:active { background: rgba(80, 120, 200, 0.4); }
 #boot-err { margin-top: 4vh; color: #ff9a8a; font-size: 2.4vh; max-width: 70vw; }
-.boot-foot { position: absolute; bottom: 2vh; left: 0; right: 0; text-align: center; font-size: 1.6vh; color: #46546b; letter-spacing: 0.05em; }
+.boot-foot { position: absolute; bottom: 2vh; left: 0; right: 0; text-align: center; font-size: 1.6vh; color: #6c7a91; letter-spacing: 0.05em; text-shadow: 0 0 6px rgba(0, 0, 0, 0.9); }
 
 /* ---------- rotate prompt ---------- */
 #rotate {

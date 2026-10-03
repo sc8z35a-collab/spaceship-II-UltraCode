@@ -154,8 +154,9 @@ export class Gameplay {
           // streaks flowing back along the hull
           vec3 q = vP - uDir * dot(vP, uDir);
           float s = n3(q * 2.4 + uDir * (dot(vP, uDir) * 0.35 - uT * 6.0)) * 0.65 + n3(vP * 5.0 - uDir * uT * 15.0) * 0.35;
-          float wake = smoothstep(0.2, -0.6, facing) * rim * rim * s;
-          float a = uH * (bow * (0.6 + 0.6 * s) + rim * rim * 0.45 * smoothstep(-0.3, 0.6, facing) * (0.4 + s) + wake * 0.5);
+          float st = smoothstep(0.35, 0.85, s);                    // thin hot filaments
+          float wake = smoothstep(0.2, -0.6, facing) * pow(rim, 3.0) * st;
+          float a = uH * (bow * (0.6 + 0.6 * s) + pow(rim, 4.0) * 0.5 * smoothstep(-0.3, 0.6, facing) * (0.25 + st) + wake * 0.4);
           vec3 c = mix(vec3(1.0, 0.25, 0.06), vec3(1.0, 0.86, 0.62), clamp(bow * 1.3, 0.0, 1.0)) * a * 2.2;
           gl_FragColor = vec4(c, 1.0); }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,

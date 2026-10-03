@@ -79,7 +79,7 @@ export class Space {
     this.sunLight.shadow.mapSize.set(4096, 4096);
     this.sunLight.shadow.bias = -0.0006;
     this.sunLight.shadow.normalBias = 0.045;
-    this.sunLight.shadow.radius = 3;
+    this.sunLight.shadow.radius = 1.6;
     this.sunLight.layers.enableAll();
     scene.add(this.sunLight);
     scene.add(this.sunLight.target);
@@ -92,7 +92,7 @@ export class Space {
       this.earthshine.shadow.mapSize.set(1024, 1024);
       this.earthshine.shadow.bias = -0.001;
       this.earthshine.shadow.normalBias = 0.04;
-      this.earthshine.shadow.radius = 6;
+      this.earthshine.shadow.radius = 3;
     }
     this.earthshine.layers.enableAll();
     scene.add(this.earthshine);
