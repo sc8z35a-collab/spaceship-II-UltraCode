@@ -2,7 +2,8 @@
 // folding rails), the coffee machine, the shower, reactor + turbine behind the viewport,
 // server LEDs, fans, pumps, O2 electrolysis column, and the EVA suit on its rack.
 import * as THREE from 'three';
-import { RoundedBoxGeometry, roundedRectShape, roundedRectPath } from './geom.js';
+import { RoundedBoxGeometry, roundedRectShape, roundedRectPath, Builder } from './geom.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { LIFT, ENG_HATCH } from './interior.js';
 import { DECK_Y, LOWER_Y, Z_REACTOR_BULK } from './hullShape.js';
 import { setLayersDeep, LAYER_NEAR } from '../core/layers.js';
@@ -490,7 +491,14 @@ export class Machines {
     this.fans = [];
     const mk = (p, ax, r) => {
       const f = new THREE.Group();
-      for (let i = 0; i < 5; i++) { const b = new THREE.Mesh(new THREE.BoxGeometry(r * 0.9, 0.006, r * 0.35), M.metalDark); b.position.x = r * 0.45; b.rotation.x = 0.4; const h = new THREE.Group(); h.rotation.y = i / 5 * Math.PI * 2; h.add(b); f.add(h); }
+      const blades = [];
+      for (let i = 0; i < 5; i++) {
+        const bg = new THREE.BoxGeometry(r * 0.9, 0.006, r * 0.35);
+        bg.applyMatrix4(new THREE.Matrix4().makeRotationX(0.4).setPosition(r * 0.45, 0, 0));
+        bg.applyMatrix4(new THREE.Matrix4().makeRotationY(i / 5 * Math.PI * 2));
+        blades.push(bg);
+      }
+      f.add(new THREE.Mesh(mergeGeometries(blades), M.metalDark));
       f.position.copy(p);
       if (ax === 'x') f.rotation.z = Math.PI / 2;
       this.root.add(f);
@@ -546,23 +554,22 @@ export class Machines {
     if (!p) return;
     // EVA suit hanging on its rack (local front = -z): hard upper torso, bearings at every joint,
     // bellows knees, gloves, boots, life-support backpack with umbilicals, helmet with gold visor
-    const suit = new THREE.Group();
-    const cloth = M.suit || M.plasticW, hard = M.plasticW, dark = M.plasticK, metal = M.steel;
-    const add = (geo, mat, pos, rot, scl) => { const m = new THREE.Mesh(geo, mat); if (pos) m.position.set(...pos); if (rot) m.rotation.set(...rot); if (scl) m.scale.set(...scl); suit.add(m); return m; };
+    const SB = new Builder();
+    const cloth = M.suit ? 'suit' : 'plasticW', hard = 'plasticW', dark = 'plasticK', metal = 'steel';
+    const key = (mat) => (typeof mat === 'string' ? mat : Object.keys(M).find((k) => M[k] === mat));
+    const add = (geo, mat, pos, rot, scl) => {
+      const m4 = new THREE.Matrix4().compose(pos ? V(...pos) : V(0, 0, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(...(rot || [0, 0, 0]))), scl ? V(...scl) : V(1, 1, 1));
+      SB.add(geo.applyMatrix4(m4), key(mat));
+      return { rotation: { set: () => {} } };
+    };
     const limb = (a, b, r, mat) => {
       const A = V(...a), B = V(...b), d = B.clone().sub(A), len = d.length();
-      const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.001, len - 2 * r * 0.4), 6, 14), mat);
-      m.position.copy(A).lerp(B, 0.5);
-      m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
-      suit.add(m);
-      return m;
+      const m4 = new THREE.Matrix4().compose(A.clone().lerp(B, 0.5), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize()), V(1, 1, 1));
+      SB.add(new THREE.CapsuleGeometry(r, Math.max(0.001, len - 2 * r * 0.4), 6, 14).applyMatrix4(m4), key(mat));
     };
     const ring = (pos, axis, R, r, mat = metal) => {
-      const m = new THREE.Mesh(new THREE.TorusGeometry(R, r, 8, 24), mat);
-      m.position.set(...pos);
-      m.quaternion.setFromUnitVectors(V(0, 0, 1), V(...axis).normalize());
-      suit.add(m);
-      return m;
+      const m4 = new THREE.Matrix4().compose(V(...pos), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), V(...axis).normalize()), V(1, 1, 1));
+      SB.add(new THREE.TorusGeometry(R, r, 8, 24).applyMatrix4(m4), key(mat));
     };
     // torso + hips
     add(new THREE.CapsuleGeometry(0.2, 0.24, 8, 20), hard, [0, 0.38, 0], null, [1.22, 1, 0.86]);
@@ -580,9 +587,8 @@ export class Machines {
     // neck ring + helmet: white shell, clear bubble, gold sun visor, lights
     ring([0, 0.64, 0], [0, 1, 0], 0.125, 0.024);
     add(new THREE.SphereGeometry(0.16, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.62), hard, [0, 0.8, 0.02]);
-    const visorMat = new THREE.MeshStandardMaterial({ color: 0xd0a648, metalness: 1, roughness: 0.06 });
-    add(new THREE.SphereGeometry(0.152, 28, 18, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.22, Math.PI * 0.5), visorMat, [0, 0.8, -0.005]);
-    add(new THREE.TorusGeometry(0.155, 0.012, 8, 32, Math.PI * 0.9), hard, [0, 0.8, -0.005], [0, 0, -0.05]).rotation.set(Math.PI / 2 - 0.25, 0, 0);
+    add(new THREE.SphereGeometry(0.152, 28, 18, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.22, Math.PI * 0.5), 'visorGold', [0, 0.8, -0.005]);
+    add(new THREE.TorusGeometry(0.155, 0.012, 8, 32, Math.PI * 0.9), hard, [0, 0.8, -0.005], [Math.PI / 2 - 0.25, 0, 0]);
     for (const s2 of [-1, 1]) {
       add(new THREE.CylinderGeometry(0.022, 0.026, 0.07, 12), dark, [s2 * 0.15, 0.86, -0.04], [Math.PI / 2, 0, 0]);
       add(new THREE.CircleGeometry(0.018, 12), M.lampCool, [s2 * 0.15, 0.86, -0.076], [0, Math.PI, 0]);
@@ -597,7 +603,7 @@ export class Machines {
       ring(wr, [0, 1, 0.2], 0.058, 0.016);
       add(new RoundedBoxGeometry(0.065, 0.12, 0.09, 3, 0.025), dark, [s2 * 0.33, -0.08, -0.07]);
       limb([s2 * 0.3, -0.06, -0.1], [s2 * 0.29, -0.11, -0.12], 0.016, dark);
-      add(new THREE.CylinderGeometry(0.064, 0.06, 0.05, 14), M.plasticR, [s2 * 0.335, 0.11, -0.045]).rotation.set(0.1, 0, 0);   // cuff checklist band
+      add(new THREE.CylinderGeometry(0.064, 0.06, 0.05, 14), M.plasticR, [s2 * 0.335, 0.11, -0.045], [0.1, 0, 0]);   // cuff checklist band
     }
     // legs: hip bearing, bellows knee, boots with treads
     for (const s2 of [-1, 1]) {
@@ -622,8 +628,11 @@ export class Machines {
     // hanger through the shoulders up to the rack
     add(new THREE.CylinderGeometry(0.012, 0.012, 0.66, 8), metal, [0, 0.6, 0.1], [0, 0, Math.PI / 2]);
     add(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 8), metal, [0, 0.76, 0.12]);
+    const suit = SB.build(M);
     suit.position.copy(p);
     suit.rotation.y = Math.PI;
+    suit.matrixAutoUpdate = true;
+    suit.traverse((o) => { o.matrixAutoUpdate = true; });
     this.root.add(suit);
     this.suitModel = suit;
     g.interact.addSphere(p.clone().add(V(0, 0.3, 0)), 0.5, () => g.systems.suitTapped(), { maxDist: 2.2 });

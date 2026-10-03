@@ -382,6 +382,7 @@ export function createMaterials() {
   M.fabricRed = patchShipMaterial(std(0x7a3a34, 0.95, 0.0), { wear: 0.4, grime: 0.2, triScale: 3.0 });
   M.cushion = patchShipMaterial(std(0x8b7d6b, 0.92, 0.0), { wear: 0.3, grime: 0.15 });
   M.suit = patchShipMaterial(std(0xe8eae4, 0.86, 0.0), { wear: 0.35, grime: 0.22, triScale: 3.0 });   // EVA suit outer layer
+  M.visorGold = new THREE.MeshStandardMaterial({ color: 0xd0a648, metalness: 1, roughness: 0.06 });
   M.wood = patchShipMaterial(std(0x8a5a33, 0.6, 0.0, { map: woodTexture() }), { wear: 0.4, grime: 0.15 });
   M.plasticW = patchShipMaterial(std(0xe9e7e1, 0.45, 0.0), { wear: 0.4, grime: 0.25 });
   M.plasticK = patchShipMaterial(std(0x222428, 0.5, 0.0), { wear: 0.3, grime: 0.1 });

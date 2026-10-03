@@ -95,6 +95,10 @@ export class Space {
       this.earthshine.shadow.radius = 3;
     }
     this.earthshine.layers.enableAll();
+    // earthshine changes slowly: its shadow map is refreshed every few frames (see update)
+    this.earthshine.shadow.autoUpdate = false;
+    this.earthshine.shadow.needsUpdate = true;
+    this._esFrame = 0;
     scene.add(this.earthshine);
     scene.add(this.earthshine.target);
 
@@ -230,6 +234,7 @@ export class Space {
     const phase = 0.5 * (1 + toEarth.dot(this.sunDir) * -1); // 1 when we see the day side
     const solid = 1 - Math.sqrt(Math.max(0, 1 - (R_EARTH / camR) ** 2));
     this.earthshine.intensity = SUN_E * 0.3 * phase * solid * 1.2;
+    if (++this._esFrame % 4 === 0) this.earthshine.shadow.needsUpdate = true;
     this.earthshine.position.set(c.x + toEarth.x * 40, c.y + toEarth.y * 40, c.z + toEarth.z * 40);
     this.earthshine.target.position.copy(c);
     this.earthshine.updateMatrixWorld();
