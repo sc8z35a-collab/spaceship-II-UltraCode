@@ -21,6 +21,7 @@ import { LifeSupport } from './ship/lifeSupport.js';
 import { Damage } from './ship/damage.js';
 import { Stations } from './world/stations.js';
 import { SpaceElevator } from './world/elevator.js';
+import { LightShafts } from './ship/lightShafts.js';
 import { Autopilot } from './ship/autopilot.js';
 import { Asteroids } from './world/asteroids.js';
 import { Monitors } from './ui/monitors.js';
@@ -91,6 +92,7 @@ export class Game {
     this.damage = new Damage(this);
     this.stations = new Stations(this.engine, this.shipVis.M, START_TIME);
     this.elevator = new SpaceElevator(this.engine, this.stations.M);
+    this.shafts = new LightShafts(this.shipVis.root);
     this.autopilot = new Autopilot(this);
     this.asteroids = new Asteroids(this);
     this.asteroids.setHull(this.shipVis.exterior.children.filter((m) => m.isMesh && !m.material.transparent));
@@ -314,6 +316,13 @@ export class Game {
     this.stations.update(this.time, f.pos, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
     this.elevator.update(this.time, f.pos, this.camWorld, this.space.sunDir, dt);
+    {
+      const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
+      const ls = this.lifeSupport;
+      const zid = ls ? ls.zoneAt(this.player.pos) : null;
+      const air = zid && ls.z[zid] ? ls.pressure(zid) / 101.3 : (ls ? 0 : 1);
+      this.shafts.update(sunLocal, this.space.sunColor, performance.now() / 1000, air);
+    }
     this.shipVis.update(dt, this.time / 1000);
     // particles: point size scale from the projection
     const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));

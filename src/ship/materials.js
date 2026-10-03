@@ -261,6 +261,7 @@ export function patchShipMaterial(mat, opts = {}) {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS)
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+        float _bumpH = 0.0;
         ${o.openings ? `
         if (openingMask(vShipPos) > 0.5) discard;
         if (canopyMask(vShipPos) > 0.5) discard;
@@ -286,13 +287,26 @@ export function patchShipMaterial(mat, opts = {}) {
           float seam = pa.x * bw.x + pb.x * bw.y + pc.x * bw.z;
           float tint = pa.y * bw.x + pb.y * bw.y + pc.y * bw.z;
           diffuseColor.rgb *= 1.0 - 0.45 * seam;
-          diffuseColor.rgb *= 0.93 + 0.1 * tint;` : ''}
+          diffuseColor.rgb *= 0.93 + 0.1 * tint;
+          _bumpH = -seam * 0.0016 + g2 * 0.00035;` : ''}
           float sc = scorchAt(vShipPos);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.045, 0.04), _rim * 0.9);
           // stretched / scraped metal inside dents
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
         }`)
+      .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
+        ${o.panels > 0 ? `
+        {
+          // relief: recessed panel seams + faint waviness (derivative bump, view space)
+          vec2 dH = vec2(dFdx(_bumpH), dFdy(_bumpH));
+          vec3 sx = dFdx(-vViewPosition), sy = dFdy(-vViewPosition);
+          vec3 r1 = cross(sy, normal), r2 = cross(normal, sx);
+          float det = dot(sx, r1) * faceDirection;
+          vec3 grad = sign(det) * (dH.x * r1 + dH.y * r2);
+          vec3 nb = normalize(abs(det) * normal - grad);
+          if (abs(det) > 1e-12) normal = nb;
+        }` : ''}`)
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         {
           vec3 P = vShipPos * ${o.triScale.toFixed(3)};
