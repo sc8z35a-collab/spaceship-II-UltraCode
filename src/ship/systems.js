@@ -27,9 +27,9 @@ export class ShipSystems {
   async init(P) {
     const g = this.g, L = g.layout, M = g.shipVis.M, root = g.shipVis.root;
     // ----- light pool
-    this.lamps = [...L.lamps, ...g.shipVis.lampsCorridor.map((p) => ({ pos: p, color: 0xe6eeff, intensity: 1.4, room: 'corridor' }))];
+    this.lamps = [...L.lamps, ...g.shipVis.lampsCorridor.map((l) => (l.pos ? Object.assign({ room: 'corridor' }, l) : { pos: l, color: 0xe6eeff, intensity: 1.4, room: 'corridor' }))];
     this.pool = [];
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 12; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 7, 1.8);
       l.layers.enableAll();
       root.add(l);

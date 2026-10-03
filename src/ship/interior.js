@@ -5,6 +5,7 @@ import { Builder, roundedRectPath, panelGeometry, rng } from './geom.js';
 import { HULL, hullAt, sectionPoint, halfWidthAt, heightRangeAt, DECK_Y, LOWER_Y, Z_COCKPIT_BULK, Z_ENG_BULK, Z_REACTOR_BULK, CORRIDOR_X } from './hullShape.js';
 import { loftGeometry, cutOpeningTris } from './exterior.js';
 import { OPENINGS, inCanopy } from './hullShape.js';
+import { buildCorridor, buildRoomCoves, doorFrame } from './architecture.js';
 
 export const INSET = HULL.inset;
 export const Z_FRONT = -12.9;  // inner nose (approx)
@@ -21,6 +22,12 @@ export const DOORS = {
   ls: { axis: 'x', at: CORRIDOR_X, c: 3.0, w: 0.78, h: 1.88, zones: ['ls', 'corridor'] },
   eng: { axis: 'z', at: Z_ENG_BULK, c: 0, w: 0.86, h: 1.92, zones: ['eng', 'corridor'] },
 };
+
+// open alcoves in the corridor walls (no door): bunk (port) and the lift landing (starboard)
+export const ALCOVES = [
+  { side: -1, c: -1.3, w: 2.4, h: 1.7, y0: DECK_Y + 0.1, r: 0.3 },
+  { side: 1, c: -3.75, w: 1.25, h: 1.94, y0: DECK_Y + 0.008, r: 0.24 },
+];
 
 /** inner section outline points above a given y (for partition shapes), returned as [x,y] */
 export function sectionAbove(z, yMin, inset = INSET, n = 96) {
@@ -82,6 +89,7 @@ function doorPath(cx, w, h, y0 = DECK_Y) {
 
 export function buildInteriorShell(M) {
   const b = new Builder();
+  b.autoRound = true;   // nothing in the cabin has hard square edges
   const R = rng(29);
   // ---------- inner hull wall (whole cabin + underfloor) ----------
   const z0 = HULL.zTip + 0.02, z1 = Z_REACTOR_BULK + 0.02;
@@ -197,8 +205,8 @@ export function buildInteriorShell(M) {
     for (const d of Object.values(DOORS)) {
       if (d.axis === 'x' && Math.sign(d.at) === side) sh.holes.push(doorPath(d.c, d.w, d.h));
     }
-    if (side < 0) sh.holes.push(roundedRectPath(2.4, 1.7, 0.3, -1.3, DECK_Y + 0.95)); // bunk alcove opening
-    else sh.holes.push(roundedRectPath(1.25, 2.05, 0.2, -3.75, DECK_Y + 1.03)); // lift alcove opening
+    if (side < 0) sh.holes.push(roundedRectPath(ALCOVES[0].w, ALCOVES[0].h, ALCOVES[0].r, ALCOVES[0].c, ALCOVES[0].y0 + ALCOVES[0].h / 2)); // bunk alcove opening
+    else sh.holes.push(roundedRectPath(ALCOVES[1].w, ALCOVES[1].h, ALCOVES[1].r, ALCOVES[1].c, ALCOVES[1].y0 + ALCOVES[1].h / 2)); // lift alcove opening
     const g = new THREE.ExtrudeGeometry(sh, { depth: 0.07, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 1, curveSegments: 8 });
     // shape is in (z,y); map to world: x = const, shape.x -> z, shape.y -> y
     g.applyMatrix4(new THREE.Matrix4().makeRotationY(-Math.PI / 2)); // shape x -> world z, extrusion -> -x
@@ -213,29 +221,14 @@ export function buildInteriorShell(M) {
   ];
   for (const c of cross) crossWall(b, c.z, c.side);
 
-  // ---------- door frames (trim) ----------
-  for (const d of Object.values(DOORS)) doorTrim(b, d);
+  // ---------- chunky rounded door / alcove frames with LED lines ----------
+  for (const d of Object.values(DOORS)) doorFrame(b, d, d.axis === 'z' ? 0.05 : 0.045, d.hatch ? 'hullOrange' : 'frame', d.hatch ? 'ledAmber' : 'ledStrip');
+  for (const a of ALCOVES) doorFrame(b, { axis: 'x', at: a.side * CORRIDOR_X, c: a.c, w: a.w, h: a.h, y0: a.y0, r: a.r }, 0.045, 'frame', 'ledStrip');
 
-  // ---------- ceiling cable trays + light strips (corridor) ----------
-  for (const side of [-1, 1]) {
-    b.box(0.18, 0.05, zc1 - zc0 - 0.4, 'metalDark', [side * 0.42, 2.38, (zc0 + zc1) / 2], null, 0.01);
-    for (let k = 0; k < 7; k++) {
-      const off = side * 0.42 + (k - 3) * 0.022;
-      b.cyl(0.009, 0.009, zc1 - zc0 - 0.5, k % 3 === 0 ? 'cableR' : k % 3 === 1 ? 'cable' : 'cableB', [off, 2.34, (zc0 + zc1) / 2], [Math.PI / 2, 0, 0], 5);
-    }
-  }
-  const lampsC = [];
-  for (let z = -7.6; z <= 4.8; z += 2.1) {
-    b.box(0.5, 0.03, 0.12, 'lampCool', [0, 2.52, z], null, 0.01);
-    b.box(0.56, 0.05, 0.18, 'frame', [0, 2.555, z], null, 0.01);
-    lampsC.push(new THREE.Vector3(0, 2.4, z));
-  }
-  // corridor handrails along both walls
-  for (const side of [-1, 1]) {
-    b.pipe([side * (CORRIDOR_X - 0.07), 1.05, -8.2], [side * (CORRIDOR_X - 0.07), 1.05, -5.2], 0.018, 'handrail', 8, false);
-    b.pipe([side * (CORRIDOR_X - 0.07), 1.05, 3.9], [side * (CORRIDOR_X - 0.07), 1.05, 5.4], 0.018, 'handrail', 8, false);
-  }
-  return { builder: b, lampsCorridor: lampsC };
+  // ---------- corridor vault, ribs, coves, padding; fillets in every room ----------
+  const corr = buildCorridor(b, { doors: DOORS, alcoves: ALCOVES });
+  buildRoomCoves(b, INSET);
+  return { builder: b, lampsCorridor: corr.lamps };
 }
 
 function partitionZ(b, z, doors, M) {
@@ -267,20 +260,4 @@ function crossWall(b, z, side) {
   g.translate(0, 0, z - 0.03);
   b.add(g, 'panel');
   b.colMesh(g);
-}
-
-function doorTrim(b, d) {
-  // rounded frame around the opening, both sides
-  const w = d.w + 0.06, h = d.h + 0.06;
-  const pts = [];
-  const r = 0.24;
-  const path = roundedRectPath(w, h, r, 0, 0);
-  const sp = path.getSpacedPoints(64);
-  for (const side of [-1, 1]) {
-    const pts3 = sp.map((p) => {
-      if (d.axis === 'z') return new THREE.Vector3(d.c + p.x, DECK_Y + d.h / 2 + p.y, d.at + side * 0.055);
-      return new THREE.Vector3(d.at + side * 0.06, DECK_Y + d.h / 2 + p.y, d.c + p.x);
-    });
-    b.tube(pts3, 0.028, d.hatch ? 'hullOrange' : 'frame', { closed: true, seg: 96, radial: 6 });
-  }
 }

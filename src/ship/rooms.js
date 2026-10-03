@@ -5,6 +5,7 @@ import { rng, roundedRectShape } from './geom.js';
 import { sectionPoint, sectionNormal, halfWidthAt, heightRangeAt, HULL, Z_COCKPIT_BULK, Z_ENG_BULK, Z_REACTOR_BULK, CORRIDOR_X, DECK_Y } from './hullShape.js';
 import { INSET, LIFT, ENG_HATCH } from './interior.js';
 import { bookRow, plantPot, hangingPlant, mug, boxStack, cargoBag, cableBundle, switchPanel, gauge, valveWheel, sticker, stringLights, toolWall, photoFrame, locker } from './props.js';
+import { hullCabinet, hullPadding } from './furniture.js';
 
 export function createLayout() {
   return { monitors: [], seats: [], interact: [], lamps: [], loose: [], controls: {}, anim: [], pipes: [], spots: {} };
@@ -176,8 +177,11 @@ export function buildCockpit(b, L) {
   boxStack(b, R, [1.8, 1.02, -8.9], 2);
   b.box(0.45, 0.08, 0.4, 'fabric', [-1.6, 0.55, -8.65], null, 0.03); // folded jump seat
   b.box(0.45, 0.55, 0.05, 'metalDark', [-1.6, 0.85, -8.47], null, 0.01);
-  L.lamps.push({ pos: V(0, 2.25, -10.2), color: 0xfff1dc, intensity: 2.0, room: 'cockpit' });
-  L.lamps.push({ pos: V(0, 0.3, -11.0), color: 0x7fb0ff, intensity: 0.5, room: 'cockpit' });
+  L.lamps.push({ pos: V(0, 2.25, -10.2), color: 0xfff1dc, intensity: 5.5, room: 'cockpit' });
+  L.lamps.push({ pos: V(0, 0.3, -11.0), color: 0x7fb0ff, intensity: 1.6, room: 'cockpit' });
+  L.lamps.push({ pos: V(0, 1.05, -11.05), color: 0x6fd0ff, intensity: 1.5, room: 'cockpit' });   // screen glow on the pilot
+  L.lamps.push({ pos: V(-1.5, 1.6, -9.6), color: 0xffd2a0, intensity: 1.4, room: 'cockpit' });
+  L.lamps.push({ pos: V(1.5, 1.6, -9.6), color: 0xcfe0ff, intensity: 1.4, room: 'cockpit' });
 }
 
 // ------------------------------------------------------------------ living room
@@ -265,8 +269,10 @@ export function buildLiving(b, L) {
   b.pop();
   // string lights along the ceiling arc
   const lamps = stringLights(b, [[-0.9, 2.42, -8.2], [-1.6, 2.32, -7.2], [-2.0, 2.2, -6.2], [-1.6, 2.32, -5.2], [-1.1, 2.4, -4.2], [-0.9, 2.38, -3.3]]);
-  L.lamps.push({ pos: V(-1.7, 2.1, -6.0), color: 0xffc98a, intensity: 1.8, room: 'living', string: lamps });
-  L.lamps.push({ pos: V(-2.0, 1.6, -3.4), color: 0xffe2b8, intensity: 1.0, room: 'living' });
+  L.lamps.push({ pos: V(-1.7, 2.1, -6.0), color: 0xffc98a, intensity: 4.5, room: 'living', string: lamps });
+  L.lamps.push({ pos: V(-2.0, 1.6, -3.4), color: 0xffe2b8, intensity: 3.0, room: 'living' });
+  L.lamps.push({ pos: V(-2.25, 1.15, -6.45), color: 0xffbf70, intensity: 2.0, room: 'living' });   // table lamp
+  L.lamps.push({ pos: V(-1.8, 1.85, -8.0), color: 0xffd9a8, intensity: 1.2, room: 'living' });     // bookshelf glow
   // cargo net with soft bags on the ceiling
   cargoBag(b, R, [-1.5, 2.25, -4.3], [0.4, 0.2, 0.35], 'fabricBlue');
   cargoBag(b, R, [-1.9, 2.15, -4.0], [0.35, 0.2, 0.3], 'fabric');
@@ -297,6 +303,8 @@ export function buildBath(b, L) {
   b.pipe([2.5, 0.3, -7.75], [2.6, 0.05, -7.6], 0.03, 'rubber');
   // sink + mirror on the hull side
   b.box(0.45, 0.08, 0.36, 'plasticW', [2.25, 0.85, -6.7], null, 0.03, 2, true);
+  b.box(0.4, 0.8, 0.32, 'plasticW', [2.29, 0.4, -6.7], null, 0.07, 4, true);          // pedestal (water feed inside)
+  b.box(0.3, 0.012, 0.012, 'steel', [2.085, 0.62, -6.7], [0, Math.PI / 2, 0], 0.004);  // drawer pull
   b.cyl(0.13, 0.11, 0.05, 'steel', [2.2, 0.875, -6.7], null, 16, true);
   b.box(0.04, 0.6, 0.45, 'mirror', [2.55, 1.35, -6.7], [0, 0, 0.18], 0.01);
   // shelves with toiletries
@@ -308,7 +316,9 @@ export function buildBath(b, L) {
   b.box(0.04, 0.45, 0.35, 'cushion', [0.86, 1.1, -5.15], null, 0.02, 2);
   plantPot(b, R, [2.35, 1.665, -7.25], 0.7);
   monitorSlot(L, 'bath', V(0.78, 1.45, -6.85), V(1, 0, 0), V(0, 1, 0), 0.3, 0.2, 'bath', 384);
-  L.lamps.push({ pos: V(1.7, 2.2, -6.5), color: 0xfff6ec, intensity: 1.6, room: 'bath' });
+  L.lamps.push({ pos: V(1.7, 2.2, -6.5), color: 0xf4f8ff, intensity: 4.5, room: 'bath' });
+  L.lamps.push({ pos: V(1.85, 1.95, -5.3), color: 0xd8f4ff, intensity: 1.5, room: 'bath' });
+  L.lamps.push({ pos: V(2.3, 1.72, -6.7), color: 0xffe0b8, intensity: 1.4, room: 'bath' });
   L.interact.push({ id: 'toilet', pos: V(2.25, 0.45, -7.85), r: 0.35, kind: 'toilet' });
   L.interact.push({ id: 'sink', pos: V(2.2, 0.9, -6.7), r: 0.3, kind: 'sink' });
 }
@@ -324,6 +334,7 @@ export function buildBunk(b, L) {
   b.box(0.75, 0.16, 1.8, 'fabricBlue', [(x0 + x1) / 2 + 0.05, 0.69, -1.0], null, 0.08, 3);
   b.box(0.55, 0.12, 0.35, 'cushion', [(x0 + x1) / 2 + 0.05, 0.69, -2.55], [0.1, 0, 0], 0.06, 3);
   for (const z of [-1.6, -0.4]) b.box(0.8, 0.02, 0.05, 'plasticY', [(x0 + x1) / 2 + 0.05, 0.78, z], null, 0.005);
+  hullPadding(b, { side: -1, z0: -2.85, z1: 0.22, yB: 0.72, yT: 1.42, cols: 3, rows: 1 });
   // personal shelf
   b.box(0.22, 0.025, 1.6, 'wood', [-2.62, 1.55, -1.3], [0, 0, 0.35], 0.005);
   bookRow(b, R, -2.6, 1.565, -2.0, 0.35, 1, 0.14, Math.PI / 2);
@@ -341,13 +352,15 @@ export function buildBunk(b, L) {
   b.pipe([-0.8, 1.85, -2.55], [-0.8, 1.85, -0.05], 0.01, 'steel');
   b.box(0.04, 1.6, 0.35, 'fabricRed', [-0.82, 1.04, -0.25], null, 0.02, 2);
   L.seats.push({ id: 'bunk', eye: V(-2.0, 0.92, -2.2), fwd: V(-0.6, 0.3, 0.75).normalize(), kind: 'bed', room: 'corridor', exit: V(-1.0, 0, -1.3) });
-  L.lamps.push({ pos: V(-2.2, 1.4, -2.3), color: 0xffd9a0, intensity: 0.9, room: 'corridor' });
+  L.lamps.push({ pos: V(-2.2, 1.4, -2.3), color: 0xffd9a0, intensity: 2.4, room: 'corridor' });
 }
 
 // ------------------------------------------------------------------ storage room (port, aft of bunk)
 export function buildStorage(b, L) {
   const R = rng(505);
-  for (let i = 0; i < 4; i++) locker(b, [-2.35, 0, 0.9 + i * 0.55], [0, Math.PI / 2, 0], 0.52, 1.75 - i * 0.05, 0.42, i === 1 ? 'plasticR' : 'panel');
+  hullCabinet(b, { side: -1, z0: 0.62, z1: 2.95, yB: 0, yT: 1.92, depth: 0.5, doors: 4, rows: 2, key: 'panel' });
+  sticker(b, [-2.27, 1.55, 1.2], [0, Math.PI / 2 - 0.12, 0], 0.12, 0.08);
+  sticker(b, [-2.27, 1.55, 2.35], [0, Math.PI / 2 - 0.12, 0], 0.12, 0.08);
   boxStack(b, R, [-1.4, 0, 4.9], 3);
   boxStack(b, R, [-1.9, 0, 4.9], 2);
   cargoBag(b, R, [-1.6, 2.15, 1.5], [0.5, 0.25, 0.4], 'fabricBlue');
@@ -362,7 +375,7 @@ export function buildStorage(b, L) {
   b.box(0.3, 0.06, 0.02, 'plasticW', [-0.75, 1.3, 4.6], [0, Math.PI / 2, 0], 0.005);
   L.interact.push({ id: 'repairkit', pos: V(-0.85, 1.25, 4.6), r: 0.4, kind: 'repairkit' });
   L.spots.repairKit = V(-0.85, 1.25, 4.6);
-  L.lamps.push({ pos: V(-1.6, 2.1, 2.8), color: 0xe8efff, intensity: 1.0, room: 'store' });
+  L.lamps.push({ pos: V(-1.6, 2.1, 2.8), color: 0xe8efff, intensity: 3.5, room: 'store' });
 }
 
 // ------------------------------------------------------------------ airlock (starboard)
@@ -371,7 +384,7 @@ export function buildAirlock(b, L) {
   // suit rack against the forward cross wall
   b.box(0.7, 0.06, 0.25, 'metalDark', [1.75, 1.85, -2.42], null, 0.01);
   b.pipe([1.75, 1.85, -2.45], [1.75, 2.2, -2.52], 0.02, 'metal');
-  L.spots.suit = V(1.75, 0.95, -2.2);
+  L.spots.suit = V(1.75, 0.95, -2.14);
   // bench
   b.box(0.95, 0.06, 0.4, 'panelDark', [1.7, 0.45, 0.32], null, 0.02, 2, true);
   b.box(0.06, 0.45, 0.35, 'metalDark', [1.3, 0.22, 0.32], null, 0.01);
@@ -385,7 +398,8 @@ export function buildAirlock(b, L) {
   for (const z of [-2.0, -0.2]) b.pipe([2.3, 1.0, z], [2.3, 1.6, z], 0.016, 'handrail');
   // status light
   b.sphere(0.04, 'lampRed', [1.6, 2.2, -1.05], 10);
-  L.lamps.push({ pos: V(1.6, 2.05, -1.0), color: 0xf2f6ff, intensity: 1.2, room: 'airlock' });
+  L.lamps.push({ pos: V(1.6, 2.05, -1.0), color: 0xf2f6ff, intensity: 4.5, room: 'airlock' });
+  L.lamps.push({ pos: V(2.3, 1.95, -1.05), color: 0xffa040, intensity: 1.2, room: 'airlock' });
   // tether reel
   b.cyl(0.1, 0.1, 0.08, 'plasticY', [2.4, 1.0, 0.45], [0, 0, Math.PI / 2], 16);
   // three low steps up to the outer hatch sill, and a sill plate bridging the hatch tunnel
@@ -401,7 +415,7 @@ export function buildAirlock(b, L) {
 export function buildLifeSupport(b, L) {
   const R = rng(707);
   // CO2 scrubber cabinet
-  b.box(0.6, 1.6, 0.9, 'panel', [2.15, 0.8, 1.5], null, 0.02, 2, true);
+  hullCabinet(b, { side: 1, z0: 1.02, z1: 1.98, yB: 0, yT: 1.75, depth: 0.95, doors: 1, rows: 1, key: 'panel' });
   for (let i = 0; i < 2; i++) {
     b.torus(0.15, 0.015, 'metalDark', [1.84, 1.2 - i * 0.5, 1.5], [0, Math.PI / 2, 0], 20);
   }
@@ -409,6 +423,8 @@ export function buildLifeSupport(b, L) {
   // O2 generator: glass column with bubbles (anim) + electrodes
   b.cyl(0.14, 0.14, 0.05, 'steel', [2.3, 0.3, 3.0], null, 20);
   b.cyl(0.14, 0.14, 0.05, 'steel', [2.3, 1.55, 3.0], null, 20);
+  b.cyl(0.11, 0.16, 0.28, 'metalDark', [2.3, 0.14, 3.0], null, 24);                    // pedestal (O2 feed inside)
+  b.torus(0.16, 0.012, 'steel', [2.3, 0.008, 3.0], [Math.PI / 2, 0, 0], 24);
   L.spots.o2col = V(2.3, 0.925, 3.0);
   b.pipe([2.3, 1.58, 3.0], [2.3, 2.1, 3.0], 0.025, 'pipeWhite');
   // water tank
@@ -416,12 +432,21 @@ export function buildLifeSupport(b, L) {
   b.sphere(0.3, 'steel', [2.1, 1.05, 4.6], 20, [1, 0.4, 1]);
   gauge(b, [1.78, 0.8, 4.6], [0, -Math.PI / 2, 0], 0.05);
   // ducts to the ceiling
-  b.tube([[1.4, 1.4, 1.5], [1.3, 1.9, 1.5], [1.1, 2.3, 2.0], [1.1, 2.35, 4.0]], 0.09, 'insul', { radial: 12 });
+  b.tube([[2.05, 1.7, 1.5], [1.75, 2.02, 1.6], [1.2, 2.3, 2.2], [1.1, 2.35, 4.0]], 0.09, 'insul', { radial: 12 });
+  b.torus(0.1, 0.018, 'steel', [2.03, 1.72, 1.5], [Math.PI / 2 + 0.6, 0, 0], 16);
   valveWheel(b, [1.6, 1.0, 3.9], [0, Math.PI / 2, 0], 0.07, 'pipeBlue');
   valveWheel(b, [1.6, 1.2, 2.3], [0, Math.PI / 2, 0], 0.06, 'pipeRed');
-  for (let i = 0; i < 4; i++) b.pipe([2.6 - i * 0.12, 0.05, 2.6 + i * 0.05], [2.6 - i * 0.12, 2.0, 2.6 + i * 0.05], 0.02 + (i % 2) * 0.01, ['pipeBlue', 'pipeWhite', 'pipeGreen', 'pipeRed'][i]);
+  for (let i = 0; i < 4; i++) {
+    const x = 2.6 - i * 0.12, z = 2.6 + i * 0.05, r = 0.02 + (i % 2) * 0.01;
+    b.pipe([x, -0.05, z], [x, 2.0, z], r, ['pipeBlue', 'pipeWhite', 'pipeGreen', 'pipeRed'][i]);
+    b.cyl(r * 2.3, r * 2.6, 0.025, 'steel', [x, 0.012, z], null, 14);                     // deck penetration collar
+    b.torus(r * 1.6, r * 0.45, 'steel', [x, 0.05, z], [Math.PI / 2, 0, 0], 14);
+    b.cyl(r * 1.5, r * 1.5, 0.04, 'steel', [x, 1.0, z], null, 12);                         // clamp
+  }
+  b.box(0.06, 0.03, 0.4, 'metalDark', [2.42, 1.0, 2.68], [0, 0.4, 0], 0.008);
   sticker(b, [1.84, 1.55, 1.5], [0, -Math.PI / 2, 0], 0.12, 0.08);
-  L.lamps.push({ pos: V(1.6, 2.15, 3.0), color: 0xe9f2ff, intensity: 1.2, room: 'ls' });
+  L.lamps.push({ pos: V(1.6, 2.15, 3.0), color: 0xe9f2ff, intensity: 4.0, room: 'ls' });
+  L.lamps.push({ pos: V(2.05, 1.0, 3.0), color: 0x7dffb0, intensity: 1.2, room: 'ls' });
 }
 
 // ------------------------------------------------------------------ engineering
@@ -437,10 +462,9 @@ export function buildEngineering(b, L) {
   }
   L.spots.servers = [V(-1.23, 0.95, 6.15), V(-1.23, 0.95, 6.81)];
   // power distribution panel (starboard)
-  b.box(0.35, 1.7, 1.6, 'panel', [1.7, 0.95, 6.9], null, 0.02, 2, true);
-  for (let i = 0; i < 3; i++) switchPanel(b, R, [1.52, 0.7 + i * 0.4, 6.9], [0, -Math.PI / 2, 0], 8, 3, 0.05);
-  gauge(b, [1.52, 1.55, 6.4], [0, -Math.PI / 2, 0], 0.06);
-  gauge(b, [1.52, 1.55, 7.4], [0, -Math.PI / 2, 0], 0.06);
+  const pwr = hullCabinet(b, { side: 1, z0: 6.1, z1: 7.7, yB: 0, yT: 1.8, depth: 0.82, doors: 0, rows: 1, key: 'panel' });
+  for (let i = 0; i < 3; i++) { const p = pwr.frontAt(6.9, 0.7 + i * 0.4); switchPanel(b, R, [p.x - 0.012, p.y, p.z], [0, -Math.PI / 2, 0], 8, 3, 0.05); }
+  for (const z of [6.4, 7.4]) { const p = pwr.frontAt(z, 1.55); gauge(b, [p.x - 0.015, p.y, p.z], [0, -Math.PI / 2, 0], 0.06); }
   // reactor control console facing the aft viewport
   b.box(1.0, 0.85, 0.45, 'panel', [0.25, 0.42, 8.9], null, 0.03, 2, true);
   b.box(1.05, 0.05, 0.5, 'panelDark', [0.25, 0.87, 8.88], [-0.25, 0, 0], 0.01);
@@ -451,13 +475,15 @@ export function buildEngineering(b, L) {
   const hx = (ENG_HATCH.x0 + ENG_HATCH.x1) / 2, hz = (ENG_HATCH.z0 + ENG_HATCH.z1) / 2;
   b.box(ENG_HATCH.x1 - ENG_HATCH.x0 + 0.08, 0.03, 0.04, 'plasticY', [hx, 0.0, ENG_HATCH.z0 - 0.02], null, 0.005);
   b.box(ENG_HATCH.x1 - ENG_HATCH.x0 + 0.08, 0.03, 0.04, 'plasticY', [hx, 0.0, ENG_HATCH.z1 + 0.02], null, 0.005);
-  for (const x of [hx - 0.22, hx + 0.22]) b.pipe([x, -1.5, ENG_HATCH.z1 - 0.06], [x, 0.9, ENG_HATCH.z1 - 0.06], 0.018, 'handrail');
-  for (let k = 0; k < 7; k++) b.pipe([hx - 0.22, -1.35 + k * 0.32, ENG_HATCH.z1 - 0.06], [hx + 0.22, -1.35 + k * 0.32, ENG_HATCH.z1 - 0.06], 0.014, 'handrail');
+  for (const x of [hx - 0.22, hx + 0.22]) b.pipe([x, -1.5, ENG_HATCH.z1 - 0.06], [x, -0.07, ENG_HATCH.z1 - 0.06], 0.018, 'handrail');
+  for (let k = 0; k < 5; k++) b.pipe([hx - 0.22, -1.35 + k * 0.29, ENG_HATCH.z1 - 0.06], [hx + 0.22, -1.35 + k * 0.29, ENG_HATCH.z1 - 0.06], 0.014, 'handrail');
   L.interact.push({ id: 'ladder', pos: V(hx, -0.2, hz), r: 0.5, kind: 'ladder' });
   // cable bundles from racks into the floor
   cableBundle(b, [[-1.3, 1.9, 6.4], [-1.0, 2.2, 6.6], [-0.4, 2.3, 7.0], [0.6, 2.2, 7.4], [1.4, 1.8, 7.0]], 5);
-  L.lamps.push({ pos: V(0, 2.1, 7.4), color: 0xe8f0ff, intensity: 1.6, room: 'eng' });
-  L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 0.8, room: 'eng' });
+  L.lamps.push({ pos: V(0, 2.1, 7.4), color: 0xe8f0ff, intensity: 4.5, room: 'eng' });
+  L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 2.5, room: 'eng' });
+  L.lamps.push({ pos: V(-1.05, 1.2, 6.5), color: 0x60ffd0, intensity: 1.0, room: 'eng' });   // server LEDs
+  L.lamps.push({ pos: V(1.3, 1.9, 6.9), color: 0xffb060, intensity: 1.2, room: 'eng' });
 }
 
 export function buildAllRooms(b, L) {

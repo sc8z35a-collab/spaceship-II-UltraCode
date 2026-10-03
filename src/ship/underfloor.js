@@ -57,9 +57,9 @@ export function buildUnderfloor(b, L) {
   // risers through the deck (to galley, bath, LS, cockpit)
   const risers = [
     { sys: 'water', pts: [V(-0.78, -0.32, -3.3), V(-1.6, -0.2, -3.3), V(-1.6, DECK_Y + 0.4, -3.3)] },
-    { sys: 'water', pts: [V(-0.78, -0.32, -6.7), V(1.6, -0.25, -6.7), V(2.1, DECK_Y + 0.5, -6.7)] },
-    { sys: 'o2', pts: [V(-1.35, -0.72, 3.2), V(1.9, -0.3, 3.2), V(2.3, DECK_Y + 0.3, 3.0)] },
-    { sys: 'coolant', pts: [V(1.1, -0.55, -9.0), V(0.6, -0.3, -9.6), V(0.4, DECK_Y + 0.2, -10.4)] },
+    { sys: 'water', pts: [V(-0.78, -0.32, -6.7), V(1.6, -0.25, -6.7), V(2.2, -0.15, -6.7), V(2.25, DECK_Y + 0.35, -6.7)] },
+    { sys: 'o2', pts: [V(-1.35, -0.72, 3.2), V(1.9, -0.3, 3.2), V(2.3, -0.12, 3.0), V(2.3, DECK_Y + 0.22, 3.0)] },
+    { sys: 'coolant', pts: [V(1.1, -0.55, -9.0), V(0.75, -0.32, -9.7), V(0.45, -0.3, -10.6), V(0.2, -0.3, -11.2)] },
     { sys: 'air', pts: [V(0.75, -0.36, -6.5), V(0.4, -0.2, -6.5)] },
   ];
   const segs = [];
@@ -143,7 +143,7 @@ export function buildUnderfloor(b, L) {
     const p = V(0, -0.24, z);
     b.cyl(0.05, 0.05, 0.06, 'lampWarm', p.toArray(), null, 10);
     b.torus(0.055, 0.006, 'metalDark', [p.x, p.y - 0.01, p.z], [Math.PI / 2, 0, 0], 12);
-    L.lamps.push({ pos: p.clone().add(V(0, -0.1, 0)), color: 0xffb36b, intensity: 0.9, room: 'under' });
+    L.lamps.push({ pos: p.clone().add(V(0, -0.1, 0)), color: 0xffb36b, intensity: 2.6, room: 'under' });
   }
   // junction boxes & labels
   for (let z = -7; z < 8; z += 3.1) {

@@ -515,35 +515,89 @@ export class Machines {
     const g = this.g, M = this.M;
     const p = g.layout.spots.suit;
     if (!p) return;
+    // EVA suit hanging on its rack (local front = -z): hard upper torso, bearings at every joint,
+    // bellows knees, gloves, boots, life-support backpack with umbilicals, helmet with gold visor
     const suit = new THREE.Group();
-    const white = M.plasticW;
-    const torso = new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.6, 0.32, 3, 0.1), white);
-    torso.position.y = 0.55;
-    const pack = new THREE.Mesh(new RoundedBoxGeometry(0.46, 0.62, 0.22, 3, 0.05), M.panel);
-    pack.position.set(0, 0.56, 0.26);
-    const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.17, 24, 16), white);
-    helmet.position.y = 1.0;
-    const visor = new THREE.Mesh(new THREE.SphereGeometry(0.155, 24, 16, Math.PI * 0.75, Math.PI * 0.5, Math.PI * 0.25, Math.PI * 0.45), new THREE.MeshStandardMaterial({ color: 0xc8a050, metalness: 1, roughness: 0.08 }));
-    visor.position.set(0, 1.0, -0.03);
-    visor.rotation.y = Math.PI;
-    const legs = [];
-    for (const s of [-1, 1]) {
-      const arm = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.45, 4, 10), white); arm.position.set(s * 0.3, 0.45, 0); arm.rotation.z = s * 0.15;
-      const glove = new THREE.Mesh(new THREE.SphereGeometry(0.06, 10, 8), M.plasticK); glove.position.set(s * 0.34, 0.17, 0);
-      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(0.08, 0.55, 4, 10), white); leg.position.set(s * 0.12, -0.15, 0);
-      const boot = new THREE.Mesh(new RoundedBoxGeometry(0.13, 0.1, 0.24, 2, 0.03), M.plasticK); boot.position.set(s * 0.12, -0.52, -0.03);
-      suit.add(arm, glove, leg, boot);
-      legs.push(leg);
+    const cloth = M.suit || M.plasticW, hard = M.plasticW, dark = M.plasticK, metal = M.steel;
+    const add = (geo, mat, pos, rot, scl) => { const m = new THREE.Mesh(geo, mat); if (pos) m.position.set(...pos); if (rot) m.rotation.set(...rot); if (scl) m.scale.set(...scl); suit.add(m); return m; };
+    const limb = (a, b, r, mat) => {
+      const A = V(...a), B = V(...b), d = B.clone().sub(A), len = d.length();
+      const m = new THREE.Mesh(new THREE.CapsuleGeometry(r, Math.max(0.001, len - 2 * r * 0.4), 6, 14), mat);
+      m.position.copy(A).lerp(B, 0.5);
+      m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+      suit.add(m);
+      return m;
+    };
+    const ring = (pos, axis, R, r, mat = metal) => {
+      const m = new THREE.Mesh(new THREE.TorusGeometry(R, r, 8, 24), mat);
+      m.position.set(...pos);
+      m.quaternion.setFromUnitVectors(V(0, 0, 1), V(...axis).normalize());
+      suit.add(m);
+      return m;
+    };
+    // torso + hips
+    add(new THREE.CapsuleGeometry(0.2, 0.24, 8, 20), hard, [0, 0.38, 0], null, [1.22, 1, 0.86]);
+    add(new THREE.CapsuleGeometry(0.17, 0.08, 6, 18), cloth, [0, 0.04, 0], null, [1.12, 1, 0.9]);
+    ring([0, 0.15, 0], [0, 1, 0], 0.19, 0.018);                       // waist bearing
+    // chest control module with knobs and a little lit display
+    add(new RoundedBoxGeometry(0.26, 0.13, 0.08, 3, 0.02), M.panel, [0, 0.42, -0.2]);
+    add(new THREE.BoxGeometry(0.07, 0.035, 0.005), M.ledGreen, [-0.06, 0.45, -0.243]);
+    for (const [x, key] of [[0.05, 'plasticR'], [0.09, 'plasticY'], [0.02, 'plasticK']]) add(new THREE.CylinderGeometry(0.013, 0.013, 0.02, 12), M[key], [x, 0.4, -0.245], [Math.PI / 2, 0, 0]);
+    // umbilicals from the backpack to the chest module
+    for (const [s2, key] of [[-1, 'pipeBlue'], [1, 'pipeRed']]) {
+      const pts = [V(s2 * 0.2, 0.55, 0.2), V(s2 * 0.27, 0.48, 0.0), V(s2 * 0.2, 0.38, -0.18), V(s2 * 0.1, 0.4, -0.22)];
+      add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 20, 0.014, 8), M[key]);
     }
-    const flag = new THREE.Mesh(new THREE.PlaneGeometry(0.08, 0.05), M.decal);
-    flag.position.set(-0.24, 0.72, 0); flag.rotation.y = -Math.PI / 2;
-    const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.47, 0.04, 0.33), M.plasticR); stripe.position.y = 0.32;
-    suit.add(torso, pack, helmet, visor, stripe);
+    // neck ring + helmet: white shell, clear bubble, gold sun visor, lights
+    ring([0, 0.64, 0], [0, 1, 0], 0.125, 0.024);
+    add(new THREE.SphereGeometry(0.16, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.62), hard, [0, 0.8, 0.02]);
+    const visorMat = new THREE.MeshStandardMaterial({ color: 0xd0a648, metalness: 1, roughness: 0.06 });
+    add(new THREE.SphereGeometry(0.152, 28, 18, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.22, Math.PI * 0.5), visorMat, [0, 0.8, -0.005]);
+    add(new THREE.TorusGeometry(0.155, 0.012, 8, 32, Math.PI * 0.9), hard, [0, 0.8, -0.005], [0, 0, -0.05]).rotation.set(Math.PI / 2 - 0.25, 0, 0);
+    for (const s2 of [-1, 1]) {
+      add(new THREE.CylinderGeometry(0.022, 0.026, 0.07, 12), dark, [s2 * 0.15, 0.86, -0.04], [Math.PI / 2, 0, 0]);
+      add(new THREE.CircleGeometry(0.018, 12), M.lampCool, [s2 * 0.15, 0.86, -0.076], [0, Math.PI, 0]);
+    }
+    // arms: shoulder / elbow / wrist bearings, gloves with a thumb
+    for (const s2 of [-1, 1]) {
+      const sh = [s2 * 0.29, 0.54, 0], el = [s2 * 0.34, 0.25, -0.03], wr = [s2 * 0.33, 0.0, -0.06];
+      ring(sh, [1, -0.2, 0], 0.085, 0.016);
+      limb(sh, el, 0.07, cloth);
+      ring(el, [0.1, 1, 0.1], 0.066, 0.012);
+      limb(el, wr, 0.062, cloth);
+      ring(wr, [0, 1, 0.2], 0.058, 0.016);
+      add(new RoundedBoxGeometry(0.065, 0.12, 0.09, 3, 0.025), dark, [s2 * 0.33, -0.08, -0.07]);
+      limb([s2 * 0.3, -0.06, -0.1], [s2 * 0.29, -0.11, -0.12], 0.016, dark);
+      add(new THREE.CylinderGeometry(0.064, 0.06, 0.05, 14), M.plasticR, [s2 * 0.335, 0.11, -0.045]).rotation.set(0.1, 0, 0);   // cuff checklist band
+    }
+    // legs: hip bearing, bellows knee, boots with treads
+    for (const s2 of [-1, 1]) {
+      const hp = [s2 * 0.11, -0.04, 0], kn = [s2 * 0.12, -0.42, -0.02], an = [s2 * 0.12, -0.76, 0.0];
+      ring(hp, [0, 1, 0], 0.09, 0.016);
+      limb(hp, kn, 0.088, cloth);
+      for (let k = -1; k <= 1; k++) ring([kn[0], kn[1] + k * 0.028, kn[2]], [0, 1, 0.05], 0.084, 0.012, cloth);
+      limb(kn, an, 0.078, cloth);
+      add(new THREE.CylinderGeometry(0.081, 0.081, 0.03, 16), M.plasticR, [s2 * 0.12, -0.3, -0.01]);   // commander stripe
+      add(new RoundedBoxGeometry(0.13, 0.12, 0.27, 3, 0.04), hard, [s2 * 0.12, -0.83, -0.04]);
+      add(new RoundedBoxGeometry(0.14, 0.03, 0.28, 2, 0.01), dark, [s2 * 0.12, -0.9, -0.04]);
+    }
+    // life-support backpack: vents, antenna, oxygen bottles
+    add(new RoundedBoxGeometry(0.46, 0.62, 0.22, 4, 0.06), hard, [0, 0.4, 0.29]);
+    for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(0.3, 0.012, 0.01), dark, [0, 0.2 + k * 0.035, 0.405]);
+    for (const s2 of [-1, 1]) add(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 14), metal, [s2 * 0.19, 0.42, 0.37]);
+    add(new THREE.CylinderGeometry(0.006, 0.004, 0.28, 6), metal, [0.16, 0.85, 0.32]);
+    add(new THREE.SphereGeometry(0.012, 8, 6), M.ledRed, [0.16, 0.99, 0.32]);
+    // patch + name tag
+    add(new THREE.PlaneGeometry(0.09, 0.06), M.decal, [0.255, 0.44, -0.05], [0, Math.PI / 2 + 0.25, 0]);
+    add(new THREE.PlaneGeometry(0.11, 0.035), M.labels, [-0.11, 0.53, -0.215], [0, Math.PI, 0]);
+    // hanger through the shoulders up to the rack
+    add(new THREE.CylinderGeometry(0.012, 0.012, 0.66, 8), metal, [0, 0.6, 0.1], [0, 0, Math.PI / 2]);
+    add(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 8), metal, [0, 0.76, 0.12]);
     suit.position.copy(p);
     suit.rotation.y = Math.PI;
     this.root.add(suit);
     this.suitModel = suit;
-    g.interact.addSphere(p.clone().add(V(0, 0.5, 0)), 0.45, () => g.systems.suitTapped(), { maxDist: 2.2 });
+    g.interact.addSphere(p.clone().add(V(0, 0.3, 0)), 0.5, () => g.systems.suitTapped(), { maxDist: 2.2 });
   }
 
   // ------------------------------------------------------------------ engineering floor hatch
@@ -559,7 +613,25 @@ export class Machines {
     hinge.add(plate, handle);
     this.root.add(hinge);
     const col = g.phys.addKinematicBox(w / 2, 0.02, d / 2, V(ENG_HATCH.x0 + w / 2, DECK_Y - 0.02, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2));
-    this.engHatch = { hinge, open: 0, target: 0, col, w, d };
+    // telescoping grab rails: hidden below the deck, they slide up through two sleeves when the
+    // hatch is open so there is something to hold on to while climbing in or out
+    const rails = new THREE.Group();
+    const hx = (ENG_HATCH.x0 + ENG_HATCH.x1) / 2, rz = ENG_HATCH.z1 - 0.06;
+    for (const x of [hx - 0.22, hx + 0.22]) {
+      const r = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.95, 10), M.handrail);
+      r.position.set(x, -0.5, rz);
+      const cap = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), M.handrail);
+      cap.position.set(x, -0.02, rz);
+      rails.add(r, cap);
+      const sleeve = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.03, 0.03, 12), M.steel);
+      sleeve.position.set(x, -0.03, rz);
+      this.root.add(sleeve);
+    }
+    const bar = new THREE.Mesh(new THREE.CylinderGeometry(0.013, 0.013, 0.44, 8), M.handrail);
+    bar.rotation.z = Math.PI / 2; bar.position.set(hx, -0.35, rz);
+    rails.add(bar);
+    this.root.add(rails);
+    this.engHatch = { hinge, open: 0, target: 0, col, w, d, rails };
     g.engHatch = this.engHatch;
     g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0.05, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; g.audio.click(V(-1.3, 0, 7.7)); }, { maxDist: 2.2 });
     g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, -0.4, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; }, { maxDist: 2.2 });
@@ -616,6 +688,10 @@ export class Machines {
       h.col.body.setNextKinematicTranslation({ x: p.x, y: p.y, z: p.z });
       h.col.body.setNextKinematicRotation(new THREE.Quaternion().setFromEuler(h.hinge.rotation));
       h.col.col.setEnabled(h.open < 0.35);
+      // grab rails follow once the lid is out of the way (and retract before it closes)
+      const ext = Math.max(0, Math.min(1, (h.open - 0.55) / 0.4));
+      h.railY = (h.railY ?? 0) + (ext * 0.92 - (h.railY ?? 0)) * Math.min(1, dt * 3);
+      h.rails.position.y = h.railY;
     }
     // suit model visible only when not worn
     if (this.suitModel) this.suitModel.visible = !g.player.suit;

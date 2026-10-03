@@ -66,8 +66,10 @@ export class Builder {
     return g;
   }
 
-  /** rounded box centred at pos */
+  /** rounded box centred at pos (with autoRound, chunky boxes get soft, well-rounded edges) */
   box(w, h, d, key, pos = [0, 0, 0], rot, r = 0.02, seg = 2, col = false) {
+    const m = Math.min(w, h, d);
+    if (this.autoRound && m > 0.12) { r = Math.max(r, Math.min(0.075, m * 0.17)); seg = Math.max(seg, 3); }
     const geo = r > 0.0005 ? new RoundedBoxGeometry(w, h, d, seg, Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)) : new THREE.BoxGeometry(w, h, d);
     this.add(geo, key, pos, rot);
     if (col) this.colBox(w, h, d, pos, rot);

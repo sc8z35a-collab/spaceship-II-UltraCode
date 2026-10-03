@@ -108,6 +108,50 @@ vec2 panelAt(vec2 pg, float size){
   float seam = smoothstep(0.012, 0.0, min(0.5 - f.x, 0.5 - f.y) * size);
   return vec2(seam, hash12(floor(cell + off)));
 }
+// inner pressure-hull half width at (z, y) - mirrors hullShape.js (inset 0.22)
+float hullHalfWidth(float z, float y){
+  float a = 3.05, b = 2.55, c = 0.4, n = 2.8;
+  if (z < -9.0){
+    float u = min(1.0, (-9.0 - z) / 4.4);
+    float k = sqrt(max(1e-4, 1.0 - u * u));
+    a = 3.05 * pow(k, 0.92); b = 2.55 * pow(k, 0.98); c = 0.4 + 0.42 * u * u; n = 2.8 - 0.75 * u;
+  } else if (z > 4.6){
+    float u = min(1.0, (z - 4.6) / 6.1);
+    float s = u * u * (3.0 - 2.0 * u);
+    a = 3.05 - 1.32 * s; b = 2.55 - 0.82 * s; n = 2.8 - 0.55 * s;
+  }
+  a = max(0.001, a - 0.22); b = max(0.001, b - 0.22);
+  float v = abs((y - c) / b);
+  if (v >= 1.0) return 0.0;
+  return a * pow(max(1e-5, 1.0 - pow(v, n)), 1.0 / n);
+}
+// analytic ambient occlusion for the cabin: contact darkening where things meet the decks,
+// soft corners where the deck meets the hull, the corridor walls and the bulkheads
+float shipAO(vec3 p, vec3 n){
+  if (p.z < -12.2 || p.z > 9.7) return 1.0;
+  float W = hullHalfWidth(p.z, clamp(p.y, -1.9, 2.6));
+  if (abs(p.x) > W + 0.03) return 1.0;                       // outside the pressure hull
+  float ao = 1.0;
+  float up = max(n.y, 0.0);
+  // surfaces standing on the main deck / the underfloor walkway
+  float yd = p.y;
+  if (yd > -0.03 && yd < 0.7) ao *= 1.0 - 0.42 * exp(-max(yd, 0.0) / 0.13) * (1.0 - up);
+  float yw = p.y + 1.55;
+  if (abs(p.x) < 0.75 && yw > -0.03 && yw < 0.6) ao *= 1.0 - 0.35 * exp(-max(yw, 0.0) / 0.12) * (1.0 - up);
+  // floors near walls
+  if (n.y > 0.5 && abs(p.y) < 0.08) {
+    float d = W - abs(p.x);
+    if (p.z > -8.4 && p.z < 5.6) d = min(d, abs(abs(p.x) - 0.7) - 0.045);
+    float dz = min(abs(p.z + 8.4), min(abs(p.z - 5.6), abs(p.z - 9.6))) - 0.05;
+    if (p.x < -0.7) dz = min(dz, min(abs(p.z + 3.0), abs(p.z - 0.4)) - 0.03);
+    if (p.x > 0.7) dz = min(dz, min(abs(p.z + 4.6), min(abs(p.z + 2.6), abs(p.z - 0.6))) - 0.03);
+    d = min(d, dz);
+    ao *= 1.0 - 0.4 * exp(-max(d, 0.0) / 0.2) * n.y;
+  }
+  // upper corners: the vault / ceiling coves get a soft falloff toward the hull top
+  if (n.y < -0.3) ao *= 1.0 - 0.18 * smoothstep(1.9, 2.7, p.y) * (-n.y);
+  return ao;
+}
 float scorchAt(vec3 p){
   float s = 0.0;
   for (int i = 0; i < 8; i++){
@@ -170,7 +214,7 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0 }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true }, opts);
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
@@ -257,6 +301,15 @@ export function patchShipMaterial(mat, opts = {}) {
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
         }`)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        ${o.ao ? `
+        {
+          float _ao = shipAO(vShipPos, normalize(vShipNrm));
+          reflectedLight.indirectDiffuse *= _ao;
+          reflectedLight.indirectSpecular *= mix(1.0, _ao, 0.75);
+          reflectedLight.directDiffuse *= mix(1.0, _ao, 0.6);
+          reflectedLight.directSpecular *= mix(1.0, _ao, 0.45);
+        }` : ''}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         ${o.heat ? `
         {
@@ -291,9 +344,9 @@ function canvasTex(size, draw, repeat = 1, srgb = true) {
 export function createMaterials() {
   const M = {};
   // ---- exterior ----
-  M.hull = patchShipMaterial(std(0xd9dbd7, 0.55, 0.15), { dentable: true, openings: true, wear: 0.8, panels: 1.25, grime: 0.55, heat: true });
-  M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true });
-  M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true });
+  M.hull = patchShipMaterial(std(0xd9dbd7, 0.55, 0.15), { dentable: true, openings: true, wear: 0.8, panels: 1.25, grime: 0.55, heat: true, ao: false });
+  M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true, ao: false });
+  M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true, ao: false });
   M.metal = patchShipMaterial(std(0xa8adb3, 0.32, 0.9), { wear: 0.6, grime: 0.3 });
   M.metalDark = patchShipMaterial(std(0x3a3d42, 0.45, 0.8), { wear: 0.5, grime: 0.3 });
   M.gold = patchShipMaterial(std(0xc8a24a, 0.28, 1.0), { wear: 0.8, grime: 0.15, heat: true });
@@ -314,6 +367,7 @@ export function createMaterials() {
   M.fabricBlue = patchShipMaterial(std(0x3e4d63, 0.95, 0.0), { wear: 0.4, grime: 0.2, triScale: 3.0 });
   M.fabricRed = patchShipMaterial(std(0x7a3a34, 0.95, 0.0), { wear: 0.4, grime: 0.2, triScale: 3.0 });
   M.cushion = patchShipMaterial(std(0x8b7d6b, 0.92, 0.0), { wear: 0.3, grime: 0.15 });
+  M.suit = patchShipMaterial(std(0xe8eae4, 0.86, 0.0), { wear: 0.35, grime: 0.22, triScale: 3.0 });   // EVA suit outer layer
   M.wood = patchShipMaterial(std(0x8a5a33, 0.6, 0.0, { map: woodTexture() }), { wear: 0.4, grime: 0.15 });
   M.plasticW = patchShipMaterial(std(0xe9e7e1, 0.45, 0.0), { wear: 0.4, grime: 0.25 });
   M.plasticK = patchShipMaterial(std(0x222428, 0.5, 0.0), { wear: 0.3, grime: 0.1 });
@@ -353,6 +407,10 @@ export function createMaterials() {
   M.ledAmber = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.6, 0.1), emissiveIntensity: 4.0 });
   M.ledBlue = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.25, 0.55, 1.0), emissiveIntensity: 4.0 });
   M.ledRed = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.1, 0.06), emissiveIntensity: 4.0 });
+  // architectural LED lines (cove lights, door frames) - bright enough to bloom
+  M.ledStrip = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.72, 0.88, 1.0), emissiveIntensity: 7.0 });
+  M.ledStripWarm = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.7, 0.42), emissiveIntensity: 6.0 });
+  M.ledCyan = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.2, 0.85, 1.0), emissiveIntensity: 6.0 });
   M.cherenkov = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.25, 0.55, 1.0), emissiveIntensity: 9.0 });
   M.navRed = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1, 0.05, 0.02), emissiveIntensity: 0 });
   M.navGreen = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.05, 1, 0.2), emissiveIntensity: 0 });

@@ -215,7 +215,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   }
   col += inputColor.rgb - base; // keep bloom from earlier effects
   float avg = texture2D(tLum, vec2(0.5)).r;
-  float exposure = uExposureBias * 0.34 / clamp(avg, 0.08, 3.0);
+  float exposure = uExposureBias * 0.34 / clamp(avg, 0.05, 3.0);
   col *= exposure;
   col += vec3(1.0, 0.97, 0.9) * uFlash * 2.5;
   col = agxDefault(col);
