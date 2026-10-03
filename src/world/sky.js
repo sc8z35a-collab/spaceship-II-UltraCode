@@ -21,9 +21,12 @@ function bvToRgb(bv) {
 }
 
 export async function createStars() {
-  const res = await fetch(assetUrl('sky/stars.bin'));
-  const buf = await res.arrayBuffer();
-  const f = new Float32Array(buf);
+  // catalogue: little-endian float32 x 5 per star (x, y, z, mag, B-V), base64 in JSON
+  const res = await fetch(assetUrl('sky/stars.json'));
+  const bin = atob((await res.json()).data);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  const f = new Float32Array(bytes.buffer);
   const n = f.length / 5;
   const pos = new Float32Array(n * 3);
   const col = new Float32Array(n * 3);

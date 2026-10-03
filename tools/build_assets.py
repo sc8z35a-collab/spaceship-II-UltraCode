@@ -21,7 +21,7 @@ Sources (download into RAW_DIR first, see README.md):
 
 Usage: python3 tools/build_assets.py RAW_DIR public/assets
 """
-import sys, os, struct, csv, math
+import sys, os, struct, csv, math, json, base64
 import numpy as np
 from PIL import Image, ImageFilter
 
@@ -158,9 +158,10 @@ def build_stars():
             rows.append((x, y, z, mag, ci))
     rows.sort(key=lambda t: t[3])
     print('  stars kept', len(rows))
-    with open(out('sky', 'stars.bin'), 'wb') as f:
-        for t in rows:
-            f.write(struct.pack('<5f', *t))
+    # little-endian float32 x 5 per star, base64 inside JSON (a type every static host serves)
+    raw = b''.join(struct.pack('<5f', *t) for t in rows)
+    with open(out('sky', 'stars.json'), 'w') as f:
+        json.dump({'format': 'float32le x5 (x, y, z, mag, bv)', 'count': len(rows), 'data': base64.b64encode(raw).decode('ascii')}, f, separators=(',', ':'))
 
 
 if __name__ == '__main__':
