@@ -439,7 +439,7 @@ export class Machines {
     for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.05, 1.06, 0.05), M.steel, [Math.cos(k / 6 * Math.PI * 2) * 0.27, 0.9, zc + Math.sin(k / 6 * Math.PI * 2) * 0.27]);
     for (const y of [0.42, 0.66, 0.9, 1.14, 1.38]) add(new THREE.TorusGeometry(0.3, 0.02, 8, 40), M.metal, [0, y, zc], [Math.PI / 2, 0, 0]);
     // soft glow around the core (additive halo)
-    const halo = add(new THREE.SphereGeometry(0.62, 24, 16), new THREE.MeshBasicMaterial({ color: 0x2a6cff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }), [0, 0.9, zc]);
+    const halo = add(new THREE.SphereGeometry(0.62, 24, 16), new THREE.MeshBasicMaterial({ color: 0x1a4cc0, transparent: true, opacity: 0.1, blending: THREE.AdditiveBlending, depthWrite: false }), [0, 0.9, zc]);
     halo.scale.set(1, 1.35, 1);
     // control rod drives on the head: housings + moving rods
     const rods = [];
@@ -701,11 +701,11 @@ export class Machines {
     if (this.reactor) {
       const r = this.reactor;
       const t = performance.now() / 1000;
-      r.glowMat.emissiveIntensity = 6 + 3 * power + Math.sin(t * 7) * 0.4;
+      r.glowMat.emissiveIntensity = 2.6 + 1.6 * power + Math.sin(t * 7) * 0.2;
       r.turb.rotation.x += dt * 40 * power;
       r.rods.forEach((rod, i) => { rod.position.y = 1.62 + (1 - power) * 0.22 + Math.sin(t * 0.2 + i) * 0.005; });
       r.light.intensity = 1.4 + 1.6 * power;
-      if (r.halo) r.halo.material.opacity = 0.1 + 0.08 * power + Math.sin(t * 7) * 0.01;
+      if (r.halo) r.halo.material.opacity = 0.05 + 0.05 * power + Math.sin(t * 7) * 0.006;
     }
     // fans
     const fanOn = g.lifeSupport.fans.on && g.lifeSupport.fans.health > 0.2 && power > 0.2;

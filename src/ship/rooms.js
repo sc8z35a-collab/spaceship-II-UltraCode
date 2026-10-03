@@ -7,6 +7,7 @@ import { INSET, LIFT, ENG_HATCH } from './interior.js';
 import { bookRow, plantPot, hangingPlant, mug, boxStack, cargoBag, cableBundle, switchPanel, gauge, valveWheel, sticker, stringLights, toolWall, photoFrame, locker } from './props.js';
 import { hullCabinet, hullPadding } from './furniture.js';
 import { roundPolygon } from './sweep.js';
+import { buildExtras } from './extras.js';
 
 export function createLayout() {
   return { monitors: [], seats: [], interact: [], lamps: [], loose: [], controls: {}, anim: [], pipes: [], spots: {} };
@@ -499,8 +500,9 @@ export function buildEngineering(b, L) {
   L.interact.push({ id: 'ladder', pos: V(hx, -0.2, hz), r: 0.5, kind: 'ladder' });
   // cable bundles from racks into the floor
   cableBundle(b, [[-1.45, 1.86, 6.4], [-1.25, 2.12, 6.5], [-0.6, 2.32, 6.6], [0.6, 2.3, 6.5], [1.5, 2.0, 6.35], [1.75, 1.74, 6.3]], 5);
-  L.lamps.push({ pos: V(0, 2.1, 7.4), color: 0xe8f0ff, intensity: 4.5, room: 'eng' });
-  L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 2.5, room: 'eng' });
+  L.lamps.push({ pos: V(0, 2.1, 7.4), color: 0xe8f0ff, intensity: 5.5, room: 'eng' });
+  L.lamps.push({ pos: V(0.2, 1.9, 8.4), color: 0xfff2e0, intensity: 3.0, room: 'eng' });     // console task light
+  L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 1.8, room: 'eng' });
   L.lamps.push({ pos: V(-1.05, 1.2, 6.5), color: 0x60ffd0, intensity: 1.0, room: 'eng' });   // server LEDs
   L.lamps.push({ pos: V(1.3, 1.9, 6.9), color: 0xffb060, intensity: 1.2, room: 'eng' });
 }
@@ -571,4 +573,5 @@ export function buildAllRooms(b, L) {
   buildAirlock(b, L);
   buildLifeSupport(b, L);
   buildEngineering(b, L);
+  buildExtras(b, L);
 }

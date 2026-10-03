@@ -156,6 +156,15 @@ export function doorFrame(b, d, faceHalf, key = 'frame', ledKey = 'ledStrip') {
   const outline = roundRect(d.w, d.h, rr, 0, 0, 7);
   const yC = (d.y0 ?? DECK_Y) + d.h / 2 + 0.005;
   const profile = roundPolygon([[-0.016, -0.006], [0.075, -0.006], [0.075, 0.04], [-0.016, 0.04]], 0.014, 3);
+  // deep reveal: the opening is lined from face to face (thick walls), split by the slot the
+  // sliding door panel runs in
+  if (d.reveal) {
+    const inner = roundRect(d.w - 0.004, d.h - 0.004, Math.max(0.02, rr - 0.002), 0, 0, 7);
+    const at = (u, v, off) => (d.axis === 'z' ? V(d.c + u, yC + v, d.at + off) : V(d.at + off, yC + v, d.c + u));
+    for (const [a, c] of [[-d.reveal, -0.036], [0.036, d.reveal]]) {
+      b.add(loft([inner.map(([u, v]) => at(u, v, a)), inner.map(([u, v]) => at(u, v, c))], { ring: true, caps: false, invert: true }), d.revealKey || 'panel');
+    }
+  }
   for (const s of [-1, 1]) {
     const face = d.at + s * faceHalf;
     const toW = (u, v) => (d.axis === 'z' ? V(d.c + u, yC + v, face) : V(face, yC + v, d.c + u));

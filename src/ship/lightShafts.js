@@ -98,7 +98,7 @@ export class LightShafts {
     u.uColor.value.copy(sunColor);
     const lum = sunColor.r * 0.2126 + sunColor.g * 0.7152 + sunColor.b * 0.0722;
     // the beams are dust and moisture in the cabin air: they vanish if the cabin is depressurised
-    u.uI.value = Math.min(1, lum) * 0.3 * Math.max(0, Math.min(1, air));
+    u.uI.value = Math.min(1, lum) * 0.17 * Math.max(0, Math.min(1, air));
     u.uTime.value = t % 1000;
     this.mesh.visible = lum > 0.01;
   }

@@ -314,7 +314,10 @@ export class ShipSystems {
       for (const slot of this.pool) if (slot.lamp) slot.out = !want.has(slot.lamp);
       for (const l of want) {
         if (this.pool.some((s) => s.lamp === l)) continue;
-        const free = this.pool.find((s) => !s.lamp);
+        // a free light, else the dimmest one already fading out (walking into a room must not
+        // leave it dark while the old lamps fade)
+        let free = this.pool.find((s) => !s.lamp);
+        if (!free) free = this.pool.filter((s) => s.out).sort((a, b) => a.f - b.f)[0];
         if (free) { free.lamp = l; free.f = 0; free.out = false; }
       }
     }
@@ -327,7 +330,7 @@ export class ShipSystems {
     for (const slot of this.pool) {
       const L = slot.lamp;
       if (!L) { slot.light.intensity = 0; continue; }
-      slot.f = slot.out ? slot.f - dt * 2.5 : Math.min(1, slot.f + dt * 1.5);
+      slot.f = slot.out ? slot.f - dt * 2.5 : Math.min(1, slot.f + dt * 2.5);
       if (slot.f <= 0 && slot.out) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; continue; }
       slot.light.position.copy(L.pos);
       slot.light.distance = L.range || 7;
@@ -338,7 +341,7 @@ export class ShipSystems {
       // brown-out: lamps sag and stutter when the power bus is weak
       const brown = power < 0.6 && Math.random() < (0.6 - power) * 0.3 ? 0.35 : 1;
       const fe = slot.f * slot.f * (3 - 2 * slot.f);
-      slot.light.intensity = L.intensity * fe * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
+      slot.light.intensity = L.intensity * (L.room === 'station' ? 1 : 1.3) * fe * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
     }
     // alarm beacons: rotating red spots
     for (let i = 0; i < this.beacons.length; i++) {

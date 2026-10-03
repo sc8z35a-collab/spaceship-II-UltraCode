@@ -3,6 +3,7 @@
 // heat glow, plus glass and emissive helpers.
 import * as THREE from 'three';
 import { noiseTex } from '../core/noiseTex.js';
+import { detailTextures, DETAIL_TILE } from './detailTex.js';
 
 export const MAX_DENTS = 24;
 export const MAX_OPEN = 16;
@@ -230,13 +231,14 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004 }, opts);
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, shipUniforms);
     if (o.dentable) sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
+    if (o.detail) { sh.uniforms.tDetail = { value: detailTextures()[o.detail] }; sh.uniforms.uDetailScale = { value: 1 / DETAIL_TILE[o.detail] }; }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + COMMON_VERT_PARS + '\nvarying float vDent;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -275,9 +277,10 @@ export function patchShipMaterial(mat, opts = {}) {
         #include <defaultnormal_vertex>`);
     }
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS)
+      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS + (o.detail ? '\nuniform sampler2D tDetail;\nuniform float uDetailScale;' : ''))
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
         float _bumpH = 0.0;
+        float _detailRough = 0.0;
         ${o.openings ? `
         if (openingMask(vShipPos) > 0.5) discard;
         if (canopyMask(vShipPos) > 0.5) discard;
@@ -296,6 +299,17 @@ export function patchShipMaterial(mat, opts = {}) {
           float grime = clamp(0.5 + 0.5 * g1 + 0.25 * streak, 0.0, 1.0);
           diffuseColor.rgb *= mix(1.0, 0.62 + 0.38 * (1.0 - grime), ${o.grime.toFixed(3)});
           diffuseColor.rgb *= 1.0 + 0.06 * g2 * ${o.wear.toFixed(3)};
+          ${o.detail ? `
+          {
+            // high-res surface detail, triplanar in ship space (seams, screws, vents, labels...)
+            vec3 Pd = vShipPos * uDetailScale;
+            vec3 bwd = N * N * N * N; bwd /= (bwd.x + bwd.y + bwd.z + 1e-5);
+            vec4 D = texture2D(tDetail, Pd.zy) * bwd.x + texture2D(tDetail, Pd.xz) * bwd.y + texture2D(tDetail, Pd.xy) * bwd.z;
+            _bumpH += (D.r - 0.5) * ${o.detailDepth.toFixed(4)};
+            diffuseColor.rgb *= 0.5 + D.g;
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.08, 0.085, 0.09), (1.0 - D.a) * 0.6);
+            _detailRough = (D.b - 0.5) * 0.55;
+          }` : ''}
           ${o.panels > 0 ? `
           // panel seams (grid in ship space), blended across the three projections so curved
           // surfaces do not get jagged seams where the dominant axis flips
@@ -313,7 +327,7 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        ${o.panels > 0 ? `
+        ${o.panels > 0 || o.detail ? `
         {
           // relief: recessed panel seams + faint waviness (derivative bump, view space)
           vec2 dH = vec2(dFdx(_bumpH), dFdy(_bumpH));
@@ -328,7 +342,7 @@ export function patchShipMaterial(mat, opts = {}) {
         {
           vec3 P = vShipPos * ${o.triScale.toFixed(3)};
           float rn = nz(P * 0.43 + 0.7).r * 2.0 - 1.0;
-          roughnessFactor = clamp(roughnessFactor + rn * 0.18 * ${o.wear.toFixed(3)} + ${o.rough.toFixed(3)} + vDent * 0.8, 0.04, 1.0);
+          roughnessFactor = clamp(roughnessFactor + rn * 0.18 * ${o.wear.toFixed(3)} + ${o.rough.toFixed(3)} + vDent * 0.8 + _detailRough, 0.04, 1.0);
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
         }`)
@@ -386,12 +400,12 @@ export function createMaterials() {
   M.nozzle = patchShipMaterial(std(0x55504a, 0.4, 0.95, { emissive: new THREE.Color(1.0, 0.35, 0.1), emissiveIntensity: 0.0 }), { wear: 0.9, grime: 0.6, heat: true });
   M.solar = std(0x1a2a55, 0.25, 0.6);
   // ---- interior ----
-  M.wall = patchShipMaterial(std(0xbfc3c4, 0.72, 0.05), { dentable: true, openings: true, wear: 0.5, panels: 0.9, grime: 0.35 });
-  M.wallPad = patchShipMaterial(std(0x9ea2a6, 0.9, 0.0), { dentable: true, openings: true, wear: 0.3, grime: 0.25, triScale: 2.0 });
-  M.panel = patchShipMaterial(std(0xa9adb0, 0.6, 0.15), { wear: 0.6, panels: 0.6, grime: 0.3 });
-  M.panelDark = patchShipMaterial(std(0x5a5f66, 0.55, 0.3), { wear: 0.5, grime: 0.25 });
-  M.vault = patchShipMaterial(std(0xa9adb0, 0.6, 0.15), { wear: 0.6, panels: 0.6, grime: 0.3, breaches: true });   // corridor vault: torn open by breaches above it
-  M.floor = patchShipMaterial(std(0x6d7176, 0.75, 0.4), { wear: 0.9, panels: 0.6, grime: 0.6 });
+  M.wall = patchShipMaterial(std(0xbfc3c4, 0.66, 0.08), { dentable: true, openings: true, wear: 0.5, grime: 0.35, detail: 'panel' });
+  M.wallPad = patchShipMaterial(std(0xa3a7ab, 0.88, 0.0), { dentable: true, openings: true, wear: 0.3, grime: 0.25, triScale: 2.0, detail: 'pad', detailDepth: 0.006 });
+  M.panel = patchShipMaterial(std(0xadb1b4, 0.56, 0.18), { wear: 0.6, grime: 0.3, detail: 'panel' });
+  M.panelDark = patchShipMaterial(std(0x5a5f66, 0.52, 0.32), { wear: 0.5, grime: 0.25, detail: 'panel', detailDepth: 0.003 });
+  M.vault = patchShipMaterial(std(0xadb1b4, 0.56, 0.18), { wear: 0.6, grime: 0.3, breaches: true, detail: 'panel' });   // corridor vault: torn open by breaches above it
+  M.floor = patchShipMaterial(std(0x70757b, 0.7, 0.45), { wear: 0.9, grime: 0.6, detail: 'floor', detailDepth: 0.005 });
   M.frame = patchShipMaterial(std(0x8a8f95, 0.4, 0.75), { dentable: true, wear: 0.7, grime: 0.35 });
   M.rubber = std(0x1d1e20, 0.85, 0.0);
   M.handrail = patchShipMaterial(std(0xc9a227, 0.5, 0.2), { wear: 0.8, grime: 0.3 });
@@ -461,8 +475,32 @@ export function createMaterials() {
   M.poster2 = new THREE.MeshStandardMaterial({ map: posterTexture(2), roughness: 0.8 });
   M.poster3 = new THREE.MeshStandardMaterial({ map: posterTexture(3), roughness: 0.8 });
   M.labels = new THREE.MeshStandardMaterial({ map: labelTexture(), roughness: 0.6, transparent: true, polygonOffset: true, polygonOffsetFactor: -2 });
+  { const t = roomSignTexture(); M.roomSigns = new THREE.MeshStandardMaterial({ color: 0x000000, map: t, emissiveMap: t, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 1.1, roughness: 0.4 }); }
   return M;
 }
+
+let SIGN_TEX = null;
+const SIGNS = [['COCKPIT', '操縦室'], ['LIVING', '居住区'], ['STORAGE', '倉庫'], ['BATH', '浴室'], ['AIRLOCK', 'エアロック'], ['LIFE SUPPORT', '生命維持'], ['ENGINEERING', '機関室'], ['BUNK', '寝台']];
+function roomSignTexture() {
+  if (SIGN_TEX) return SIGN_TEX;
+  const c = document.createElement('canvas');
+  c.width = 1024; c.height = 1024;
+  const g = c.getContext('2d');
+  g.fillStyle = '#0a0d12'; g.fillRect(0, 0, 1024, 1024);
+  SIGNS.forEach(([en, jp], i) => {
+    const y = i * 128;
+    g.strokeStyle = 'rgba(120,200,255,0.55)'; g.lineWidth = 3; g.strokeRect(8, y + 8, 1008, 112);
+    g.fillStyle = '#dff3ff'; g.font = '600 54px "Helvetica Neue", Arial, sans-serif'; g.textBaseline = 'middle'; g.textAlign = 'left';
+    g.fillText(en, 40, y + 66);
+    g.fillStyle = '#ffd38a'; g.font = '500 52px "Hiragino Sans", "Noto Sans JP", sans-serif'; g.textAlign = 'right';
+    g.fillText(jp, 984, y + 66);
+  });
+  SIGN_TEX = new THREE.CanvasTexture(c);
+  SIGN_TEX.colorSpace = THREE.SRGBColorSpace;
+  SIGN_TEX.anisotropy = 8;
+  return SIGN_TEX;
+}
+
 
 function woodTexture() {
   return canvasTex(512, (g, s) => {

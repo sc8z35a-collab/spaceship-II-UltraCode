@@ -228,8 +228,9 @@ export function buildInteriorShell(M) {
   for (const c of cross) crossWall(b, c.z, c.side);
 
   // ---------- chunky rounded door / alcove frames with LED lines ----------
-  for (const d of Object.values(DOORS)) doorFrame(b, d, d.axis === 'z' ? 0.05 : 0.045, d.hatch ? 'hullOrange' : 'frame', d.hatch ? 'ledAmber' : 'ledStrip');
-  for (const a of ALCOVES) doorFrame(b, { axis: 'x', at: a.side * CORRIDOR_X, c: a.c, w: a.w, h: a.h, y0: a.y0, r: a.r }, 0.045, 'frame', 'ledStrip');
+  // (walls are thick: every opening gets a deep lined reveal with the frames on its two ends)
+  for (const d of Object.values(DOORS)) doorFrame(b, Object.assign({ reveal: 0.1 }, d), 0.1, d.hatch ? 'hullOrange' : 'frame', d.hatch ? 'ledAmber' : 'ledStrip');
+  for (const a of ALCOVES) doorFrame(b, { axis: 'x', at: a.side * CORRIDOR_X, c: a.c, w: a.w, h: a.h, y0: a.y0, r: a.r, reveal: 0.1 }, 0.1, 'frame', 'ledStrip');
 
   // ---------- corridor vault, ribs, coves, padding; fillets in every room ----------
   const corr = buildCorridor(b, { doors: DOORS, alcoves: ALCOVES });
@@ -241,8 +242,8 @@ function partitionZ(b, z, doors, M) {
   const outline = sectionAbove(z, DECK_Y, INSET - 0.01);
   const sh = shapeFromPts(outline);
   for (const d of doors) sh.holes.push(doorPath(d.c, d.w, d.h));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.08, bevelEnabled: true, bevelThickness: 0.01, bevelSize: 0.01, bevelSegments: 1, curveSegments: 8 });
-  g.translate(0, 0, z - 0.04);
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 8 });
+  g.translate(0, 0, z - 0.08);
   b.add(g, 'panel');
   b.colMesh(g);
 }
@@ -262,8 +263,8 @@ function crossWall(b, z, side) {
   const [, topIn] = heightRangeAt(z, xin, INSET);
   const poly = [[xin, DECK_Y], [side * xr, DECK_Y], ...out, [xin, topIn - 0.02]];
   const sh = shapeFromPts(poly);
-  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.06, bevelEnabled: false, curveSegments: 4 });
-  g.translate(0, 0, z - 0.03);
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 0.14, bevelEnabled: false, curveSegments: 4 });
+  g.translate(0, 0, z - 0.07);
   b.add(g, 'panel');
   b.colMesh(g);
 }
