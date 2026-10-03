@@ -49,9 +49,9 @@ export function buildCorridor(b, { doors, alcoves }) {
   const prof = (k) => () => { const pts = []; for (let i = 0; i <= k; i++) pts.push(vaultXY((i / k) * Math.PI)); return pts; };
   const below = (p) => V(-p.x * 0.2, 1.2 - p.y, 0);   // faces look down into the corridor
   const zA = SKY.z - 0.42, zB = SKY.z + 0.42;
-  b.add(zStrip(prof(K), Z0, zA, Math.ceil((zA - Z0) / 0.3), below), 'panel');
-  b.add(zStrip(prof(K * 2), zA, zB, 42, below, (s, i, c) => Math.hypot(c.x, c.z - SKY.z) < SKY.r + 0.012), 'panel');
-  b.add(zStrip(prof(K), zB, Z1, Math.ceil((Z1 - zB) / 0.3), below), 'panel');
+  b.add(zStrip(prof(K), Z0, zA, Math.ceil((zA - Z0) / 0.3), below), 'vault');
+  b.add(zStrip(prof(K * 2), zA, zB, 42, below, (s, i, c) => Math.hypot(c.x, c.z - SKY.z) < SKY.r + 0.012), 'vault');
+  b.add(zStrip(prof(K), zB, Z1, Math.ceil((Z1 - zB) / 0.3), below), 'vault');
   // skylight well up to the hull window + rounded collar
   const ring = (y) => { const pts = []; for (let i = 0; i < 40; i++) { const a = (i / 40) * Math.PI * 2; pts.push(V(Math.cos(a) * SKY.r, y, SKY.z + Math.sin(a) * SKY.r)); } return pts; };
   b.add(loft([ring(2.455), ring(2.86)], { ring: true, caps: false, invert: true }), 'panel');

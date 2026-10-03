@@ -101,6 +101,22 @@ float breachMask(vec3 p, out float rim){
   }
   return m;
 }
+// inner linings below the hull (corridor vault): the hole is the breach above projected straight down
+float breachMaskUp(vec3 p, out float rim){
+  rim = 0.0;
+  float m = 0.0;
+  for (int i = 0; i < ${MAX_BREACH}; i++){
+    vec4 B = uBreach[i];
+    if (B.w <= 0.0) continue;
+    float dy = B.y - p.y;
+    if (dy < -0.1 || dy > 1.0) continue;
+    float d = length(p.xz - B.xz);
+    float jag = (B.w * 1.2 + 0.015) * (1.0 + 0.45 * sn(p * 1.1 + B.xyz) + 0.2 * sn(p * 3.9));
+    if (d < jag) m = 1.0;
+    rim = max(rim, 1.0 - smoothstep(jag, jag + 0.1 + B.w * 0.6, d));
+  }
+  return m;
+}
 vec2 panelAt(vec2 pg, float size){
   vec2 cell = pg / size;
   vec2 off = vec2(0.5 * floor(cell.y), 0.0);
@@ -265,7 +281,8 @@ export function patchShipMaterial(mat, opts = {}) {
         ${o.openings ? `
         if (openingMask(vShipPos) > 0.5) discard;
         if (canopyMask(vShipPos) > 0.5) discard;
-        float _rim; if (breachMask(vShipPos, _rim) > 0.5) discard;` : 'float _rim = 0.0;'}
+        float _rim; if (breachMask(vShipPos, _rim) > 0.5) discard;` : o.breaches ? `
+        float _rim; if (breachMaskUp(vShipPos, _rim) > 0.5) discard;` : 'float _rim = 0.0;'}
       `)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -373,6 +390,7 @@ export function createMaterials() {
   M.wallPad = patchShipMaterial(std(0x9ea2a6, 0.9, 0.0), { dentable: true, openings: true, wear: 0.3, grime: 0.25, triScale: 2.0 });
   M.panel = patchShipMaterial(std(0xa9adb0, 0.6, 0.15), { wear: 0.6, panels: 0.6, grime: 0.3 });
   M.panelDark = patchShipMaterial(std(0x5a5f66, 0.55, 0.3), { wear: 0.5, grime: 0.25 });
+  M.vault = patchShipMaterial(std(0xa9adb0, 0.6, 0.15), { wear: 0.6, panels: 0.6, grime: 0.3, breaches: true });   // corridor vault: torn open by breaches above it
   M.floor = patchShipMaterial(std(0x6d7176, 0.75, 0.4), { wear: 0.9, panels: 0.6, grime: 0.6 });
   M.frame = patchShipMaterial(std(0x8a8f95, 0.4, 0.75), { dentable: true, wear: 0.7, grime: 0.35 });
   M.rubber = std(0x1d1e20, 0.85, 0.0);

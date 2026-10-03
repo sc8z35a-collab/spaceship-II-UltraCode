@@ -55,13 +55,15 @@ export class LightShafts {
         uniform vec3 uColor; uniform float uI; uniform float uTime; uniform highp sampler3D tNoise3D;
         varying float vT; varying float vK; varying vec3 vW; varying vec3 vP;
         void main(){
-          vec3 N = normalize(cross(dFdx(vW), dFdy(vW)));
-          vec3 V = normalize(cameraPosition - vW);
-          float soft = pow(abs(dot(N, V)), 1.5);                      // soft beam edges
+          vec3 C = cross(dFdx(vW), dFdy(vW));
+          vec3 E = cameraPosition - vW;
+          float dE = length(E);
+          float soft = pow(abs(dot(C, E)) / max(length(C) * dE, 1e-12), 1.5);   // soft beam edges
+          float nearEye = smoothstep(0.2, 1.4, dE);                   // standing in the beam: no fog on the lens
           float fade = pow(1.0 - vT, 1.7) * smoothstep(0.0, 0.06, vT + 0.02);
           float dust = 0.55 + 0.45 * texture(tNoise3D, vP * 0.55 + vec3(0.0, uTime * 0.018, uTime * 0.011)).r;
           float motes = smoothstep(0.82, 0.97, texture(tNoise3D, vP * 2.7 + vec3(uTime * 0.01, 0.0, uTime * 0.02)).g);
-          float a = uI * sqrt(vK) * fade * soft * (dust + motes * 1.5);
+          float a = uI * sqrt(vK) * fade * soft * nearEye * (dust + motes * 1.5);
           gl_FragColor = vec4(uColor * a, 1.0);
         }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,

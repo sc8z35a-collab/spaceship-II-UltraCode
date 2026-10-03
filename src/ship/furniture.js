@@ -44,8 +44,10 @@ export function hullCabinet(b, o) {
   const seamCurve = (z) => { const pts = []; for (let i = 0; i <= 10; i++) pts.push(frontAt(z, yA + (yZ - yA) * (i / 10))); return pts; };
   if (doors > 1) for (let i = 1; i < doors; i++) b.tube(seamCurve(z0 + len * (i / doors)), 0.0045, 'black', { radial: 4, seg: 12 });
   for (let j = 1; j < rows; j++) {
-    const y = yB + (yT - yB) * (j / rows);
-    b.pipe(frontAt(z0 + endR, y), frontAt(z1 - endR, y), 0.0045, 'black', 4);
+    // shelf seam: follows the curved front along z (a straight chord would float off it)
+    const y = yB + (yT - yB) * (j / rows), n = Math.max(2, Math.ceil(len / 0.15)), pts = [];
+    for (let i = 0; i <= n; i++) pts.push(frontAt(z0 + endR + (len - 2 * endR) * (i / n), y));
+    b.tube(pts, 0.0045, 'black', { radial: 4, seg: n * 2 });
   }
   if (doors > 0) {
     for (let i = 0; i < doors; i++) for (let j = 0; j < rows; j++) {
