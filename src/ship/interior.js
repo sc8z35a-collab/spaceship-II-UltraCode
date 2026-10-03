@@ -183,14 +183,20 @@ export function buildInteriorShell(M) {
     const pts = [];
     for (let i = 0; i <= 96; i++) { const p = sectionPoint(z, (i / 96) * Math.PI * 2, INSET - 0.01); pts.push([p.x, p.y]); }
     const sh = shapeFromPts(pts);
-    sh.holes.push(roundedRectPath(0.7, 0.42, 0.18, 0, 1.25));
+    // round shielded viewport onto the reactor core (lead-glass plug in a thick ring)
+    const vp = new THREE.Path(); vp.absarc(0, 1.3, 0.42, 0, Math.PI * 2, true); sh.holes.push(vp);
     const g = new THREE.ExtrudeGeometry(sh, { depth: 0.18, bevelEnabled: false, curveSegments: 6 });
     g.translate(0, 0, z - 0.09);
     b.add(g, 'panelDark');
     b.colMesh(g);
-    // viewport rim
-    b.torus(0.43, 0.03, 'steel', [0, 1.25, z - 0.1], [0, 0, 0], 32);
-    b.add(new THREE.RingGeometry(0.35, 0.5, 4, 1), 'plasticY', [0, 1.25, z - 0.1], [0, 0, Math.PI / 4]);
+    // viewport: deep steel collar, bolted flange, hazard ring, glass
+    b.cyl(0.47, 0.47, 0.34, 'steel', [0, 1.3, z - 0.05], [Math.PI / 2, 0, 0], 48, true);
+    b.torus(0.46, 0.05, 'steel', [0, 1.3, z - 0.22], [0, 0, 0], 48);
+    b.torus(0.6, 0.035, 'metalDark', [0, 1.3, z - 0.1], [0, 0, 0], 48);
+    b.add(new THREE.RingGeometry(0.51, 0.6, 48, 1), 'hazard', [0, 1.3, z - 0.095]);
+    for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; b.cyl(0.016, 0.016, 0.03, 'steel', [Math.cos(a) * 0.555, 1.3 + Math.sin(a) * 0.555, z - 0.105], [Math.PI / 2, 0, 0], 8); }
+    b.add(new THREE.CircleGeometry(0.43, 48), 'glassProp', [0, 1.3, z + 0.02]);
+    b.colCyl(0.46, 0.2, [0, 1.3, z], [Math.PI / 2, 0, 0]);
   }
   // corridor walls x = +/- CORRIDOR_X between the bulkheads
   const zc0 = Z_COCKPIT_BULK + 0.03, zc1 = Z_ENG_BULK - 0.03;

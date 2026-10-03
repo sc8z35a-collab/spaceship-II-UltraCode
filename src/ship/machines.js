@@ -416,51 +416,67 @@ export class Machines {
 
   // ------------------------------------------------------------------ reactor (behind the aft viewport)
   buildReactor() {
+    // shielded chamber behind the aft viewport: a vertical core glowing Cherenkov blue through a
+    // sight band, cage rings, control-rod drives (they move with the power), coolant loops, the
+    // turbine, hazard floor; all lit by the core itself
     const M = this.M;
-    const z0 = Z_REACTOR_BULK + 0.25;
+    const zc = Z_REACTOR_BULK + 0.55;
     const grp = new THREE.Group();
-    // vessel
-    const vessel = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.5, 1.4, 32), M.steel);
-    vessel.rotation.x = Math.PI / 2;
-    vessel.position.set(0, 0.6, z0 + 1.0);
-    grp.add(vessel);
-    const glowMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.2, 0.5, 1.0), emissiveIntensity: 8 });
-    const glow = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.02, 24), glowMat);
-    glow.rotation.x = Math.PI / 2;
-    glow.position.set(0, 0.6, z0 + 0.29);
-    grp.add(glow);
-    for (let i = 0; i < 6; i++) { const r = new THREE.Mesh(new THREE.TorusGeometry(0.51, 0.025, 6, 32), M.metalDark); r.position.set(0, 0.6, z0 + 0.4 + i * 0.24); grp.add(r); }
-    // control rod drives on top
+    const add = (geo, mat, pos, rot) => { const m = new THREE.Mesh(geo, mat); if (pos) m.position.set(...pos); if (rot) m.rotation.set(...rot); grp.add(m); return m; };
+    // chamber: dark steel box closing the space between the shield bulkhead and the tail
+    // (a drum that fits inside the tapering tail: axis along z through y = 0.95)
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x2a2f36, roughness: 0.45, metalness: 0.7, side: THREE.DoubleSide });
+    add(new THREE.CylinderGeometry(0.98, 0.98, 0.95, 48, 1, true), wallMat, [0, 0.95, zc], [Math.PI / 2, 0, 0]);
+    add(new THREE.CircleGeometry(0.98, 48), wallMat, [0, 0.95, zc + 0.47], [0, Math.PI, 0]);
+    for (const z of [zc - 0.3, zc + 0.05, zc + 0.4]) add(new THREE.TorusGeometry(0.96, 0.02, 6, 48), M.metal, [0, 0.95, z]);
+    add(new THREE.BoxGeometry(1.7, 0.03, 0.9), M.hazard, [0, 0.12, zc]);
+    // vessel with a glowing sight band
+    const glowMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.25, 0.55, 1.0), emissiveIntensity: 8 });
+    add(new THREE.CylinderGeometry(0.34, 0.38, 0.32, 40), M.steel, [0, 0.2, zc]);
+    add(new THREE.CylinderGeometry(0.34, 0.34, 0.26, 40), M.steel, [0, 1.6, zc]);
+    add(new THREE.CylinderGeometry(0.22, 0.22, 1.06, 32), glowMat, [0, 0.9, zc]);
+    add(new THREE.CylinderGeometry(0.235, 0.235, 1.06, 32, 1, true), M.glassProp, [0, 0.9, zc]);
+    for (let k = 0; k < 6; k++) add(new THREE.BoxGeometry(0.05, 1.06, 0.05), M.steel, [Math.cos(k / 6 * Math.PI * 2) * 0.27, 0.9, zc + Math.sin(k / 6 * Math.PI * 2) * 0.27]);
+    for (const y of [0.42, 0.66, 0.9, 1.14, 1.38]) add(new THREE.TorusGeometry(0.3, 0.02, 8, 40), M.metal, [0, y, zc], [Math.PI / 2, 0, 0]);
+    // soft glow around the core (additive halo)
+    const halo = add(new THREE.SphereGeometry(0.62, 24, 16), new THREE.MeshBasicMaterial({ color: 0x2a6cff, transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }), [0, 0.9, zc]);
+    halo.scale.set(1, 1.35, 1);
+    // control rod drives on the head: housings + moving rods
     const rods = [];
     for (let i = 0; i < 4; i++) {
-      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.5, 8), M.steel);
-      rod.position.set(-0.18 + i * 0.12, 1.25, z0 + 1.0);
-      grp.add(rod); rods.push(rod);
+      const a = i / 4 * Math.PI * 2 + Math.PI / 4, x = Math.cos(a) * 0.15, z = zc + Math.sin(a) * 0.15;
+      add(new THREE.CylinderGeometry(0.045, 0.045, 0.2, 12), M.metalDark, [x, 1.83, z]);
+      const rod = add(new THREE.CylinderGeometry(0.018, 0.018, 0.45, 8), M.steel, [x, 1.25, z]);
+      rods.push(rod);
     }
-    // turbine with blades (spins)
+    // coolant loops (orange) out of the vessel into the walls, with flanges
+    for (const s of [-1, 1]) {
+      const curve = new THREE.CatmullRomCurve3([V(s * 0.3, 1.45, zc), V(s * 0.55, 1.52, zc), V(s * 0.72, 1.3, zc + 0.15), V(s * 0.86, 1.05, zc + 0.3)]);
+      add(new THREE.TubeGeometry(curve, 24, 0.055, 10), M.pipeOrange);
+      add(new THREE.TorusGeometry(0.07, 0.02, 8, 20), M.steel, [s * 0.55, 1.52, zc], [0, Math.PI / 2, 0]);
+      const c2 = new THREE.CatmullRomCurve3([V(s * 0.32, 0.3, zc), V(s * 0.6, 0.25, zc + 0.05), V(s * 0.82, 0.5, zc + 0.3)]);
+      add(new THREE.TubeGeometry(c2, 20, 0.045, 10), M.pipeBlue || M.pipeOrange);
+    }
+    // turbine (spins with the power) in the starboard corner
     const turb = new THREE.Group();
-    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.08, 0.5, 16), M.steel);
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.3, 16), M.steel);
     hub.rotation.z = Math.PI / 2;
     turb.add(hub);
     for (let i = 0; i < 14; i++) {
-      const bl = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.3, 0.012), M.brass);
+      const bl = new THREE.Mesh(new THREE.BoxGeometry(0.025, 0.18, 0.008), M.brass);
       const a = i / 14 * Math.PI * 2;
-      bl.position.set(0, Math.cos(a) * 0.18, Math.sin(a) * 0.18);
+      bl.position.set(0, Math.cos(a) * 0.11, Math.sin(a) * 0.11);
       bl.rotation.x = a; bl.rotation.y = 0.5;
       turb.add(bl);
     }
-    turb.position.set(0.95, 0.7, z0 + 0.7);
+    turb.position.set(0.6, 0.5, zc + 0.25);
     grp.add(turb);
-    const casing = new THREE.Mesh(new THREE.TorusGeometry(0.27, 0.03, 8, 24), M.metalDark);
-    casing.rotation.y = Math.PI / 2;
-    casing.position.copy(turb.position);
-    grp.add(casing);
-    // pipes from vessel to turbine
-    const pipe = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3([V(0.4, 0.8, z0 + 0.7), V(0.7, 1.0, z0 + 0.7), V(0.95, 0.95, z0 + 0.7)]), 16, 0.05, 8), M.pipeOrange);
-    grp.add(pipe);
+    add(new THREE.TorusGeometry(0.17, 0.025, 8, 24), M.metalDark, [0.6, 0.5, zc + 0.25], [0, Math.PI / 2, 0]);
+    // status lamps on the chamber wall
+    for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(0.06, 0.03, 0.01), k < 4 ? M.ledGreen : M.ledAmber, [-0.55 + k * 0.08, 1.55, zc + 0.46]);
     this.root.add(grp);
-    this.reactor = { glowMat, turb, rods, light: new THREE.PointLight(0x4d8dff, 1.5, 4, 1.5) };
-    this.reactor.light.position.set(0, 0.8, z0 + 0.1);
+    this.reactor = { glowMat, turb, rods, halo, light: new THREE.PointLight(0x4d8dff, 2.2, 5, 1.4) };
+    this.reactor.light.position.set(0, 0.95, zc - 0.25);
     this.reactor.light.layers.enableAll();
     grp.add(this.reactor.light);
   }
@@ -687,8 +703,9 @@ export class Machines {
       const t = performance.now() / 1000;
       r.glowMat.emissiveIntensity = 6 + 3 * power + Math.sin(t * 7) * 0.4;
       r.turb.rotation.x += dt * 40 * power;
-      r.rods.forEach((rod, i) => { rod.position.y = 1.25 + (1 - power) * 0.25 + Math.sin(t * 0.2 + i) * 0.005; });
-      r.light.intensity = 1.2 + power;
+      r.rods.forEach((rod, i) => { rod.position.y = 1.62 + (1 - power) * 0.22 + Math.sin(t * 0.2 + i) * 0.005; });
+      r.light.intensity = 1.4 + 1.6 * power;
+      if (r.halo) r.halo.material.opacity = 0.1 + 0.08 * power + Math.sin(t * 7) * 0.01;
     }
     // fans
     const fanOn = g.lifeSupport.fans.on && g.lifeSupport.fans.health > 0.2 && power > 0.2;

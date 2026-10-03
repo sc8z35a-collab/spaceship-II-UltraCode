@@ -6,6 +6,7 @@ import { sectionPoint, sectionNormal, halfWidthAt, heightRangeAt, HULL, Z_COCKPI
 import { INSET, LIFT, ENG_HATCH } from './interior.js';
 import { bookRow, plantPot, hangingPlant, mug, boxStack, cargoBag, cableBundle, switchPanel, gauge, valveWheel, sticker, stringLights, toolWall, photoFrame, locker } from './props.js';
 import { hullCabinet, hullPadding } from './furniture.js';
+import { roundPolygon } from './sweep.js';
 
 export function createLayout() {
   return { monitors: [], seats: [], interact: [], lamps: [], loose: [], controls: {}, anim: [], pipes: [], spots: {} };
@@ -482,11 +483,8 @@ export function buildEngineering(b, L) {
   const pwr = hullCabinet(b, { side: 1, z0: 5.72, z1: 6.92, yB: 0, yT: 1.8, depth: 0.82, doors: 0, rows: 1, key: 'panel' });
   for (let i = 0; i < 3; i++) { const p = pwr.frontAt(6.32, 0.62 + i * 0.4); switchPanel(b, R, [p.x - 0.012, p.y, p.z], [0, -Math.PI / 2, 0], 8, 3, 0.05); }
   for (const z of [5.98, 6.66]) { const p = pwr.frontAt(z, 1.6); gauge(b, [p.x - 0.015, p.y, p.z], [0, -Math.PI / 2, 0], 0.06); }
-  // reactor control console facing the aft viewport
-  b.box(1.0, 0.85, 0.45, 'panel', [0.25, 0.42, 8.9], null, 0.03, 2, true);
-  b.box(1.05, 0.05, 0.5, 'panelDark', [0.25, 0.87, 8.88], [-0.25, 0, 0], 0.01);
-  switchPanel(b, R, [0.05, 0.9, 8.85], [-Math.PI / 2 + 0.25, 0, 0], 6, 2, 0.045);
-  monitorSlot(L, 'reactor', V(0.45, 1.12, 9.02), V(0, 0.3, -1).normalize(), V(0, 1, 0.3).normalize(), 0.36, 0.22, 'eng', 384);
+  // reactor control console facing the aft viewport: sculpted desk with a sloped control deck
+  reactorConsole(b, R, L);
   // tool board on the reactor bulkhead, beside the viewport (scaled to fit under the hull curve)
   b.push([-0.9, 1.12, Z_REACTOR_BULK - 0.105], [0, Math.PI, 0], [0.72, 0.72, 0.72]);
   toolWall(b, R, [0, 0, 0], [0, 0, 0]);
@@ -505,6 +503,63 @@ export function buildEngineering(b, L) {
   L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 2.5, room: 'eng' });
   L.lamps.push({ pos: V(-1.05, 1.2, 6.5), color: 0x60ffd0, intensity: 1.0, room: 'eng' });   // server LEDs
   L.lamps.push({ pos: V(1.3, 1.9, 6.9), color: 0xffb060, intensity: 1.2, room: 'eng' });
+}
+
+function reactorConsole(b, R, L) {
+  const X0 = -0.55, X1 = 0.95;
+  // side profile (z, y), extruded across x
+  const prof = roundPolygon([[8.6, 0.0], [9.2, 0.0], [9.2, 0.98], [9.12, 1.05], [8.66, 0.86], [8.58, 0.8], [8.58, 0.1]], [0.01, 0.01, 0.04, 0.03, 0.05, 0.03, 0.02], 3);
+  const sh = new THREE.Shape(prof.map(([z, y]) => new THREE.Vector2(z, y)));
+  const g = new THREE.ExtrudeGeometry(sh, { depth: X1 - X0, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.015, bevelSegments: 2, curveSegments: 4 });
+  g.applyMatrix4(new THREE.Matrix4().set(0, 0, -1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 1));
+  g.translate(X1, 0, 0);
+  b.add(g, 'panel');
+  b.colBox(X1 - X0, 1.0, 0.62, [(X0 + X1) / 2, 0.5, 8.9]);
+  // front: recessed kick light, vent slots, labels
+  b.box(X1 - X0 - 0.1, 0.02, 0.02, 'ledCyan', [(X0 + X1) / 2, 0.06, 8.585], null, 0);
+  for (let k = 0; k < 9; k++) b.box(0.12, 0.012, 0.01, 'black', [X0 + 0.3 + k * 0.11, 0.42, 8.578], null, 0.002);
+  sticker(b, [X0 + 0.25, 0.65, 8.577], [0, Math.PI, 0], 0.16, 0.07);
+  sticker(b, [X1 - 0.3, 0.65, 8.577], [0, Math.PI, 0], 0.12, 0.06);
+  // the sloped deck (local +y = deck normal)
+  b.push([(X0 + X1) / 2, 0.957, 8.89], [-0.37, 0, 0]);
+  b.box(X1 - X0 - 0.08, 0.012, 0.46, 'panelDark', [0, 0, 0], null, 0.004);
+  b.box(X1 - X0 - 0.06, 0.016, 0.02, 'steel', [0, 0.004, -0.235], null, 0.004);
+  // rod control: switch banks, T-handle, illuminated buttons
+  switchPanel(b, R, [-0.5, 0.01, -0.08], [-Math.PI / 2, 0, 0], 5, 3, 0.042);
+  switchPanel(b, R, [0.45, 0.01, -0.08], [-Math.PI / 2, 0, 0], 5, 3, 0.042);
+  for (let i = 0; i < 8; i++) for (let j = 0; j < 2; j++) b.box(0.032, 0.012, 0.026, ['ledGreen', 'ledGreen', 'ledAmber', 'ledCyan'][(i + j * 3) % 4], [-0.17 + i * 0.048, 0.012, 0.1 + j * 0.04], null, 0.004);
+  b.cyl(0.016, 0.016, 0.1, 'steel', [0.0, 0.055, -0.1], null, 10);
+  b.box(0.12, 0.022, 0.022, 'plasticK', [0.0, 0.11, -0.1], null, 0.008);
+  // SCRAM: big red button under a striped guard
+  b.box(0.16, 0.006, 0.16, 'hazard', [0.2, 0.008, -0.12], null, 0.002);
+  b.cyl(0.045, 0.05, 0.035, 'plasticR', [0.2, 0.03, -0.12], null, 20);
+  b.torus(0.062, 0.008, 'plasticY', [0.2, 0.06, -0.12], [Math.PI / 2, 0, 0], 20);
+  for (const s of [-1, 1]) b.box(0.008, 0.05, 0.008, 'plasticY', [0.2 + s * 0.062, 0.035, -0.12], null, 0);
+  // gauges and a keyboard
+  gauge(b, [-0.24, 0.02, -0.14], [-Math.PI / 2, 0, 0], 0.05);
+  gauge(b, [-0.36, 0.02, -0.14], [-Math.PI / 2, 0, 0], 0.04);
+  b.box(0.38, 0.016, 0.13, 'plasticK', [0.55, 0.012, 0.12], null, 0.006);
+  for (let i = 0; i < 12; i++) for (let j = 0; j < 4; j++) b.box(0.022, 0.008, 0.022, 'plasticW', [0.39 + i * 0.029, 0.023, 0.075 + j * 0.03], null, 0.003);
+  b.pop();
+  // bar-graph status display on the back edge (left) + the reactor monitor (right)
+  b.push([-0.18, 1.2, 9.12], [0.3, 0, 0]);
+  b.box(0.42, 0.26, 0.04, 'plasticK', [0, 0, 0], null, 0.012);
+  for (let k = 0; k < 10; k++) b.box(0.022, 0.04 + 0.13 * Math.abs(Math.sin(k * 1.7 + 0.4)), 0.004, k > 7 ? 'ledAmber' : 'ledCyan', [-0.17 + k * 0.038, -0.1 + (0.04 + 0.13 * Math.abs(Math.sin(k * 1.7 + 0.4))) / 2, -0.022], null, 0);
+  b.pop();
+  b.box(0.06, 0.22, 0.05, 'metalDark', [0.63, 1.04, 9.12], [0.3, 0, 0], 0.01);
+  monitorSlot(L, 'reactor', V(0.63, 1.2, 9.08), V(0, 0.3, -1).normalize(), V(0, 1, 0.3).normalize(), 0.36, 0.22, 'eng', 384);
+  // operator's swivel chair
+  b.cyl(0.24, 0.26, 0.03, 'metalDark', [0.2, 0.015, 8.15], null, 20);
+  b.cyl(0.03, 0.03, 0.4, 'steel', [0.2, 0.22, 8.15], null, 10);
+  b.box(0.46, 0.08, 0.44, 'fabric', [0.2, 0.46, 8.15], null, 0.04, 3);
+  b.box(0.44, 0.5, 0.07, 'fabric', [0.2, 0.75, 7.92], [-0.12, 0, 0], 0.04, 3);
+  b.colCyl(0.25, 0.5, [0.2, 0.25, 8.15]);
+  // radiation warnings either side of the viewport
+  for (const x of [-0.85, 0.85]) {
+    b.box(0.2, 0.2, 0.01, 'plasticY', [x, 1.72, Z_REACTOR_BULK - 0.095], null, 0.01);
+    b.cyl(0.03, 0.03, 0.006, 'black', [x, 1.72, Z_REACTOR_BULK - 0.1], [Math.PI / 2, 0, 0], 12);
+    for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2 + Math.PI / 2; b.cyl(0.0, 0.06, 0.006, 'black', [x + Math.cos(a) * 0.055, 1.72 + Math.sin(a) * 0.055, Z_REACTOR_BULK - 0.1], [Math.PI / 2, 0, 0], 3); }
+  }
 }
 
 export function buildAllRooms(b, L) {
