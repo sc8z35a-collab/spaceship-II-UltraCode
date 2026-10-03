@@ -2,7 +2,7 @@
 // folding rails), the coffee machine, the shower, reactor + turbine behind the viewport,
 // server LEDs, fans, pumps, O2 electrolysis column, and the EVA suit on its rack.
 import * as THREE from 'three';
-import { RoundedBoxGeometry } from './geom.js';
+import { RoundedBoxGeometry, roundedRectShape, roundedRectPath } from './geom.js';
 import { LIFT, ENG_HATCH } from './interior.js';
 import { DECK_Y, LOWER_Y, Z_REACTOR_BULK } from './hullShape.js';
 import { setLayersDeep, LAYER_NEAR } from '../core/layers.js';
@@ -67,7 +67,7 @@ export class Machines {
     const g = this.g, M = this.M;
     const cx = (LIFT.x0 + LIFT.x1) / 2, cz = (LIFT.z0 + LIFT.z1) / 2;
     const w = LIFT.x1 - LIFT.x0 - 0.04, d = LIFT.z1 - LIFT.z0 - 0.04;
-    const lift = { y: DECK_Y, target: DECK_Y, top: DECK_Y, bottom: LOWER_Y, speed: 0.13, moving: false, shaftOpen: 0, rot: 0 };
+    const lift = { y: DECK_Y, target: DECK_Y, top: DECK_Y, bottom: LOWER_Y, speed: 0.22, moving: false, shaftOpen: 0, rot: 0 };
     const plat = new THREE.Group();
     const plate = new THREE.Mesh(new RoundedBoxGeometry(w, 0.06, d, 2, 0.01), M.floor);
     plate.position.y = -0.03;
@@ -221,11 +221,22 @@ export class Machines {
     if (!p) return;
     const grp = new THREE.Group();
     grp.position.copy(p);
-    grp.rotation.y = Math.PI; // faces +z (toward the room)
-    const body = new THREE.Mesh(new RoundedBoxGeometry(0.3, 0.36, 0.3, 3, 0.03), M.plasticK);
-    body.position.y = 0.18;
+    // front (spout, window, buttons) is local -z: faces forward into the living room
+    // body: rounded back block + front frame with a real opening, so the grinder burr, the
+    // heater coil and the brew piston can be watched working through the inspection window
+    const body = new THREE.Mesh(new RoundedBoxGeometry(0.32, 0.36, 0.22, 3, 0.03), M.plasticK);
+    body.position.set(0, 0.18, 0.04);
     grp.add(body);
-    const top = new THREE.Mesh(new RoundedBoxGeometry(0.31, 0.04, 0.31, 2, 0.015), M.steel);
+    const face = roundedRectShape(0.32, 0.36, 0.03);
+    face.holes.push(roundedRectPath(0.12, 0.14, 0.012, -0.08, 0.04));
+    const faceG = new THREE.ExtrudeGeometry(face, { depth: 0.08, bevelEnabled: false, curveSegments: 6 });
+    faceG.translate(0, 0.18, -0.15);
+    grp.add(new THREE.Mesh(faceG, M.plasticK));
+    // little work light inside the cavity
+    const cavLight = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.004, 0.03), new THREE.MeshStandardMaterial({ color: 0, emissive: new THREE.Color(1, 0.88, 0.7), emissiveIntensity: 1.6 }));
+    cavLight.position.set(-0.08, 0.286, -0.1);
+    grp.add(cavLight);
+    const top = new THREE.Mesh(new RoundedBoxGeometry(0.33, 0.04, 0.31, 2, 0.015), M.steel);
     top.position.y = 0.37;
     grp.add(top);
     // bean hopper (glass) with beans
@@ -235,7 +246,7 @@ export class Machines {
     beans.position.set(0.05, 0.43, 0);
     grp.add(hop, beans);
     // inspection window showing the grinder burr, heater coil and piston
-    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.14), new THREE.MeshStandardMaterial({ color: 0x111111, transparent: true, opacity: 0.35, roughness: 0.05 }));
+    const win = new THREE.Mesh(new THREE.PlaneGeometry(0.12, 0.14), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, transparent: true, opacity: 0.16, roughness: 0.04, metalness: 0.2, depthWrite: false }));
     win.position.set(-0.08, 0.22, -0.151);
     win.rotation.y = Math.PI;
     grp.add(win);
@@ -316,8 +327,8 @@ export class Machines {
       c.pouch.visible = zeroG; c.cup.children[0].visible = !zeroG; c.fill.visible = !zeroG;
       c.fill.position.y = 0.01 + Math.min(1, c.t / 8) * 0.06;
       g.audio.noiseLoop('pump', { pos, type: 'pink', freq: 300, q: 2, gain: 0.08 });
-      if (g.fx && !zeroG && Math.random() < 0.8) g.fx.burst('coffee', pos.clone().add(V(0, 0.08, 0.17)), V(0, -1, 0), 2, { speed: 0.3, spread: 0.05, life: 0.15 });
-      if (g.fx && Math.random() < dt * 6) g.fx.burst('steam', pos.clone().add(V(0, 0.12, 0.2)), V(0, 1, 0), 1, { speed: 0.15 });
+      if (g.fx && !zeroG && Math.random() < 0.8) g.fx.burst('coffee', pos.clone().add(V(0, 0.08, -0.17)), V(0, -1, 0), 2, { speed: 0.3, spread: 0.05, life: 0.15 });
+      if (g.fx && Math.random() < dt * 6) g.fx.burst('steam', pos.clone().add(V(0, 0.12, -0.2)), V(0, 1, 0), 1, { speed: 0.15 });
       if (c.t > 8) { c.state = 'ready'; c.t = 0; g.audio.stopLoop('pump'); g.audio.beep(1500, 0.08, 0.1, { pos }); g.audio.beep(1500, 0.08, 0.1, { pos, when: 0.15 }); g.lifeSupport.water -= 0.25; }
     } else {
       c.coilMat.emissiveIntensity *= Math.exp(-dt);
