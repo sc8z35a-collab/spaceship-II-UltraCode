@@ -59,7 +59,13 @@ async function boot() {
   }
   const game = new Game(engine, earth, params);
   window.__game = game;
-  await game.init((p) => setProgress(0.65 + p * 0.35));
+  try {
+    await game.init((p) => setProgress(0.65 + p * 0.35));
+  } catch (e) {
+    console.error(e);
+    showError('ゲームの起動に失敗しました。ページを再読み込みしてください。（' + String((e && e.message) || e).slice(0, 160) + '）');
+    return;
+  }
   setProgress(1);
   const hasSave = game.save.hasSave();
   $('btn-continue').classList.toggle('hidden', !hasSave);
