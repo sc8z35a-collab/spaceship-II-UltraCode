@@ -204,7 +204,8 @@ function luxMaterials(renderer, def) {
     leather: P({ color: 0x5c3320, roughness: 0.48, clearcoat: 0.45, clearcoatRoughness: 0.35 }),
     leatherCream: P({ color: 0xe9ddc6, roughness: 0.55, clearcoat: 0.3, clearcoatRoughness: 0.4 }),
     velvet: S({ color: 0x1d4b58, roughness: 0.95 }),
-    glass: P({ color: 0xdff2ff, roughness: 0.02, transparent: true, opacity: 0.1, depthWrite: false, envMapIntensity: 1.3, side: THREE.DoubleSide }),
+    // near-black body: a window onto space must stay dark (only a faint reflective sheen)
+    glass: P({ color: 0x0b1015, roughness: 0.02, transparent: true, opacity: 0.14, depthWrite: false, envMapIntensity: 1.0, side: THREE.DoubleSide }),
     glassFloor: P({ color: 0xbfe6ff, roughness: 0.03, transparent: true, opacity: 0.16, depthWrite: false, clearcoat: 1, envMapIntensity: 1.2 }),
     crystal: P({ color: 0xffffff, roughness: 0.0, transparent: true, opacity: 0.55, envMapIntensity: 2.0, clearcoat: 1 }),
     leaf: S({ color: 0x2e6a33, roughness: 0.65, side: THREE.DoubleSide }),
