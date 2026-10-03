@@ -1,9 +1,12 @@
 name: Deploy to GitHub Pages
 
+# Runs on every push to the game branch (and main), or by hand from the Actions tab.
+# Nothing is built or deployed until GitHub Pages is switched on
+# (Settings -> Pages -> Source: "GitHub Actions"); until then the run just skips.
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'claude/zealous-maxwell-sokrta']
 
 permissions:
   contents: read
@@ -15,7 +18,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.pages.outputs.enabled }}
+    steps:
+      - id: pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh api "repos/${{ github.repository }}/pages" --silent 2>/dev/null; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::GitHub Pages is not enabled yet (Settings -> Pages -> Source: GitHub Actions)."
+          fi
   build:
+    needs: check
+    if: needs.check.outputs.enabled == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
