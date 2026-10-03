@@ -19,35 +19,62 @@ function monitorSlot(L, id, pos, n, up, w, h, room, res = 512) {
 
 // ------------------------------------------------------------------ cockpit
 function consoleSweep(b, C, R0, a0, a1, profile, key, steps = 40) {
-  const pos = [];
-  const ring = (a) => {
-    const d = V(Math.sin(a), 0, -Math.cos(a));
-    return profile.map(([r, y]) => C.clone().addScaledVector(d, R0 + r).setY(y));
-  };
-  let prev = ring(a0);
-  for (let i = 1; i <= steps; i++) {
-    const cur = ring(a0 + (a1 - a0) * (i / steps));
-    for (let k = 0; k < profile.length; k++) {
-      const k2 = (k + 1) % profile.length;
-      const A = prev[k], B = prev[k2], Cc = cur[k], D = cur[k2];
-      pos.push(...A.toArray(), ...B.toArray(), ...D.toArray(), ...A.toArray(), ...D.toArray(), ...Cc.toArray());
+  // revolve the closed (r, y) profile around the vertical axis through C. Each profile edge
+  // gets its own vertices (crisp edges between faces, smooth shading along the arc) and is
+  // wound so that it faces outward whichever way round the profile was written.
+  const n = profile.length;
+  let area = 0;
+  for (let k = 0; k < n; k++) { const [r0, y0] = profile[k], [r1, y1] = profile[(k + 1) % n]; area += r0 * y1 - r1 * y0; }
+  const ccw = area > 0;
+  const dirAt = (a) => V(Math.sin(a), 0, -Math.cos(a));
+  const pos = [], nrm = [], idx = [];
+  for (let k = 0; k < n; k++) {
+    const [r0, y0] = profile[k], [r1, y1] = profile[(k + 1) % n];
+    const dr = r1 - r0, dy = y1 - y0, len = Math.hypot(dr, dy) || 1;
+    const nr = (ccw ? dy : -dy) / len, ny = (ccw ? -dr : dr) / len;
+    const base = pos.length / 3;
+    for (let i = 0; i <= steps; i++) {
+      const d = dirAt(a0 + (a1 - a0) * (i / steps));
+      const N = d.clone().multiplyScalar(nr).add(V(0, ny, 0)).normalize();
+      for (const [r, y] of [[r0, y0], [r1, y1]]) {
+        const p = C.clone().addScaledVector(d, R0 + r).setY(y);
+        pos.push(p.x, p.y, p.z);
+        nrm.push(N.x, N.y, N.z);
+      }
     }
-    prev = cur;
+    // pick the winding whose geometric normal agrees with the outward normal
+    const P = (j) => V(pos[(base + j) * 3], pos[(base + j) * 3 + 1], pos[(base + j) * 3 + 2]);
+    const mid = Math.floor(steps / 2) * 2;
+    const g0 = P(mid + 1).sub(P(mid)).cross(P(mid + 2).sub(P(mid)));
+    const Nm = V(nrm[(base + mid) * 3], nrm[(base + mid) * 3 + 1], nrm[(base + mid) * 3 + 2]);
+    const flip = g0.dot(Nm) < 0;
+    for (let i = 0; i < steps; i++) {
+      const A = base + i * 2, B = A + 1, Cc = A + 2, D = A + 3;
+      if (!flip) idx.push(A, B, Cc, B, D, Cc);
+      else idx.push(A, Cc, B, B, Cc, D);
+    }
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  g.setIndex(idx);
   b.add(g, key);
-  // end caps
+  // end caps (built in a right-handed frame, then turned to face outward at each end)
   for (const a of [a0, a1]) {
-    const pts = ring(a);
     const shape = new THREE.Shape(profile.map(([r, y]) => new THREE.Vector2(r, y)));
     const cap = new THREE.ShapeGeometry(shape);
-    const d = V(Math.sin(a), 0, -Math.cos(a));
-    const side = V(Math.cos(a), 0, Math.sin(a));
-    const m = new THREE.Matrix4().makeBasis(d, V(0, 1, 0), side.clone().multiplyScalar(a === a0 ? -1 : 1));
+    const d = dirAt(a);
+    const side = V(Math.cos(a), 0, Math.sin(a));   // = d x up: direction of increasing a
+    const m = new THREE.Matrix4().makeBasis(d, V(0, 1, 0), side);
     m.setPosition(C.clone().addScaledVector(d, R0));
     cap.applyMatrix4(m);
+    if (a === a0) {
+      // the start cap must face towards decreasing a: reverse its winding and normals
+      const ix = cap.index.array;
+      for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; }
+      const na = cap.attributes.normal;
+      for (let i = 0; i < na.count; i++) na.setXYZ(i, -na.getX(i), -na.getY(i), -na.getZ(i));
+    }
     b.add(cap, key);
   }
 }

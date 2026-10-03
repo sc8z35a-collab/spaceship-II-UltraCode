@@ -77,8 +77,8 @@ export class Space {
     const sc = this.sunLight.shadow.camera;
     sc.left = -16; sc.right = 16; sc.top = 16; sc.bottom = -16; sc.near = 1; sc.far = 80;
     this.sunLight.shadow.mapSize.set(4096, 4096);
-    this.sunLight.shadow.bias = -0.0004;
-    this.sunLight.shadow.normalBias = 0.025;
+    this.sunLight.shadow.bias = -0.0006;
+    this.sunLight.shadow.normalBias = 0.045;
     this.sunLight.shadow.radius = 3;
     this.sunLight.layers.enableAll();
     scene.add(this.sunLight);
