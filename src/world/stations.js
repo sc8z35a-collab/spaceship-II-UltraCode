@@ -5,6 +5,8 @@ import * as THREE from 'three';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
 import { Builder, rng } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR, setLayersDeep } from '../core/layers.js';
+import { elevatorAxis } from './elevator.js';
+import { LOBBY, lobbyShellExterior } from './stationLobby.js';
 
 /** reference plane defined from the canonical start state (deterministic) */
 export function referenceFrame(startTime) {
@@ -22,13 +24,25 @@ export function referenceFrame(startTime) {
 
 export const STATION_DEFS = [
   // Shirasagi is the orbital port B-29 just left: same orbit, a few kilometres ahead at the start
-  { id: 'shirasagi', name: 'シラサギ・ステーション', en: 'SHIRASAGI', alt: 420e3, phase: 0.011, size: 1.0, kind: 'hub' },
+  { id: 'shirasagi', name: 'シラサギ・ステーション', jp: '白鷺', en: 'SHIRASAGI', alt: 420e3, phase: 0.011, size: 1.0, kind: 'hub' },
+  // the space elevator's low station: built around the ribbon at 420 km; it turns with the Earth
+  // instead of orbiting, so it is not weightless (about 0.88 g)
+  { id: 'mihashira', name: '天の御柱 低軌道ステーション', jp: '天の御柱', en: 'MIHASHIRA', alt: 420e3, size: 1.0, kind: 'hub', tether: true },
   { id: 'nagi', name: 'ナギ中継局', en: 'NAGI RELAY', alt: 515e3, phase: -9, size: 0.7, kind: 'relay' },
   { id: 'kaguya', name: 'カグヤ中継基地', en: 'KAGUYA', alt: 2000e3, phase: 40, size: 1.2, kind: 'relay' },
-  // the geostationary port hangs on the space elevator's ribbon (turns with the Earth)
-  { id: 'amaterasu', name: 'アマテラス静止港', en: 'AMATERASU GEO', alt: 35786e3, phase: 0, size: 1.6, kind: 'hub', geoLon: 146.5 },
+  // the geostationary port on the same ribbon
+  { id: 'amaterasu', name: 'アマテラス静止港', jp: '天照', en: 'AMATERASU GEO', alt: 35786e3, phase: 0, size: 1.6, kind: 'hub', tether: true },
   { id: 'tsukuyomi', name: 'ツクヨミ・ドック（修理基地）', en: 'TSUKUYOMI DOCK', alt: 260000e3, phase: 200, size: 2.2, kind: 'dock' },
 ];
+
+/**
+ * Hub stations are all built to one plan around the grand lobby module: its axis runs along the
+ * station's z at LOBBY_AT (station-local, y radial up, -z along the station's motion). B-29 docks
+ * with its airlock to the lobby's docking tunnel; its origin then sits at DOCK_AT with the same
+ * orientation as the station. Nothing else of the station comes near that parking space.
+ */
+export const LOBBY_AT = new THREE.Vector3(-24, 0, 0);
+export const DOCK_AT = new THREE.Vector3(LOBBY_AT.x - LOBBY.xc, LOBBY_AT.y - LOBBY.yc, LOBBY_AT.z - (LOBBY.z0 + LOBBY.z1) / 2);
 
 // ---------------------------------------------------------------------------- station models
 function solarTexture() {
@@ -62,7 +76,31 @@ export function stationMaterials() {
     flood: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.95, 0.97, 1), emissiveIntensity: 5 }),
     dish: new THREE.MeshStandardMaterial({ color: 0xeceee8, roughness: 0.55, metalness: 0.1 }),
     radiatorPanel: new THREE.MeshStandardMaterial({ color: 0xf0f0ea, roughness: 0.42, metalness: 0.05 }),
+    dome: new THREE.MeshPhysicalMaterial({ color: 0xcfe6ff, roughness: 0.04, metalness: 0.0, transparent: true, opacity: 0.22, depthWrite: false, clearcoat: 1, side: THREE.DoubleSide }),
+    garden: new THREE.MeshStandardMaterial({ color: 0x1d4a22, emissive: new THREE.Color(0.18, 0.55, 0.22), emissiveIntensity: 1.1, roughness: 0.8 }),
+    gardenLamp: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.86, 0.6), emissiveIntensity: 3.0 }),
+    lobbyGlow: new THREE.MeshStandardMaterial({ color: 0x111111, emissive: new THREE.Color(1.0, 0.78, 0.5), emissiveIntensity: 2.6, roughness: 0.2 }),
+    cyanGlow: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.35, 0.8, 1.0), emissiveIntensity: 2.4 }),
+    whitePanel: new THREE.MeshStandardMaterial({ color: 0xf4f5f2, roughness: 0.45, metalness: 0.08 }),
   };
+}
+
+function nameSignMaterial(def) {
+  const c = document.createElement('canvas');
+  c.width = 2048; c.height = 512;
+  const g = c.getContext('2d');
+  g.fillStyle = '#05070a'; g.fillRect(0, 0, 2048, 512);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#f2f6ff';
+  g.font = '200 230px "Helvetica Neue", Helvetica, Arial, sans-serif';
+  g.fillText((def.en || '').split(' ')[0], 1024, 210);
+  g.fillStyle = '#ffd38a';
+  g.font = '500 110px "Hiragino Mincho ProN", "Yu Mincho", "Noto Serif JP", serif';
+  g.fillText(def.jp || def.name || '', 1024, 420);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return new THREE.MeshStandardMaterial({ color: 0x000000, map: t, emissiveMap: t, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 2.2 });
 }
 
 /** square lattice truss along local z (length L, width w), centred at the builder origin */
@@ -193,6 +231,167 @@ function stationModel(def, M) {
   return g;
 }
 
+/**
+ * Hub station (Shirasagi, the elevator stations): a long spine with a big core, the grand lobby
+ * module where B-29 docks, a glass garden dome at the bow, a rotating habitat ring at the stern,
+ * hotel towers, four solar wings, radiators, lit windows everywhere and the station's name in light.
+ * Returns the group; userData has the collision proxies (station-local), the lobby shell (hidden
+ * while the viewer is inside the lobby), strobe spots and the rotating ring.
+ */
+function hubModel(def, M) {
+  const b = new Builder();
+  const P = [];
+  const V3 = (a) => new THREE.Vector3(a[0], a[1], a[2]);
+  const cap = (a, c, r) => P.push({ type: 'capsule', a: V3(a), b: V3(c), r });
+  const sph = (c, r) => P.push({ type: 'sphere', c: V3(c), r });
+  const box = (c, h) => P.push({ type: 'box', c: V3(c), h: V3(h) });
+  const strobes = [];
+  const tether = !!def.tether;
+  const R = rng(def.id.length * 97 + 13);
+
+  // ---- spine
+  truss(b, 230, 4.6, 0.34);
+  box([0, 0, 0], [2.7, 2.7, 116]);
+  // ---- core: big sphere with window bands, node modules on the spine
+  const coreR = tether ? 10.5 : 8.5;
+  b.sphere(coreR, 'hull', [0, 0, 0], 48);
+  for (const y of [-0.35, 0.35]) b.torus(coreR * Math.cos(y) + 0.05, 0.16, 'gold', [0, coreR * Math.sin(y), 0], [Math.PI / 2, 0, 0], 64);
+  for (let k = 0; k < 48; k++) {
+    const a = k / 48 * Math.PI * 2;
+    for (const y of [-0.15, 0.15]) {
+      const rr = coreR * Math.cos(y) + 0.02;
+      b.box(0.9, 0.55, 0.16, 'lobbyGlow', [Math.cos(a) * rr, coreR * Math.sin(y), Math.sin(a) * rr], [0, -a + Math.PI / 2, 0], 0.05);
+    }
+  }
+  sph([0, 0, 0], coreR + 0.4);
+  for (const z of [-24, 22]) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
+  // ---- elevator terminal: the ribbon runs up the axis of this tower (station y)
+  if (tether) {
+    b.cyl(6.6, 6.6, 96, 'hull', [0, 0, 0], null, 48, true);
+    for (const y of [-48, 48]) { b.cyl(y > 0 ? 3 : 6.6, y > 0 ? 6.6 : 3, 7, 'hullDark', [0, y + Math.sign(y) * 3.5, 0], null, 48); b.torus(5.2, 0.5, 'hullOrange', [0, y + Math.sign(y) * 7.5, 0], [Math.PI / 2, 0, 0], 48); }
+    for (let y = -44; y <= 44; y += 8) b.torus(6.7, 0.14, 'gold', [0, y, 0], [Math.PI / 2, 0, 0], 64);
+    for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; for (let y = -40; y <= 40; y += 8) b.box(0.6, 3.2, 0.14, 'lobbyGlow', [Math.cos(a) * 6.66, y, Math.sin(a) * 6.66], [0, -a + Math.PI / 2, 0], 0.04); }
+    // climber berths: two climbers parked on the ribbon, above and below
+    for (const y of [64, -64]) {
+      b.cyl(3.1, 3.1, 4.4, 'hull', [0, y, 0], null, 36);
+      b.sphere(3.1, 'hull', [0, y + 2.2, 0], 32, [1, 0.42, 1]);
+      b.sphere(3.1, 'hull', [0, y - 2.2, 0], 32, [1, 0.42, 1]);
+      for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; b.box(0.7, 0.9, 0.2, 'windowLit', [Math.cos(a) * 3.12, y + 0.4, Math.sin(a) * 3.12], [0, -a + Math.PI / 2, 0], 0.05); }
+      b.torus(1.6, 0.14, 'gold', [0, y + 3.7, 0], [Math.PI / 2, 0, 0], 24);
+      b.torus(1.6, 0.14, 'gold', [0, y - 3.7, 0], [Math.PI / 2, 0, 0], 24);
+      cap([0, y - 4, 0], [0, y + 4, 0], 3.4);
+    }
+    cap([0, -56, 0], [0, 56, 0], 7.2);
+  }
+  // ---- the grand lobby (B-29's berth) and the service tube to the core under its floor
+  const L = LOBBY_AT;
+  const shell = new Builder();
+  lobbyShellExterior(shell, L.x, L.y, L.z);
+  const RO = LOBBY.R + 0.36;
+  const shellPt = (th, z) => [L.x + RO * Math.cos(th), L.y + RO * Math.sin(th), L.z + z];
+  // warm window glows where the lobby has windows (same angles as inside)
+  for (const [z0, z1] of [[-10.9, -6.9], [-6.3, -2.3], [-1.7, 2.3], [2.9, 6.9]]) for (let k = 0; k < 6; k++) {
+    const th = (-6 + 34 * (k + 0.5) / 6) * Math.PI / 180;
+    shell.box(0.12, RO * 0.095, z1 - z0, 'lobbyGlow', shellPt(th, (z0 + z1) / 2 + 2), [0, 0, th], 0.02);
+  }
+  for (const [z0, z1] of [[-10.4, -6.8], [-4.4, -0.4], [2.0, 5.6]]) shell.box(3.2, 0.12, z1 - z0, 'lobbyGlow', [L.x, L.y + RO, L.z + (z0 + z1) / 2 + 2], null, 0.02);
+  for (const [z0, z1] of [[-10.8, -6.2], [3.0, 7.0]]) for (let k = 0; k < 4; k++) { const th = (151 + 20 * (k + 0.5) / 4) * Math.PI / 180; shell.box(0.12, RO * 0.085, z1 - z0, 'lobbyGlow', shellPt(th, (z0 + z1) / 2 + 2), [0, 0, th], 0.02); }
+  // docking collar where B-29's tunnel enters the lobby
+  shell.torus(1.45, 0.16, 'hullOrange', [L.x - Math.sqrt(RO * RO - 1.03 * 1.03), L.y - 1.03, L.z + 0.95], [0, Math.PI / 2, 0], 32);
+  const shellGroup = shell.build(M, { castShadow: false });
+  P.push({ type: 'cyl', a: new THREE.Vector3(L.x, L.y, L.z - 12.6), b: new THREE.Vector3(L.x, L.y, L.z + 12.6), r: RO + 0.08 });
+  b.cyl(1.6, 1.6, Math.abs(L.x) - RO - coreR + 1.5, 'hull', [(L.x + RO - coreR) / 2 - 0.75, L.y - 3.0, L.z], [0, 0, Math.PI / 2], 24);
+  b.torus(1.7, 0.12, 'gold', [L.x + RO + 0.6, L.y - 3.0, L.z], [0, Math.PI / 2, 0], 24);
+  cap([L.x + RO - 0.5, L.y - 3, L.z], [-coreR + 0.5, L.y - 3, L.z], 1.8);
+  // floodlights on the core and the spine light up the lobby module and the parked ship
+  for (const [x, y, z] of [[-coreR * 0.7, 4, 6], [-coreR * 0.7, -4, -6], [-3, 3.2, 26], [-3, -3.2, -26]]) b.cyl(0.55, 0.55, 0.14, 'flood', [x, y, z], [0, 0, Math.PI / 2], 14);
+
+  // ---- garden dome at the bow
+  const GD = [0, 0, -78];
+  b.sphere(14, 'dome', GD, 48);
+  b.sphere(12.6, 'garden', [GD[0], GD[1] - 6.5, GD[2]], 40, [1, 0.42, 1]);
+  for (let k = 0; k < 7; k++) b.torus(14.02, 0.12, 'metal', GD, [0, k / 7 * Math.PI, 0], 64);
+  b.torus(14.05, 0.3, 'gold', GD, [Math.PI / 2, 0, 0], 64);
+  for (let k = 0; k < 24; k++) { const a = R() * Math.PI * 2, r = R() * 9; b.sphere(0.35 + R() * 0.3, 'gardenLamp', [GD[0] + Math.cos(a) * r, GD[1] - 1.5 + R() * 2, GD[2] + Math.sin(a) * r], 8); }
+  for (let k = 0; k < 30; k++) { const a = R() * Math.PI * 2, r = R() * 10; b.sphere(1.0 + R() * 1.4, 'garden', [GD[0] + Math.cos(a) * r, GD[1] - 2.5 + R() * 2.5, GD[2] + Math.sin(a) * r], 10, [1, 1.4, 1]); }
+  b.cyl(3.5, 3.5, 8, 'hullDark', [0, 0, GD[2] + 16], [Math.PI / 2, 0, 0], 32);
+  sph(GD, 14.4);
+
+  // ---- habitat ring (turns) at the stern
+  // (built into its own group below)
+
+  // ---- hotel towers off the core aft: up, down, starboard (never toward B-29's berth on -x)
+  for (const [rot, pos] of [[[-Math.PI / 2, 0, 0], [0, 19, 12]], [[Math.PI / 2, 0, 0], [0, -19, 12]], [[0, Math.PI / 2, 0], [19, 0, 12]]]) {
+    b.push(pos, rot);
+    module(b, 3.6, 24, 'hull', 10);
+    for (let k = 0; k < 10; k++) b.torus(3.66, 0.06, 'gold', [0, 0, -10 + k * 2.2], [0, 0, 0], 40);
+    b.pop();
+    const dir = new THREE.Vector3(0, 0, 1).applyEuler(new THREE.Euler(rot[0], rot[1], rot[2], 'YXZ'));
+    const c = new THREE.Vector3(...pos);
+    cap(c.clone().addScaledVector(dir, -13).toArray(), c.clone().addScaledVector(dir, 13).toArray(), 4.0);
+  }
+
+  // ---- solar wings (four per boom) and radiators
+  for (const z of [-104, 104]) {
+    b.push([0, 0, z], [0, Math.PI / 2, 0]);
+    truss(b, 176, 3.2, 0.26);
+    b.pop();
+    box([0, 0, z], [88, 1.8, 1.8]);
+    for (const side of [-1, 1]) for (const k of [0, 1]) {
+      const x = side * (16 + k * 36);
+      b.box(32, 0.14, 15, 'solarPanel', [x, 0, z + (k ? 9 : -9)], null, 0);
+      b.box(32, 0.24, 0.3, 'metalDark', [x, 0, z + (k ? 9 : -9)], null, 0);
+      for (let m = 0; m <= 4; m++) b.box(0.2, 0.2, 15, 'metalDark', [x - 16 + m * 8, 0, z + (k ? 9 : -9)], null, 0);
+      box([x, 0, z + (k ? 9 : -9)], [16.2, 0.4, 7.7]);
+    }
+  }
+  for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); }
+  // ---- antennas, dishes, docked visitor, nav lights, strobes
+  dish(b, 5.0, [6, 7, -100], [0, 0, -0.6]);
+  dish(b, 3.0, [-6, 6, -96], [0.3, 0, 0.7]);
+  box([0, 6, -98], [9, 5, 5]);
+  b.cyl(1.6, 1.6, 7, 'hull', [0, coreR + 4.2, -6], null, 24);
+  b.cyl(0.45, 1.6, 2.4, 'hull', [0, coreR + 8.9, -6], null, 24);
+  b.box(7.5, 2.2, 0.15, 'solarPanel', [0, coreR + 4.2, -6], null, 0);
+  cap([0, coreR, -6], [0, coreR + 10, -6], 2.2);
+  for (const z of [115, -115]) for (const [x, y] of [[2.4, 2.4], [-2.4, -2.4]]) { b.sphere(0.5, 'strobe', [x, y, z], 10); strobes.push([x, y, z]); }
+  b.sphere(0.45, 'navR', [-2.4, 2.4, 115], 10);
+  b.sphere(0.45, 'navG', [2.4, -2.4, 115], 10);
+  // the name in light, on the core facing B-29's berth and facing the bow
+  const sign = nameSignMaterial(def);
+  b.push([-coreR - 0.3, coreR * 0.55, 0], [0, -Math.PI / 2, 0]);
+  b.add(new THREE.PlaneGeometry(16, 4), 'nameSign');
+  b.pop();
+  b.push([0, coreR * 0.55, -coreR - 0.3], [0, Math.PI, 0]);
+  b.add(new THREE.PlaneGeometry(16, 4), 'nameSign');
+  b.pop();
+  const g = b.build(Object.assign({}, M, { nameSign: sign }), { castShadow: false });
+  g.add(shellGroup);
+  // ---- rotating habitat ring
+  const rb = new Builder();
+  rb.torus(58, 3.6, 'hull', [0, 0, 0], [0, 0, 0], 128);
+  rb.torus(58, 3.7, 'gold', [0, 0, 2.2], [0, 0, 0], 128);
+  rb.torus(58, 3.7, 'gold', [0, 0, -2.2], [0, 0, 0], 128);
+  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; rb.cyl(1.0, 1.0, 50, 'hullDark', [Math.cos(a) * 29, Math.sin(a) * 29, 0], [0, 0, a - Math.PI / 2], 12); }
+  rb.cyl(5.2, 5.2, 8, 'hull', [0, 0, 0], [Math.PI / 2, 0, 0], 32);
+  for (let k = 0; k < 180; k++) {
+    const a = k / 180 * Math.PI * 2;
+    rb.box(0.6, 1.4, 0.8, 'windowLit', [Math.cos(a) * 54.35, Math.sin(a) * 54.35, (k % 2 ? 1 : -1) * 1.0], [0, 0, a], 0.05);
+  }
+  for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2 + 0.4; rb.sphere(0.5, 'strobe', [Math.cos(a) * 61.8, Math.sin(a) * 61.8, 0], 10); }
+  const ring = rb.build(M, { castShadow: false });
+  ring.position.set(0, 0, 44);
+  g.add(ring);
+  for (let k = 0; k < 28; k++) { const a = k / 28 * Math.PI * 2; sph([Math.cos(a) * 58, Math.sin(a) * 58, 44], 4.3); }
+  g.userData.ring = ring;
+  g.userData.strobes = strobes;
+  g.userData.radius = 150;
+  g.userData.proxies = P;
+  g.userData.lobbyShell = shellGroup;
+  g.userData.hub = true;
+  return g;
+}
+
 function relayModel(M) {
   const b = new Builder();
   b.box(1.6, 1.6, 2.4, 'mli', [0, 0, 0], null, 0.08);
@@ -219,7 +418,7 @@ export class Stations {
       return { ...d, r, n: Math.sqrt(MU_EARTH / (r * r * r)), phi0: d.phase * Math.PI / 180, pos: new THREE.Vector3(), vel: new THREE.Vector3(), model: null };
     });
     for (const s of this.list) {
-      s.model = stationModel(s, M);
+      s.model = s.kind === 'hub' ? hubModel(s, M) : stationModel(s, M);
       s.model.matrixAutoUpdate = false;
       s.model.visible = false;
       setLayersDeep(s.model, LAYER_MID);
@@ -334,8 +533,8 @@ export class Stations {
 
   /** ECI position / velocity of a named station at time t (ms) */
   posOf(s, t, pos, vel) {
-    if (s.geoLon !== undefined) {
-      ecefToEci(latLonToUnit(0, s.geoLon * Math.PI / 180), gmst(t), pos).normalize().multiplyScalar(s.r);
+    if (s.tether) {
+      elevatorAxis(t, pos).multiplyScalar(s.r);
       if (vel) vel.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
       return pos;
     }
@@ -366,11 +565,11 @@ export class Stations {
       s.model.visible = vis;
       if (vis) {
         // orient: long axis along velocity, up radial
-        const up = s.pos.clone().normalize();
-        const z = s.vel.clone().normalize().negate();
-        const x = new THREE.Vector3().crossVectors(up, z).normalize();
-        s.model.matrix.makeBasis(x, up, z).setPosition(rel);
+        const q = this.frameOf(s, s.quat || (s.quat = new THREE.Quaternion()));
+        s.model.matrix.compose(rel, q, new THREE.Vector3(1, 1, 1));
         s.model.matrixWorld.copy(s.model.matrix);
+        const shell = s.model.userData.lobbyShell;
+        if (shell) shell.visible = this.shellHiddenFor !== s.id;
         const ring = s.model.userData.ring;
         if (ring) { ring.rotation.z += dt * 0.12; ring.updateMatrix(); }
         s.model.updateMatrixWorld(true);
@@ -430,6 +629,14 @@ export class Stations {
   }
 
   byId(id) { return this.list.find((s) => s.id === id); }
+
+  /** station orientation (ECI): y radial up, -z along its motion, x = y cross z */
+  frameOf(s, out = new THREE.Quaternion()) {
+    const up = s.pos.clone().normalize();
+    const z = s.vel.clone().addScaledVector(up, -s.vel.dot(up)).normalize().negate();
+    const x = new THREE.Vector3().crossVectors(up, z).normalize();
+    return out.setFromRotationMatrix(new THREE.Matrix4().makeBasis(x, up, z));
+  }
 
   /** nearest relay distance (for 5G signal) */
   nearestRelay(shipPos) {

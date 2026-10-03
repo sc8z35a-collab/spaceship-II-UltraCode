@@ -34,6 +34,7 @@ export class SaveSystem {
       hatch: { open: g.hatch.open, target: g.hatch.target, dogs: g.hatch.dogs },
       lift: g.lift ? g.lift.y : 0,
       ap: g.autopilot.state !== 'off' && g.autopilot.target ? g.autopilot.target.id : null,
+      dock: g.docking ? g.docking.serialize() : null,
       sys: g.systems.serializeState(),
       ast: { timer: g.asteroids.timer, micro: g.asteroids.microTimer },
       dead: g.player.state === 'dead',
@@ -78,7 +79,9 @@ export class SaveSystem {
     if (d.ast) { g.asteroids.timer = d.ast.timer; g.asteroids.microTimer = d.ast.micro; }
     // ---- the world did not stop: simulate the elapsed real time
     const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - d.wall) / 1000));
-    this.offline = this.catchUp(gap, d.ap);
+    this.offline = this.catchUp(gap, d.dock ? null : d.ap);
+    // docked: the ship rode along with the station the whole time
+    if (d.dock && g.docking) g.docking.redock(d.dock);
     return true;
   }
 

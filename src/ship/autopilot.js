@@ -1,7 +1,7 @@
 // Autopilot: flies B-29 to a station (works with ULTRA), slews the nose toward the target,
 // decelerates for arrival and then holds station; the repair dock can be docked with.
 import * as THREE from 'three';
-import { MU_EARTH, R_EARTH } from '../core/astro.js';
+import { MU_EARTH, R_EARTH, OMEGA_EARTH } from '../core/astro.js';
 
 export class Autopilot {
   constructor(game) {
@@ -15,6 +15,7 @@ export class Autopilot {
   engage(stationId) {
     const s = this.g.stations.byId(stationId);
     if (!s) return false;
+    if (this.g.docking && this.g.docking.state !== 'free') { this.g.asphalt && this.g.asphalt.say('st_docked_ap', {}, { force: true }); return false; }
     if (this.g.systems.serversHealth !== undefined && this.g.systems.serversHealth < 0.25) { this.g.asphalt && this.g.asphalt.say('autopilot_fail'); return false; }
     this.target = s;
     this.state = 'cruise';
@@ -50,7 +51,23 @@ export class Autopilot {
     const a = 0.55;
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
     let v, moveDir;
-    if (dist < 40000) {
+    if (s.tether && dist >= 40000) {
+      // stations on the space elevator turn with the Earth: fly the great circle at constant
+      // altitude in the Earth-turning frame (the orbital speed is shed on the way)
+      this.state = 'cruise';
+      const up = f.pos.clone().normalize();
+      const tdir = s.pos.clone().normalize();
+      const hdir = tdir.clone().addScaledVector(up, -tdir.dot(up));
+      if (hdir.lengthSq() < 1e-12) hdir.set(0, 0, 0); else hdir.normalize();
+      const arc = Math.acos(Math.max(-1, Math.min(1, up.dot(tdir)))) * f.pos.length();
+      const dr = s.pos.length() - f.pos.length();
+      v = Math.min(vmax, Math.sqrt(2 * a * Math.max(0, arc - 30000)) + 20);
+      const base = new THREE.Vector3(OMEGA_EARTH * f.pos.z, 0, -OMEGA_EARTH * f.pos.x);
+      const close = hdir.clone().multiplyScalar(v).addScaledVector(up, Math.max(-25, Math.min(25, dr * 0.01)));
+      f.autopilot.vRel.copy(base).add(close).sub(vRefHere);
+      moveDir = close.clone().normalize();
+      this.eta = arc / Math.max(v, 1);
+    } else if (dist < 40000) {
       // close in: match the target's real motion and close straight in
       v = Math.min(vmax, Math.sqrt(Math.max(0, 2 * a * (dist - standoff))));
       if (this.state === 'hold' && dist < standoff + 300) v = 0;            // keep station (hysteresis)

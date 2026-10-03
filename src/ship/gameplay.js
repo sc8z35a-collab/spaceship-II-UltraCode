@@ -383,7 +383,7 @@ export class Gameplay {
     // inside / outside the pressure hull
     const [bot, top] = heightRangeAt(p.z, p.x, 0);
     const hw = halfWidthAt(p.z, p.y, 0);
-    const insideHull = p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top;
+    const insideHull = (p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || g.docking.contains(p);
     const wasOut = pl.outside;
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {
@@ -791,7 +791,7 @@ export class Gameplay {
     const g = this.g, f = g.flight;
     const q = f.heatFlux;
     // outside air pressure for the life support
-    g.lifeSupport.ambient = f.alt < 100000 ? 101.325 * Math.exp(-Math.max(0, f.alt - HULL_BOTTOM) / 8434) : 0;
+    g.lifeSupport.ambient = g.docking.docked ? 101.3 : f.alt < 100000 ? 101.325 * Math.exp(-Math.max(0, f.alt - HULL_BOTTOM) / 8434) : 0;
     const heat = Math.max(0, Math.min(1.6, (f.hullTemp - 650) / 900));
     const vAir = V(7.292e-5 * f.pos.z, 0, -7.292e-5 * f.pos.x);
     const travel = f.vel.clone().sub(vAir).applyQuaternion(f.quat.clone().invert());

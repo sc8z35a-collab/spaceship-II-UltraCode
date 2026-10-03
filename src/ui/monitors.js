@@ -375,6 +375,12 @@ export class Monitors {
     if (ap.state === 'hold' && ap.target && ap.target.kind === 'dock') {
       K.button(12, H - 54, 130, 22, 'ドッキング・修理', () => g.systems.dockRepair(), { style: 'warn', size: 10 });
     }
+    // docking with a hub station (walk into its lobby)
+    const dk = g.docking;
+    if (dk && (dk.state !== 'free' || dk.candidate())) {
+      const lbl = { free: 'ドッキング', approach: 'ドッキング中…（中止）', docked: '離脱（アンドック）', leaving: '離脱中…' }[dk.state];
+      K.button(88, H - 26, 150, 22, lbl, () => dk.request(), { style: dk.state === 'docked' ? 'on' : dk.state === 'free' ? 'warn' : 'normal', size: 10 });
+    }
   }
 
   // ------------------------------------------------------------------ SYSTEMS (schematic)

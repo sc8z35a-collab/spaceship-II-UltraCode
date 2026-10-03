@@ -23,6 +23,7 @@ import { Stations } from './world/stations.js';
 import { SpaceElevator } from './world/elevator.js';
 import { LightShafts } from './ship/lightShafts.js';
 import { Autopilot } from './ship/autopilot.js';
+import { Docking } from './world/docking.js';
 import { Asteroids } from './world/asteroids.js';
 import { Monitors } from './ui/monitors.js';
 import { Machines } from './ship/machines.js';
@@ -94,6 +95,7 @@ export class Game {
     this.elevator = new SpaceElevator(this.engine, this.stations.M);
     this.shafts = new LightShafts(this.shipVis.root);
     this.autopilot = new Autopilot(this);
+    this.docking = new Docking(this);
     this.asteroids = new Asteroids(this);
     this.asteroids.setHull(this.shipVis.exterior.children.filter((m) => m.isMesh && !m.material.transparent));
     this.asphalt = new Asphalt(this);
@@ -217,7 +219,8 @@ export class Game {
     }
     // ---- flight
     this.autopilot.update(sdt);
-    this.flight.step(sdt, flightIn, (pos) => this.terrainAt(pos));
+    if (!this.docking.preStep(sdt)) this.flight.step(sdt, flightIn, (pos) => this.terrainAt(pos));
+    this.docking.postStep(sdt);
     // apparent gravity in the ship frame
     const qInv = this.flight.quat.clone().invert();
     this.gLocal.copy(this.flight.properAcc).negate().applyQuaternion(qInv);
@@ -316,6 +319,8 @@ export class Game {
     cam.matrix.compose(this.camWorld, this.camQuat, new THREE.Vector3(1, 1, 1));
     // world
     this.space.update(f.pos, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
+    // inside the docked station's lobby its outer shell is hidden so the windows look out
+    this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
     this.stations.update(this.time, f.pos, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
     this.elevator.update(this.time, f.pos, this.camWorld, this.space.sunDir, dt);

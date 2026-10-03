@@ -177,6 +177,7 @@ export class ShipSystems {
 
   toggleUltra() {
     const f = this.g.flight;
+    if (this.g.docking && this.g.docking.state !== 'free' && !f.ultra) { this.g.asphalt.say('st_docked_ultra', {}, { force: true }); return; }
     f.setUltra(!f.ultra);
   }
 
@@ -329,6 +330,7 @@ export class ShipSystems {
       slot.f = slot.out ? slot.f - dt * 2.5 : Math.min(1, slot.f + dt * 1.5);
       if (slot.f <= 0 && slot.out) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; continue; }
       slot.light.position.copy(L.pos);
+      slot.light.distance = L.range || 7;
       slot.light.color.set(this.lightMode === 'night' ? 0xff3020 : L.color);
       // master alarm: emergency red wash pulsing with the siren
       if (on) slot.light.color.lerp(ALARM_RED, 0.18 + 0.3 * pulse);
