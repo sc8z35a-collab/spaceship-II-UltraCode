@@ -16,6 +16,12 @@ export class Kit {
     this.s = this.W / 512; // scale unit
   }
 
+  /** re-read the canvas size (the canvas is enlarged while a monitor is being looked at closely) */
+  resize() {
+    this.W = this.c.width; this.H = this.c.height;
+    this.s = this.W / 512;
+  }
+
   begin(bg = COL.bg) {
     const g = this.g;
     this.buttons.length = 0;

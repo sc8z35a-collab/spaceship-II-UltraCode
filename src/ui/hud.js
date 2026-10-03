@@ -33,17 +33,23 @@ export class Hud {
     const st = g.player.state;
     const floating = st === 'float' || st === 'eva';
     const climb = !!g.player.canClimb;
-    this.show('up', g.mode === 'walk' && (floating || climb));
-    this.show('down', g.mode === 'walk' && (floating || climb));
-    this.show('exit', st === 'seated' || g.mode === 'camera');
-    this.show('cam', g.mode === 'pilot' || g.mode === 'camera');
-    this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk');
+    const foc = !!(g.focus && !g.focus.out);
+    this.show('up', g.mode === 'walk' && !foc && (floating || climb));
+    this.show('down', g.mode === 'walk' && !foc && (floating || climb));
+    this.show('exit', st === 'seated' || g.mode === 'camera' || foc);
+    this.show('cam', (g.mode === 'pilot' || g.mode === 'camera') && !foc);
+    this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk' && !foc);
     this.show('camUi', g.mode === 'camera');
     this.fade += (this.fadeTarget - this.fade) * Math.min(1, dt * 2.5);
     this.el.fade.style.opacity = this.fade.toFixed(3);
     // idle stick hints in pilot mode
-    const pil = g.mode === 'pilot' || g.mode === 'camera';
-    if (pil !== this.last.pil) {
+    const pil = (g.mode === 'pilot' || g.mode === 'camera') && !foc;
+    if (foc !== this.last.foc) {
+      this.last.foc = foc;
+      this.el.stickL.classList.toggle('hidden', foc); this.el.stickR.classList.toggle('hidden', foc);
+      this.last.pil = undefined;
+    }
+    if (!foc && pil !== this.last.pil) {
       this.last.pil = pil;
       for (const [s, x, y] of [[this.el.stickL, 0.17, 0.72], [this.el.stickR, 0.83, 0.72]]) {
         s.classList.toggle('idle', pil);

@@ -24,6 +24,7 @@ export class Input {
 
   _zone(x, y) {
     const w = window.innerWidth, h = window.innerHeight;
+    if (this.mode === 'focus') return 'look';   // looking at a monitor: every touch is a tap
     if (this.mode === 'pilot' || this.mode === 'camera') {
       if (x < w * 0.4 && y > h * 0.35) return 'L';
       if (x > w * 0.6 && y > h * 0.35) return 'R';

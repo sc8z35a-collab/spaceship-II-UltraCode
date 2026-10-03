@@ -196,12 +196,18 @@ export class Game {
     const dead = pl.state === 'dead';
     // ---- mode routing
     let flightIn = null;
-    if (!dead && (this.mode === 'pilot' || this.mode === 'camera')) {
+    const F = this.focus;
+    const focused = !!(F && !F.out);
+    if (F) {
+      F.t = Math.max(0, Math.min(1, F.t + (F.out ? -dt : dt) / 0.4));
+      if (F.out && F.t <= 0) this.focus = null;
+    }
+    if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
     if (!dead) {
-      if (inp.pressed['b-exit']) this.systems.exitPressed();
-      if (inp.pressed['b-cam']) this.systems.cameraPressed();
+      if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
+      if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (inp.pressed['b-drop']) this.systems.dropPressed();
     }
@@ -220,17 +226,43 @@ export class Game {
     this.asteroids.update(sdt, dt);
     // ---- player
     const env = this.systems.playerEnv();
-    const lookInp = this.mode === 'camera' ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
-    pl.update(Math.min(sdt, 0.05), this.mode === 'walk' ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), this.gLocal, env);
+    const lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), this.gLocal, env);
     // ---- taps
     for (const tap of inp.taps) {
       if (this.mode === 'camera' || dead) continue;
+      if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
       const hit = this.interact.tap(tap, this.engine.camera);
       if (!hit) this.systems.tapNothing(tap);
     }
     this.systems.update(sdt, inp);
     this.save.update(dt);
     this.hud.update(dt);
+  }
+
+  /** lean in to a monitor so it fills the view (taps then go to its buttons) */
+  enterFocus(m) {
+    if (this.mode === 'camera' || this.player.state === 'dead') return;
+    const slot = m.slot, cam = this.engine.camera;
+    const vf = cam.fov * Math.PI / 180;
+    const hf = Math.atan(Math.tan(vf / 2) * cam.aspect);
+    const d = Math.max(slot.h / (2 * Math.tan(vf / 2) * 0.86), slot.w / (2 * Math.tan(hf) * 0.9), 0.18);
+    const pos = slot.pos.clone().addScaledVector(slot.n, d);
+    const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(pos, slot.pos, slot.up));
+    const prev = this.focus && !this.focus.out ? this.focus : null;
+    if (prev && prev.m !== m) this.monitors.setFocus(prev.m, false);
+    this.focus = { m, t: this.focus ? this.focus.t : 0, out: false, pos, q, input: prev ? prev.input : this.input.mode };
+    this.input.setMode('focus');
+    this.monitors.setFocus(m, true);
+    this.audio.click(slot.pos, 0.16);
+  }
+
+  exitFocus() {
+    const F = this.focus;
+    if (!F || F.out) return;
+    F.out = true;
+    this.input.setMode(F.input);
+    this.monitors.setFocus(F.m, false);
   }
 
   updateRender(dt) {
@@ -255,13 +287,20 @@ export class Game {
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(eyeLocal, new THREE.Vector3(0, 0, -2), new THREE.Vector3(0, 1, 0)));
     } else {
       eyeLocal = pl.eyeLocal; viewQ = pl.lookQuat;
+      const F = this.focus;
+      if (F) {
+        const e = F.t * F.t * (3 - 2 * F.t);
+        eyeLocal = eyeLocal.clone().lerp(F.pos, e);
+        viewQ = viewQ.clone().slerp(F.q, e);
+      }
     }
     // shake
     const sh = this.shake;
     const shakeQ = new THREE.Quaternion();
     if (sh > 0.001) {
       const t = performance.now() / 1000;
-      shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02, Math.sin(t * 39 + 1) * sh * 0.02, Math.sin(t * 31 + 2) * sh * 0.03));
+      const k = this.focus ? 1 - 0.85 * this.focus.t : 1;
+      shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02 * k, Math.sin(t * 39 + 1) * sh * 0.02 * k, Math.sin(t * 31 + 2) * sh * 0.03 * k));
       this.shake *= Math.exp(-dt * 2.2);
     }
     this.camWorld.copy(eyeLocal).applyQuaternion(f.quat);

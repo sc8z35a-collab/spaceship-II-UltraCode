@@ -15,7 +15,7 @@ varying vec2 vUv;
 void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 const SCREEN_FRAG = /* glsl */`
 uniform sampler2D tUI; uniform sampler2D tFeed; uniform float uFeed; uniform vec4 uFeedRect;
-uniform float uPower; uniform float uGlitch; uniform float uTime; uniform float uBright;
+uniform float uPower; uniform float uGlitch; uniform float uTime; uniform float uBright; uniform float uGrid;
 varying vec2 vUv;
 float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
 void main(){
@@ -32,7 +32,7 @@ void main(){
   }
   // pixel grid + slight edge falloff
   vec2 px = fract(vUv * vec2(640.0, 360.0));
-  c *= 0.9 + 0.1 * smoothstep(0.0, 0.25, min(px.x, px.y));
+  c *= 1.0 - uGrid + uGrid * smoothstep(0.0, 0.25, min(px.x, px.y));
   vec2 d = vUv - 0.5; c *= 1.0 - dot(d, d) * 0.35;
   if (uGlitch > 0.0) c += (h(vUv * 300.0 + uTime) - 0.5) * 0.25 * uGlitch;
   float on = uPower;
@@ -65,7 +65,7 @@ export class Monitors {
       const mat = new THREE.ShaderMaterial({
         uniforms: {
           tUI: { value: tex }, tFeed: { value: null }, uFeed: { value: 0 }, uFeedRect: { value: new THREE.Vector4(0, 0, 1, 1) },
-          uPower: { value: 1 }, uGlitch: { value: 0 }, uTime: { value: 0 }, uBright: { value: 1.6 },
+          uPower: { value: 1 }, uGlitch: { value: 0 }, uTime: { value: 0 }, uBright: { value: 1.6 }, uGrid: { value: 0.1 },
         },
         vertexShader: SCREEN_VERT, fragmentShader: SCREEN_FRAG,
       });
@@ -83,7 +83,7 @@ export class Monitors {
       bez.castShadow = true; bez.receiveShadow = true;
       root.add(bez);
       const rate = { nav: 8, status: 6, cam: 3, airlock: 6 }[slot.id] || 4;
-      const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, tab: 0, boot: 0 };
+      const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
       this.list.push(m);
       this.byId[slot.id] = m;
       g.interact.addMesh(mesh, (hit) => this.tap(m, hit), { maxDist: 2.6 });
@@ -125,7 +125,47 @@ export class Monitors {
     this.toneScene.add(this.toneQuad);
   }
 
+  /** while a monitor is looked at closely its canvas is rendered at a higher resolution and rate */
+  setFocus(m, on) {
+    const W = on ? Math.min(1600, Math.round(m.slot.res * 2.4)) : m.slot.res;
+    const H = Math.round(W * m.slot.h / m.slot.w);
+    m.rate = on ? Math.max(m.baseRate, 15) : m.baseRate;
+    m.mat.uniforms.uGrid.value = on ? 0.035 : 0.1;
+    m.t = 999;
+    if (m.canvas.width === W) return;
+    m.canvas.width = W; m.canvas.height = H;
+    m.kit.resize();
+    m.W = W; m.H = H;
+    const tex = new THREE.CanvasTexture(m.canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    m.mat.uniforms.tUI.value = tex;
+    m.tex.dispose();
+    m.tex = tex;
+    this.draw(m);
+    tex.needsUpdate = true;
+  }
+
+  /** a tap while zoomed in on monitor m: press its buttons, or leave when tapping beside it */
+  focusTap(m, tap, camera) {
+    this._ray = this._ray || new THREE.Raycaster();
+    this._ray.setFromCamera(new THREE.Vector2(tap.x, tap.y), camera);
+    this._ray.layers.enableAll();
+    const hit = this._ray.intersectObject(m.mesh, false)[0];
+    if (!hit) { this.g.exitFocus(); return; }
+    this.press(m, hit);
+  }
+
   tap(m, hit) {
+    if (!hit.uv) return;
+    // first tap on a screen leans in so it fills the view; buttons are pressed from there
+    if (!this.g.focus || this.g.focus.m !== m || this.g.focus.out) { this.g.enterFocus(m); return; }
+    this.press(m, hit);
+  }
+
+  press(m, hit) {
     if (!hit.uv) return;
     if ((this.g.systems.power ?? 1) < 0.15) return;
     const px = hit.uv.x * m.W, py = (1 - hit.uv.y) * m.H;
