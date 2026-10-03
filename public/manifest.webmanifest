@@ -1,0 +1,15 @@
+{
+  "name": "B-29",
+  "short_name": "B-29",
+  "description": "2041年、地球低軌道。中古宇宙船 B-29 でゆっくり宇宙を旅する。",
+  "start_url": "./",
+  "scope": "./",
+  "display": "fullscreen",
+  "orientation": "landscape",
+  "background_color": "#000000",
+  "theme_color": "#000000",
+  "icons": [
+    { "src": "icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
