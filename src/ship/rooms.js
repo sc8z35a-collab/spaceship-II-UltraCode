@@ -394,14 +394,26 @@ export function buildAirlock(b, L) {
   gauge(b, [0.81, 1.45, -1.85], [0, Math.PI / 2, 0], 0.06);
   switchPanel(b, R, [0.81, 1.25, -1.85], [0, Math.PI / 2, 0], 3, 2, 0.05);
   monitorSlot(L, 'airlock', V(0.81, 1.72, -1.85), V(1, 0, 0), V(0, 1, 0), 0.22, 0.14, 'airlock', 256);
-  // handholds
-  for (const z of [-2.0, -0.2]) b.pipe([2.3, 1.0, z], [2.3, 1.6, z], 0.016, 'handrail');
+  // handholds on stand-off brackets, following the curved wall
+  for (const z of [-2.0, -0.2]) {
+    const wx = (y) => halfWidthAt(z, y, INSET) - 0.075;
+    b.pipe([wx(0.95), 0.95, z], [wx(1.65), 1.65, z], 0.016, 'handrail');
+    for (const y of [1.0, 1.6]) {
+      b.pipe([wx(y), y, z], [halfWidthAt(z, y, INSET) + 0.01, y, z], 0.01, 'steel', 8);
+      b.cyl(0.026, 0.026, 0.012, 'steel', [halfWidthAt(z, y, INSET) - 0.004, y, z], [0, 0, Math.PI / 2], 12);
+    }
+  }
   // status light
   b.sphere(0.04, 'lampRed', [1.6, 2.2, -1.05], 10);
   L.lamps.push({ pos: V(1.6, 2.05, -1.0), color: 0xf2f6ff, intensity: 4.5, room: 'airlock' });
   L.lamps.push({ pos: V(2.3, 1.95, -1.05), color: 0xffa040, intensity: 1.2, room: 'airlock' });
-  // tether reel
-  b.cyl(0.1, 0.1, 0.08, 'plasticY', [2.4, 1.0, 0.45], [0, 0, Math.PI / 2], 16);
+  // tether reel, bolted to the wall
+  {
+    const xw = halfWidthAt(0.3, 1.0, INSET);
+    b.cyl(0.12, 0.12, 0.02, 'metalDark', [xw - 0.01, 1.0, 0.3], [0, 0, Math.PI / 2], 16);
+    b.cyl(0.1, 0.1, 0.08, 'plasticY', [xw - 0.06, 1.0, 0.3], [0, 0, Math.PI / 2], 16);
+    b.cyl(0.03, 0.03, 0.03, 'steel', [xw - 0.115, 1.0, 0.3], [0, 0, Math.PI / 2], 10);
+  }
   // three low steps up to the outer hatch sill, and a sill plate bridging the hatch tunnel
   for (let k = 0; k < 3; k++) {
     const h = 0.11 * (k + 1), x0 = 2.1 + k * 0.22;
@@ -427,9 +439,14 @@ export function buildLifeSupport(b, L) {
   b.torus(0.16, 0.012, 'steel', [2.3, 0.008, 3.0], [Math.PI / 2, 0, 0], 24);
   L.spots.o2col = V(2.3, 0.925, 3.0);
   b.pipe([2.3, 1.58, 3.0], [2.3, 2.1, 3.0], 0.025, 'pipeWhite');
-  // water tank
-  b.cyl(0.3, 0.3, 1.0, 'steel', [2.1, 0.55, 4.6], null, 24, false, true);
-  b.sphere(0.3, 'steel', [2.1, 1.05, 4.6], 20, [1, 0.4, 1]);
+  // water tank on its skirt (stands on the deck), dished heads, weld bands
+  b.cyl(0.3, 0.3, 0.9, 'steel', [2.1, 0.62, 4.6], null, 24, false, true);
+  b.sphere(0.3, 'steel', [2.1, 1.07, 4.6], 20, [1, 0.4, 1]);
+  b.sphere(0.3, 'steel', [2.1, 0.17, 4.6], 20, [1, 0.3, 1]);
+  b.cyl(0.24, 0.27, 0.12, 'metalDark', [2.1, 0.06, 4.6], null, 24);
+  b.torus(0.27, 0.012, 'steel', [2.1, 0.012, 4.6], [Math.PI / 2, 0, 0], 24);
+  for (const y of [0.36, 0.88]) b.torus(0.302, 0.008, 'metal', [2.1, y, 4.6], [Math.PI / 2, 0, 0], 24);
+  b.pipe([2.1, 1.18, 4.6], [2.1, 2.2, 4.6], 0.02, 'pipeBlue');
   gauge(b, [1.78, 0.8, 4.6], [0, -Math.PI / 2, 0], 0.05);
   // ducts to the ceiling
   b.tube([[2.05, 1.7, 1.5], [1.75, 2.02, 1.6], [1.2, 2.3, 2.2], [1.1, 2.35, 4.0]], 0.09, 'insul', { radial: 12 });
@@ -462,15 +479,19 @@ export function buildEngineering(b, L) {
   }
   L.spots.servers = [V(-1.23, 0.95, 6.15), V(-1.23, 0.95, 6.81)];
   // power distribution panel (starboard)
-  const pwr = hullCabinet(b, { side: 1, z0: 6.1, z1: 7.7, yB: 0, yT: 1.8, depth: 0.82, doors: 0, rows: 1, key: 'panel' });
-  for (let i = 0; i < 3; i++) { const p = pwr.frontAt(6.9, 0.7 + i * 0.4); switchPanel(b, R, [p.x - 0.012, p.y, p.z], [0, -Math.PI / 2, 0], 8, 3, 0.05); }
-  for (const z of [6.4, 7.4]) { const p = pwr.frontAt(z, 1.55); gauge(b, [p.x - 0.015, p.y, p.z], [0, -Math.PI / 2, 0], 0.06); }
+  const pwr = hullCabinet(b, { side: 1, z0: 5.72, z1: 6.92, yB: 0, yT: 1.8, depth: 0.82, doors: 0, rows: 1, key: 'panel' });
+  for (let i = 0; i < 3; i++) { const p = pwr.frontAt(6.32, 0.62 + i * 0.4); switchPanel(b, R, [p.x - 0.012, p.y, p.z], [0, -Math.PI / 2, 0], 8, 3, 0.05); }
+  for (const z of [5.98, 6.66]) { const p = pwr.frontAt(z, 1.6); gauge(b, [p.x - 0.015, p.y, p.z], [0, -Math.PI / 2, 0], 0.06); }
   // reactor control console facing the aft viewport
   b.box(1.0, 0.85, 0.45, 'panel', [0.25, 0.42, 8.9], null, 0.03, 2, true);
   b.box(1.05, 0.05, 0.5, 'panelDark', [0.25, 0.87, 8.88], [-0.25, 0, 0], 0.01);
   switchPanel(b, R, [0.05, 0.9, 8.85], [-Math.PI / 2 + 0.25, 0, 0], 6, 2, 0.045);
   monitorSlot(L, 'reactor', V(0.45, 1.12, 9.02), V(0, 0.3, -1).normalize(), V(0, 1, 0.3).normalize(), 0.36, 0.22, 'eng', 384);
-  toolWall(b, R, [1.62, 1.35, 8.35], [0, -Math.PI / 2 + 0.25, 0]);
+  // tool board on the reactor bulkhead, beside the viewport (scaled to fit under the hull curve)
+  b.push([-0.9, 1.12, Z_REACTOR_BULK - 0.105], [0, Math.PI, 0], [0.72, 0.72, 0.72]);
+  toolWall(b, R, [0, 0, 0], [0, 0, 0]);
+  b.pop();
+  b.box(0.84, 0.55, 0.012, 'metalDark', [-0.9, 1.12, Z_REACTOR_BULK - 0.093], null, 0.004);
   // floor hatch frame + ladder down
   const hx = (ENG_HATCH.x0 + ENG_HATCH.x1) / 2, hz = (ENG_HATCH.z0 + ENG_HATCH.z1) / 2;
   b.box(ENG_HATCH.x1 - ENG_HATCH.x0 + 0.08, 0.03, 0.04, 'plasticY', [hx, 0.0, ENG_HATCH.z0 - 0.02], null, 0.005);
@@ -479,7 +500,7 @@ export function buildEngineering(b, L) {
   for (let k = 0; k < 5; k++) b.pipe([hx - 0.22, -1.35 + k * 0.29, ENG_HATCH.z1 - 0.06], [hx + 0.22, -1.35 + k * 0.29, ENG_HATCH.z1 - 0.06], 0.014, 'handrail');
   L.interact.push({ id: 'ladder', pos: V(hx, -0.2, hz), r: 0.5, kind: 'ladder' });
   // cable bundles from racks into the floor
-  cableBundle(b, [[-1.3, 1.9, 6.4], [-1.0, 2.2, 6.6], [-0.4, 2.3, 7.0], [0.6, 2.2, 7.4], [1.4, 1.8, 7.0]], 5);
+  cableBundle(b, [[-1.45, 1.86, 6.4], [-1.25, 2.12, 6.5], [-0.6, 2.32, 6.6], [0.6, 2.3, 6.5], [1.5, 2.0, 6.35], [1.75, 1.74, 6.3]], 5);
   L.lamps.push({ pos: V(0, 2.1, 7.4), color: 0xe8f0ff, intensity: 4.5, room: 'eng' });
   L.lamps.push({ pos: V(0, 1.25, 9.4), color: 0x3d7bff, intensity: 2.5, room: 'eng' });
   L.lamps.push({ pos: V(-1.05, 1.2, 6.5), color: 0x60ffd0, intensity: 1.0, room: 'eng' });   // server LEDs

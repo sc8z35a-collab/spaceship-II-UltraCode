@@ -388,7 +388,9 @@ export class Stations {
     const tt = (t / 1000) % 10000;
     this.stLightsMat.uniforms.uTime.value = tt;
     const ph = (tt / 1.6) % 1;
-    this.SM.strobe.emissiveIntensity = ph < 0.05 || (ph > 0.16 && ph < 0.21) ? 40 : 0;
+    // (kept moderate: at 40x the strobes of the station next door bloomed over the whole view and
+    // the picture flickered every 1.6 s)
+    this.SM.strobe.emissiveIntensity = ph < 0.05 || (ph > 0.16 && ph < 0.21) ? 6 : 0;
     // relays
     let k = 0;
     const near = [];

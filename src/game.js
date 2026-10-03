@@ -221,6 +221,9 @@ export class Game {
     // apparent gravity in the ship frame
     const qInv = this.flight.quat.clone().invert();
     this.gLocal.copy(this.flight.properAcc).negate().applyQuaternion(qInv);
+    // ULTRA burns are compensated by the drive's inertial damper (otherwise the 0.27 g push and
+    // the 0.7 g braking pulled everybody onto the bulkheads)
+    if (this.flight.damp > 0.001) this.gLocal.multiplyScalar(1 - 0.985 * this.flight.damp);
     this.phys.setGravity(this.gLocal);
     this.fx.gravity.copy(this.gLocal);
     this.phys.step(sdt);
@@ -332,8 +335,18 @@ export class Game {
     if (this.systems) this.systems.updateVisual(dt, this.camWorld.length());
     // listener at the player's head (also while watching an external camera)
     this.audio.setListener(pl.eyeLocal, pl.lookQuat);
-    // refresh the space reflection now and then (sunrise / sunset changes the hull look)
+    // refresh the space reflection when the lighting really changed (sunrise / sunset, the ship
+    // turned): a recapture swaps every reflection at once, so it must not happen on a timer
     this.envT = (this.envT || 0) + dt;
-    if (this.envT > 20 && this.running) { this.envT = 0; this.shipVis.captureEnv(this.engine.scene, new THREE.Vector3(0, 0, 0), false); }
+    if (this.envT > 8 && this.running) {
+      this.envT = 0;
+      const sunL = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
+      const lum = this.space.sunColor.r + this.space.sunColor.g + this.space.sunColor.b;
+      const last = this._envState;
+      if (!last || sunL.angleTo(last.sun) > 0.35 || Math.abs(lum - last.lum) > 0.25 * Math.max(0.2, last.lum)) {
+        this._envState = { sun: sunL, lum };
+        this.shipVis.captureEnv(this.engine.scene, new THREE.Vector3(0, 0, 0), false);
+      }
+    }
   }
 }

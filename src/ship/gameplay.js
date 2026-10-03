@@ -854,8 +854,11 @@ export class Gameplay {
     const t = performance.now() / 1000;
     const M = g.shipVis.M;
     const power = g.systems.power ?? 1;
-    M.navRed.emissiveIntensity = 3 * power; M.navGreen.emissiveIntensity = 3 * power;
-    M.navWhite.emissiveIntensity = (t % 1.6) < 0.08 ? 40 * power : 0;
+    M.navRed.emissiveIntensity = 1.6 * power; M.navGreen.emissiveIntensity = 1.6 * power;
+    // anti-collision strobe: a short double blink every 2.4 s, bright but not a screen-filling
+    // flash (at 40x it bloomed over the whole view and the picture flickered every 1.6 s)
+    const ph = t % 2.4;
+    M.navWhite.emissiveIntensity = (ph < 0.05 || (ph > 0.2 && ph < 0.25)) ? 7 * power : 0;
     // main engine plume from thrust toward -z (exhaust out of +z)
     const qInv = f.quat.clone().invert();
     const thrLocal = f.thrustAcc.clone().applyQuaternion(qInv);

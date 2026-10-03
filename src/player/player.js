@@ -119,7 +119,9 @@ export class Player {
       return;
     }
     const gMag = gLocal.length();
-    const gravityMode = gMag > 2.0;
+    // hysteresis: thrust hovering around the threshold must not flip walk <-> float every few
+    // seconds (the camera height, the controls and the up/down buttons all change with it)
+    const gravityMode = this.gravityMode = gMag > (this.gravityMode ? 1.4 : 2.2);
     // body up vector: oppose gravity when there is any, else drift back to ship up
     const targetUp = gravityMode ? _v.copy(gLocal).multiplyScalar(-1 / gMag) : _v.set(0, 1, 0);
     const k = 1 - Math.exp(-dt * (gravityMode ? 4 : 0.8));

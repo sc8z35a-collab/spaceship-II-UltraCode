@@ -306,16 +306,17 @@ export function buildExterior(M) {
   }
   // floodlights + nav lights housings
   const lights = {
-    navPort: sectionPoint(-1.0, Math.PI - 0.05, 0).addScaledVector(sectionNormal(-1.0, Math.PI - 0.05, 0), 0.06),
-    navStar: sectionPoint(-1.0, 0.05, 0).addScaledVector(sectionNormal(-1.0, 0.05, 0), 0.06),
+    // nav lights sit aft of the airlock (at z = -1 the green one glowed right in the hatch opening)
+    navPort: sectionPoint(3.4, Math.PI - 0.05, 0).addScaledVector(sectionNormal(3.4, Math.PI - 0.05, 0), 0.05),
+    navStar: sectionPoint(3.4, 0.05, 0).addScaledVector(sectionNormal(3.4, 0.05, 0), 0.05),
     strobe: sectionPoint(4.2, Math.PI / 2, 0).addScaledVector(new THREE.Vector3(0, 1, 0), 0.12),
     flood1: sectionPoint(-3.0, Math.PI / 2 + 0.3, 0),
     flood2: sectionPoint(3.0, Math.PI / 2 - 0.3, 0),
     beacon: sectionPoint(-9.6, -Math.PI / 2, 0),
   };
-  b.sphere(0.07, 'navRed', lights.navPort.toArray(), 10);
-  b.sphere(0.07, 'navGreen', lights.navStar.toArray(), 10);
-  b.sphere(0.07, 'navWhite', lights.strobe.toArray(), 10);
+  b.sphere(0.04, 'navRed', lights.navPort.toArray(), 10);
+  b.sphere(0.04, 'navGreen', lights.navStar.toArray(), 10);
+  b.sphere(0.045, 'navWhite', lights.strobe.toArray(), 10);
   for (const f of [lights.flood1, lights.flood2]) {
     b.box(0.24, 0.12, 0.18, 'hullDark', [f.x, f.y + 0.06, f.z], null, 0.03);
     b.box(0.2, 0.02, 0.14, 'lampCool', [f.x, f.y + 0.125, f.z], null, 0.005);

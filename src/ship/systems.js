@@ -304,12 +304,17 @@ export class ShipSystems {
     const lamps = this.lamps;
     const dim = this.lightMode === 'dim' ? 0.35 : this.lightMode === 'off' ? 0.0 : this.lightMode === 'night' ? 0.25 : 1;
     if (eye) {
-      const ranked = lamps.map((l) => ({ l, d: l.pos.distanceToSquared(eye) })).sort((a, b) => a.d - b.d).slice(0, this.pool.length).map((x) => x.l);
-      for (const slot of this.pool) if (slot.lamp && !ranked.includes(slot.lamp)) slot.lamp = null;
-      for (const l of ranked) {
+      // nearest lamps get the real lights. Lamps already lit count as closer (hysteresis), otherwise
+      // two lamps at about the same distance swap back and forth as the head sways and the room
+      // flickers every few seconds; a lamp that drops out fades away before its light is reused.
+      const lit = new Set(this.pool.filter((s) => s.lamp && !s.out).map((s) => s.lamp));
+      const want = new Set(lamps.map((l) => ({ l, d: l.pos.distanceToSquared(eye) * (lit.has(l) ? 0.55 : 1) }))
+        .sort((a, b) => a.d - b.d).slice(0, this.pool.length).map((x) => x.l));
+      for (const slot of this.pool) if (slot.lamp) slot.out = !want.has(slot.lamp);
+      for (const l of want) {
         if (this.pool.some((s) => s.lamp === l)) continue;
         const free = this.pool.find((s) => !s.lamp);
-        if (free) { free.lamp = l; free.f = 0; }
+        if (free) { free.lamp = l; free.f = 0; free.out = false; }
       }
     }
     const flick = this.flicker || 0;
@@ -320,16 +325,18 @@ export class ShipSystems {
     const power = this.power ?? 1;
     for (const slot of this.pool) {
       const L = slot.lamp;
-      if (!L) { slot.light.intensity *= 0.9; continue; }
-      slot.f = Math.min(1, slot.f + dt * 2);
+      if (!L) { slot.light.intensity = 0; continue; }
+      slot.f = slot.out ? slot.f - dt * 2.5 : Math.min(1, slot.f + dt * 1.5);
+      if (slot.f <= 0 && slot.out) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; continue; }
       slot.light.position.copy(L.pos);
       slot.light.color.set(this.lightMode === 'night' ? 0xff3020 : L.color);
       // master alarm: emergency red wash pulsing with the siren
       if (on) slot.light.color.lerp(ALARM_RED, 0.18 + 0.3 * pulse);
-      const f = flick > 0 && Math.random() < flick ? 0.1 : 1;
+      const f = flick > 0 && Math.random() < flick ? 0.1 : 1;   // impact jolt: lamps stutter for a moment
       // brown-out: lamps sag and stutter when the power bus is weak
       const brown = power < 0.6 && Math.random() < (0.6 - power) * 0.3 ? 0.35 : 1;
-      slot.light.intensity = L.intensity * slot.f * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
+      const fe = slot.f * slot.f * (3 - 2 * slot.f);
+      slot.light.intensity = L.intensity * fe * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
     }
     // alarm beacons: rotating red spots
     for (let i = 0; i < this.beacons.length; i++) {

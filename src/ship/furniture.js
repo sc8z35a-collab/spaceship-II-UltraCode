@@ -33,10 +33,12 @@ export function hullCabinet(b, o) {
   const len = z1 - z0;
   const pillow = (k) => { const ph = (Math.PI / 2) * (k / steps); return { dz: endR * (1 - Math.sin(ph)), sh: endR * (1 - Math.cos(ph)) }; };
   const push = (z, sh) => sections.push(section(z, depth - sh, yB + (yB > 0.005 ? sh : 0), yT - sh).map(([x, y]) => V(x, y, z)));
-  for (let k = 0; k <= steps; k++) { const { dz, sh } = pillow(k); push(z0 + dz, sh); }
+  // sections must run monotonically in z: from the rounded z0 end (shrunk) to full size, along the
+  // middle, then back down to the rounded z1 end (pillow(k) goes from full size at k=0 to shrunk)
+  for (let k = steps; k >= 0; k--) { const { dz, sh } = pillow(k); push(z0 + dz, sh); }
   const nMid = Math.max(1, Math.ceil((len - 2 * endR) / 0.3));
   for (let j = 1; j < nMid; j++) push(z0 + endR + (len - 2 * endR) * (j / nMid), 0);
-  for (let k = steps; k >= 0; k--) { const { dz, sh } = pillow(k); push(z1 - dz, sh); }
+  for (let k = 0; k <= steps; k++) { const { dz, sh } = pillow(k); push(z1 - dz, sh); }
   b.add(loft(sections, { ring: true, caps: true }), key);
   // door seams, shelves and handles on the curved front
   const frontAt = (z, y) => V(side * (halfWidthAt(z, y, inset) + 0.012 - depth - 0.002), y, z);

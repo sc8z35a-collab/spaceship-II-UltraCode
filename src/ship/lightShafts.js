@@ -2,17 +2,29 @@
 // along the sunlight, drawn additively with drifting dust and soft edges. Only openings that face
 // the sun light up, and everything fades out in the Earth's shadow.
 import * as THREE from 'three';
-import { OPENINGS, HULL } from './hullShape.js';
+import { OPENINGS, HULL, Z_COCKPIT_BULK, Z_ENG_BULK, Z_REACTOR_BULK } from './hullShape.js';
 import { noiseTex } from '../core/noiseTex.js';
 import { LAYER_NEAR } from '../core/layers.js';
 import { roundRect } from './sweep.js';
 
+/** the room a window lights: beams are clipped to it so they never shine through walls */
+function roomBox(c) {
+  const PORT = [Z_COCKPIT_BULK, -3.0, 0.4, Z_ENG_BULK], STAR = [Z_COCKPIT_BULK, -4.6, -2.6, 0.6, Z_ENG_BULK];
+  if (c.z < Z_COCKPIT_BULK) return [[-3.5, -0.2, -14], [3.5, 3.5, Z_COCKPIT_BULK]];
+  if (c.z > Z_ENG_BULK) return [[-3.5, 0, Z_ENG_BULK], [3.5, 3.5, Z_REACTOR_BULK]];
+  if (Math.abs(c.x) < 1.0) return [[-0.655, 0, Z_COCKPIT_BULK], [0.655, 3.5, Z_ENG_BULK]];
+  const w = c.x < 0 ? PORT : STAR;
+  let z0 = w[0], z1 = w[w.length - 1];
+  for (let i = 0; i < w.length - 1; i++) if (c.z >= w[i] && c.z <= w[i + 1]) { z0 = w[i]; z1 = w[i + 1]; }
+  return c.x < 0 ? [[-3.5, 0, z0], [-0.745, 3.5, z1]] : [[0.745, 0, z0], [3.5, 3.5, z1]];
+}
+
 export class LightShafts {
   constructor(root) {
-    const pos = [], aN = [], aT = [], idx = [];
-    const addTube = (pts, n) => {
+    const pos = [], aN = [], aT = [], aMin = [], aMax = [], idx = [];
+    const addTube = (pts, n, box) => {
       const base = pos.length / 3, L = pts.length;
-      for (const p of pts) for (const t of [0, 1]) { pos.push(p.x, p.y, p.z); aN.push(n.x, n.y, n.z); aT.push(t); }
+      for (const p of pts) for (const t of [0, 1]) { pos.push(p.x, p.y, p.z); aN.push(n.x, n.y, n.z); aT.push(t); aMin.push(...box[0]); aMax.push(...box[1]); }
       for (let i = 0; i < L; i++) {
         const a = base + i * 2, b = base + ((i + 1) % L) * 2;
         idx.push(a, b, a + 1, b, b + 1, a + 1);
@@ -22,7 +34,7 @@ export class LightShafts {
       if (o.kind !== 'win') continue;
       const c = o.center.clone().addScaledVector(o.normal, -(HULL.inset + 0.015));
       const pts = roundRect(o.halfW * 2 * 0.96, o.halfH * 2 * 0.96, o.radius * 0.96, 0, 0, 6).map(([x, y]) => c.clone().addScaledVector(o.u, x).addScaledVector(o.v, y));
-      addTube(pts, o.normal);
+      addTube(pts, o.normal, roomBox(o.center));
     }
     // canopy: approximated by an ellipse behind the glazing
     {
@@ -31,19 +43,22 @@ export class LightShafts {
       const u = new THREE.Vector3(1, 0, 0), v = new THREE.Vector3().crossVectors(n, u).normalize();
       const pts = [];
       for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2; pts.push(c.clone().addScaledVector(u, Math.cos(a) * 1.45).addScaledVector(v, Math.sin(a) * 0.95)); }
-      addTube(pts, n);
+      addTube(pts, n, roomBox(c));
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
     g.setAttribute('aN', new THREE.Float32BufferAttribute(aN, 3));
     g.setAttribute('aT', new THREE.Float32BufferAttribute(aT, 1));
+    g.setAttribute('aMin', new THREE.Float32BufferAttribute(aMin, 3));
+    g.setAttribute('aMax', new THREE.Float32BufferAttribute(aMax, 3));
     g.setIndex(idx);
     this.mat = new THREE.ShaderMaterial({
       uniforms: { uSun: { value: new THREE.Vector3(0, 1, 0) }, uLen: { value: 3.2 }, uColor: { value: new THREE.Color(1, 1, 1) }, uI: { value: 0 }, uTime: { value: 0 }, tNoise3D: { value: noiseTex } },
       vertexShader: /* glsl */`
-        attribute vec3 aN; attribute float aT; uniform vec3 uSun; uniform float uLen;
-        varying float vT; varying float vK; varying vec3 vW; varying vec3 vP;
+        attribute vec3 aN; attribute float aT; attribute vec3 aMin; attribute vec3 aMax; uniform vec3 uSun; uniform float uLen;
+        varying float vT; varying float vK; varying vec3 vW; varying vec3 vP; varying vec3 vMin; varying vec3 vMax;
         void main(){
+          vMin = aMin; vMax = aMax;
           float k = max(0.0, dot(aN, uSun));
           vec3 p = position - uSun * aT * uLen * (0.55 + 0.45 * k);
           vT = aT; vK = k; vP = p;
@@ -53,8 +68,9 @@ export class LightShafts {
         }`,
       fragmentShader: /* glsl */`
         uniform vec3 uColor; uniform float uI; uniform float uTime; uniform highp sampler3D tNoise3D;
-        varying float vT; varying float vK; varying vec3 vW; varying vec3 vP;
+        varying float vT; varying float vK; varying vec3 vW; varying vec3 vP; varying vec3 vMin; varying vec3 vMax;
         void main(){
+          if (any(lessThan(vP, vMin)) || any(greaterThan(vP, vMax))) discard;   // stays in its room
           vec3 C = cross(dFdx(vW), dFdy(vW));
           vec3 E = cameraPosition - vW;
           float dE = length(E);
@@ -62,8 +78,8 @@ export class LightShafts {
           float nearEye = smoothstep(0.2, 1.4, dE);                   // standing in the beam: no fog on the lens
           float fade = pow(1.0 - vT, 1.7) * smoothstep(0.0, 0.06, vT + 0.02);
           float dust = 0.55 + 0.45 * texture(tNoise3D, vP * 0.55 + vec3(0.0, uTime * 0.018, uTime * 0.011)).r;
-          float motes = smoothstep(0.82, 0.97, texture(tNoise3D, vP * 2.7 + vec3(uTime * 0.01, 0.0, uTime * 0.02)).g);
-          float a = uI * sqrt(vK) * fade * soft * nearEye * (dust + motes * 1.5);
+          float motes = smoothstep(0.86, 0.98, texture(tNoise3D, vP * 2.7 + vec3(uTime * 0.01, 0.0, uTime * 0.02)).g);
+          float a = uI * sqrt(vK) * fade * soft * nearEye * (dust + motes * 0.6);
           gl_FragColor = vec4(uColor * a, 1.0);
         }`,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,

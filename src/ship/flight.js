@@ -28,6 +28,7 @@ export class Flight {
     this.ultra = false;
     this.ultraLevel = 0;                  // 0..1 smoothing
     this.ultraDown = null;                // staged ramp-down state
+    this.damp = 0;                        // ULTRA inertial damper (0..1): the cabin does not feel ULTRA burns
     this.preUltraSpeed = 0;
     this.autopilot = null;                // { target, phase }
     this.landed = false;
@@ -185,6 +186,9 @@ export class Flight {
     this.speedLimit *= Math.max(0.2, this.engineHealth);
     this.setSpeed = Math.max(-15, Math.min(this.speedLimit, this.setSpeed));
     this.ultraLevel += ((this.ultra ? 1 : 0) - this.ultraLevel) * Math.min(1, dt * 0.5);
+    // the ULTRA drive's inertial damper is on for the whole ULTRA run including the staged
+    // slow-down, and comes up before the burn does (ramp 1.5/s vs. the 6 m/s^2 speed ramp)
+    this.damp += (((this.ultra || this.ultraDown) ? 1 : 0) - this.damp) * Math.min(1, dt * 1.5);
 
     // --- desired velocity
     const vRef = this.refVelocity(pos, new THREE.Vector3());

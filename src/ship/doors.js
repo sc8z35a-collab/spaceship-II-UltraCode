@@ -170,7 +170,8 @@ export class OuterHatch {
     }
     // outside: handle + stripes
     const h = new THREE.Mesh(new THREE.TorusGeometry(0.07, 0.012, 6, 16, Math.PI), M.handrail);
-    h.position.set(o.halfH * 1.4, 0, -0.02);
+    h.rotation.x = Math.PI / 2;            // the grab bar arcs out of the door skin
+    h.position.set(o.halfH * 1.4, 0, -0.03);
     this.hinge.add(h);
     setLayersDeep(this.group, LAYER_NEAR, LAYER_MID);
     this.group.traverse((x) => x.layers.enable(LAYER_MID));

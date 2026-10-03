@@ -4,7 +4,7 @@ import * as THREE from 'three';
 import { Builder, roundedRectPath, panelGeometry, rng } from './geom.js';
 import { HULL, hullAt, sectionPoint, halfWidthAt, heightRangeAt, DECK_Y, LOWER_Y, Z_COCKPIT_BULK, Z_ENG_BULK, Z_REACTOR_BULK, CORRIDOR_X } from './hullShape.js';
 import { loftGeometry, cutOpeningTris } from './exterior.js';
-import { OPENINGS, inCanopy } from './hullShape.js';
+import { OPENINGS } from './hullShape.js';
 import { buildCorridor, buildRoomCoves, doorFrame } from './architecture.js';
 
 export const INSET = HULL.inset;
@@ -98,7 +98,7 @@ export function buildInteriorShell(M) {
   // collision shell: lower resolution, open at the airlock hatch so EVA is possible
   b.colMesh(cutOpeningTris(loftGeometry(z0, z1, 120, 72, INSET, true), OPENINGS.find((o) => o.kind === 'hatch'), 0.06));
   // nose cap closure inside (small dome) — the loft already closes near the tip
-  // ---------- ribs (frames) every 0.8 m ----------
+  // ---------- ribs (frames) every 0.8 m, underfloor ----------
   for (let z = -11.6; z <= 9.2; z += 0.8) {
     const pts = [];
     for (let i = 0; i <= 64; i++) {
@@ -106,26 +106,9 @@ export function buildInteriorShell(M) {
       const p = sectionPoint(z, t, INSET - 0.005);
       pts.push([p.x, p.y]);
     }
-    // split rib into upper (above deck) and lower parts with a gap at deck level
-    const up = pts.filter((p) => p[1] > DECK_Y + 0.03);
+    // only the part below the deck: above it the frames are hidden behind the cabin lining (bare
+    // dark arcs standing off the curved walls read as floating bars)
     const lo = pts.filter((p) => p[1] < DECK_Y - 0.08);
-    // break the upper rib where it would cross a window / the canopy
-    const blocked = (p) => {
-      const v = new THREE.Vector3(p[0], p[1], z);
-      if (inCanopy(v)) return true;
-      for (const o of OPENINGS) {
-        const d = v.clone().sub(o.center);
-        if (Math.abs(d.dot(o.normal)) > 0.5) continue;
-        if (Math.abs(d.dot(o.u)) < o.halfW + 0.12 && Math.abs(d.dot(o.v)) < o.halfH + 0.12) return true;
-      }
-      return false;
-    };
-    let seg = [];
-    for (const p of up) {
-      if (blocked(p)) { if (seg.length > 3) b.add(ribGeometry(seg, 0.07, 0.06, z), 'frame'); seg = []; }
-      else seg.push(p);
-    }
-    if (seg.length > 3) b.add(ribGeometry(seg, 0.07, 0.06, z), 'frame');
     if (lo.length > 3) {
       // lower part is split around the bottom (t=-PI/2); reorder from starboard to port going down
       const left = lo.filter((p) => p[0] < 0).sort((a, c) => c[1] - a[1]);
@@ -165,12 +148,29 @@ export function buildInteriorShell(M) {
     b.box(w + 0.04, 0.04, 0.04, 'frame', [(g[0] + g[1]) / 2, DECK_Y - 0.03, g[3]], null, 0.005);
     b.colBox(w, 0.03, d, [(g[0] + g[1]) / 2, DECK_Y - 0.025, (g[2] + g[3]) / 2]);
   }
-  // deck support beams below the floor
+  // deck support beams below the floor, interrupted at the lift shaft and the engineering hatch
+  const HOLES = [LIFT, ENG_HATCH].map((h) => ({ x0: h.x0 - 0.06, x1: h.x1 + 0.06, z0: h.z0 - 0.06, z1: h.z1 + 0.06 }));
+  const beamX = (z, xa, xb) => {   // transverse beam from xa to xb at z, minus the holes
+    let segs = [[xa, xb]];
+    for (const h of HOLES) {
+      if (z < h.z0 || z > h.z1) continue;
+      segs = segs.flatMap(([a, c]) => (c <= h.x0 || a >= h.x1 ? [[a, c]] : [[a, Math.min(c, h.x0)], [Math.max(a, h.x1), c]].filter(([u, v]) => v - u > 0.05)));
+    }
+    for (const [a, c] of segs) b.box(c - a, 0.12, 0.08, 'metalDark', [(a + c) / 2, DECK_Y - 0.11, z], null, 0.01);
+  };
+  const beamZ = (x, za, zb) => {   // longitudinal beam along z at x, minus the holes
+    let segs = [[za, zb]];
+    for (const h of HOLES) {
+      if (x < h.x0 || x > h.x1) continue;
+      segs = segs.flatMap(([a, c]) => (c <= h.z0 || a >= h.z1 ? [[a, c]] : [[a, Math.min(c, h.z0)], [Math.max(a, h.z1), c]].filter(([u, v]) => v - u > 0.05)));
+    }
+    for (const [a, c] of segs) b.box(0.08, 0.12, c - a, 'metalDark', [x, DECK_Y - 0.11, (a + c) / 2], null, 0.01);
+  };
   for (let z = -10.8; z < 9.4; z += 1.2) {
     const hw = halfWidthAt(z, DECK_Y - 0.12, INSET) - 0.02;
-    b.box(hw * 2, 0.12, 0.08, 'metalDark', [0, DECK_Y - 0.11, z], null, 0.01);
+    beamX(z, -hw, hw);
   }
-  for (const x of [-1.3, 1.3]) b.box(0.08, 0.12, 19.0, 'metalDark', [x, DECK_Y - 0.11, -1.3], null, 0.01);
+  for (const x of [-1.3, 1.3]) beamZ(x, -10.8, 8.2);
 
   // ---------- partitions (bulkheads) ----------
   // P1: cockpit bulkhead

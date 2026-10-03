@@ -347,13 +347,18 @@ export class Engine {
   adapt(dt, now) {
     if (!this.autoRes) return;
     this.frameTimes.push(dt);
-    if (this.frameTimes.length > 90) this.frameTimes.shift();
-    if (now - this.lastAdjust < 2.0 || this.frameTimes.length < 60) return;
+    if (this.frameTimes.length > 120) this.frameTimes.shift();
+    if (this.resStart === undefined) this.resStart = now;
+    // Every change of resolution is visible (the image goes soft/sharp), so: settle during the first
+    // ~25 s, never climb again after having had to drop (that ping-pong flickered every few
+    // seconds on phones), and afterwards only drop when the frame rate really sags.
+    const settling = now - this.resStart < 25;
+    if (now - this.lastAdjust < (settling ? 2.5 : 15) || this.frameTimes.length < 90) return;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const med = sorted[Math.floor(sorted.length / 2)];
     let pr = this.pr;
-    if (med > 1 / 48 && pr > 0.85) pr = Math.max(0.85, pr - 0.15);
-    else if (med < 1 / 58 && pr < this.maxPR) pr = Math.min(this.maxPR, pr + 0.1);
+    if (med > (settling ? 1 / 45 : 1 / 34) && pr > 0.85) { pr = Math.max(0.85, pr - 0.15); this.resDropped = true; }
+    else if (settling && !this.resDropped && med < 1 / 58 && pr < this.maxPR) pr = Math.min(this.maxPR, pr + 0.1);
     if (Math.abs(pr - this.pr) > 0.01) {
       this.pr = pr;
       this.resize();
