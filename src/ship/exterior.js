@@ -108,7 +108,8 @@ function buildFrame(b, o, matTunnel, matLip) {
     b.add(new THREE.TubeGeometry(curve, n * 2, rad, 6, true), matLip);
   };
   lip(openingOutline(o, 0, n, 0.03), 0.015, 0.035);
-  lip(openingOutline(o, HULL.inset, n, 0.035), -0.02, 0.03);
+  // inside: a slim steel trim (the bolted flange around it is part of the cabin furnishing)
+  lip(openingOutline(o, HULL.inset, n, 0.03), -0.012, 0.018);
 }
 
 export function buildExterior(M) {

@@ -152,8 +152,13 @@ export class Machines {
       gates.push(fold);
     }
     lift.plat = plat; lift.rails = rails; lift.screws = screws; lift.gates = gates; lift.beacon = beaconMat;
-    // kinematic collider for the platform
+    // kinematic collider for the platform while it moves; at rest the platform is a plain static
+    // floor at the top or the bottom (the character controller wedged itself on the resting
+    // kinematic box at the bottom of the shaft and nobody could walk off it)
     lift.col = g.phys.addKinematicBox(w / 2, 0.03, d / 2, V(cx, DECK_Y - 0.03, cz));
+    const rest = (y) => g.phys.addColliders([{ type: 'box', hx: w / 2, hy: 0.03, hz: d / 2, m: new THREE.Matrix4().makeTranslation(cx, y - 0.03, cz) }])[0];
+    lift.restTop = rest(DECK_Y);
+    lift.restBot = rest(LOWER_Y);
     // controls: tap the post, or call points at the top/bottom
     g.interact.addSphere(V(cx + w / 2 - 0.08, 1.0, cz - d / 2 + 0.1), 0.18, () => this.liftGo(), { maxDist: 2.0 });
     g.interact.addSphere(V(LIFT.x0 - 0.15, 1.1, LIFT.z0 - 0.2), 0.15, () => this.liftCall(DECK_Y), { maxDist: 2.0 });
@@ -212,6 +217,10 @@ export class Machines {
     L.beacon.emissiveIntensity = L.moving ? (Math.sin(performance.now() / 120) > 0 ? 6 : 0.3) : 0;
     L.shaftOpen = Math.min(1, Math.abs(L.y - L.top) / 0.05);
     L.col.body.setNextKinematicTranslation({ x: L.plat.position.x, y: L.y - 0.03, z: L.plat.position.z });
+    const atTop = !L.moving && Math.abs(L.y - L.top) < 0.004, atBot = !L.moving && Math.abs(L.y - L.bottom) < 0.004;
+    if (L.restTop.isEnabled() !== atTop) L.restTop.setEnabled(atTop);
+    if (L.restBot.isEnabled() !== atBot) L.restBot.setEnabled(atBot);
+    if (L.col.col.isEnabled() !== !(atTop || atBot)) L.col.col.setEnabled(!(atTop || atBot));
     L.delta = dy;
   }
 
@@ -514,13 +523,28 @@ export class Machines {
         bg.applyMatrix4(new THREE.Matrix4().makeRotationY(i / 5 * Math.PI * 2));
         blades.push(bg);
       }
-      f.add(new THREE.Mesh(mergeGeometries(blades), M.metalDark));
-      f.position.copy(p);
-      if (ax === 'x') f.rotation.z = Math.PI / 2;
-      this.root.add(f);
+      const rotor = new THREE.Mesh(mergeGeometries(blades), M.metalDark);
+      if (ax && ax.isVector3) {
+        // spin axis along an arbitrary direction: an oriented holder, the rotor spins about its y
+        const holder = new THREE.Group();
+        holder.quaternion.setFromUnitVectors(V(0, 1, 0), ax);
+        holder.position.copy(p);
+        holder.add(f);
+        f.add(rotor);
+        f.userData.spinY = true;
+        this.root.add(holder);
+      } else {
+        f.add(rotor);
+        f.position.copy(p);
+        if (ax === 'x') f.rotation.z = Math.PI / 2;
+        this.root.add(f);
+      }
       this.fans.push(f);
     };
-    for (const p of g.layout.spots.fans || []) mk(p.clone().add(V(-0.01, 0, 0)), 'x', 0.14);
+    for (const s of g.layout.spots.fans || []) {
+      if (s.n) mk(s.p, s.n, 0.13);
+      else mk(s.clone().add(V(-0.01, 0, 0)), 'x', 0.14);
+    }
     for (const p of g.layout.spots.pumps || []) mk(p, 'x', 0.11);
     const U = g.layout.spots.under || {};
     for (const p of U.ahuFans || []) mk(p, 'x', 0.13);
@@ -687,7 +711,7 @@ export class Machines {
     this.root.add(rails);
     this.engHatch = { hinge, open: 0, target: 0, col, w, d, rails };
     g.engHatch = this.engHatch;
-    g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0.05, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; g.audio.click(V(-1.3, 0, 7.7)); }, { maxDist: 2.2 });
+    g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0.05, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; g.audio.click(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2)); }, { maxDist: 2.2 });
     g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, -0.4, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; }, { maxDist: 2.2 });
   }
 
@@ -709,7 +733,7 @@ export class Machines {
     }
     // fans
     const fanOn = g.lifeSupport.fans.on && g.lifeSupport.fans.health > 0.2 && power > 0.2;
-    for (const f of this.fans) f.rotation.x += dt * (fanOn ? 18 : 0.5) * (0.8 + Math.random() * 0.05);
+    for (const f of this.fans) { const da = dt * (fanOn ? 18 : 0.5) * (0.8 + Math.random() * 0.05); if (f.userData.spinY) f.rotation.y += da; else f.rotation.x += da; }
     // server LEDs
     const s = this.servers;
     if (s) {

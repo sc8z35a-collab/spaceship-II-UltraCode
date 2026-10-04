@@ -74,8 +74,8 @@ void main(){
   vec3 col = uSunIllum * (sunT * max(muS + 0.1, 0.0) / 1.1 * (0.8 / 3.14159) * 1.25 * lit * phase + ms * 3.0 * (0.6 + 0.4 * dens));
   col += uMoonLight.w * max(dot(up, uMoonLight.xyz), 0.0) * vec3(0.55, 0.62, 0.8) * dens;
   // lightning
-  float fl = uFlash * smoothstep(0.9975, 0.9999, dot(dE, uFlashDir)) * dens;
-  col += vec3(0.7, 0.75, 1.0) * fl * 6.0;
+  float fl = uFlash * smoothstep(0.99997, 0.999998, dot(dE, uFlashDir)) * dens;
+  col += vec3(0.7, 0.75, 1.0) * fl * 2.5;
   // aerial perspective between camera and cloud
   vec3 ins, tr;
   aerialPerspective(ro, pKm, ins, tr);

@@ -589,7 +589,8 @@ export class Stations {
     const ph = (tt / 1.6) % 1;
     // (kept moderate: at 40x the strobes of the station next door bloomed over the whole view and
     // the picture flickered every 1.6 s)
-    this.SM.strobe.emissiveIntensity = ph < 0.05 || (ph > 0.16 && ph < 0.21) ? 6 : 0;
+    const blink = (c) => Math.max(0, 1 - Math.abs(ph - c) / 0.025);
+    this.SM.strobe.emissiveIntensity = 4 * Math.max(blink(0.025), blink(0.185));
     // relays
     let k = 0;
     const near = [];

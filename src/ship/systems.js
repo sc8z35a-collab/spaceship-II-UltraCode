@@ -29,7 +29,7 @@ export class ShipSystems {
     // ----- light pool
     this.lamps = [...L.lamps, ...g.shipVis.lampsCorridor.map((l) => (l.pos ? Object.assign({ room: 'corridor' }, l) : { pos: l, color: 0xe6eeff, intensity: 1.4, room: 'corridor' }))];
     this.pool = [];
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 16; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 7, 1.8);
       l.layers.enableAll();
       root.add(l);
@@ -304,20 +304,25 @@ export class ShipSystems {
     const eye = g.mode === 'camera' ? null : g.player.eyeLocal;
     const lamps = this.lamps;
     const dim = this.lightMode === 'dim' ? 0.35 : this.lightMode === 'off' ? 0.0 : this.lightMode === 'night' ? 0.25 : 1;
-    if (eye) {
-      // nearest lamps get the real lights. Lamps already lit count as closer (hysteresis), otherwise
-      // two lamps at about the same distance swap back and forth as the head sways and the room
-      // flickers every few seconds; a lamp that drops out fades away before its light is reused.
+    if (eye && (!this._selAt || this._selAt.distanceToSquared(eye) > 0.09 || this.pool.some((s) => !s.lamp || (s.out && s.f <= 0.02)))) {
+      // the lamps nearest the viewer get the real lights, re-chosen only after the head really
+      // moved (30 cm), lamps of the room you are in first, lit lamps favoured (hysteresis), and a
+      // lamp that drops out fades away fully before its light is reused (no visible swaps)
+      if (!this._selAt) this._selAt = eye.clone(); else this._selAt.copy(eye);
+      const ls = g.lifeSupport;
+      const here = ls ? ls.zoneAt(g.player.pos) : null;
       const lit = new Set(this.pool.filter((s) => s.lamp && !s.out).map((s) => s.lamp));
-      const want = new Set(lamps.map((l) => ({ l, d: l.pos.distanceToSquared(eye) * (lit.has(l) ? 0.55 : 1) }))
-        .sort((a, b) => a.d - b.d).slice(0, this.pool.length).map((x) => x.l));
+      const want = new Set(lamps.map((l) => {
+        let d = l.pos.distanceToSquared(eye);
+        if (here && l.room && l.room !== here && l.room !== 'corridor' && l.room !== 'station') d *= 2.2;
+        if (lit.has(l)) d *= 0.5;
+        return { l, d };
+      }).sort((a, b) => a.d - b.d).slice(0, this.pool.length).map((x) => x.l));
       for (const slot of this.pool) if (slot.lamp) slot.out = !want.has(slot.lamp);
       for (const l of want) {
         if (this.pool.some((s) => s.lamp === l)) continue;
-        // a free light, else the dimmest one already fading out (walking into a room must not
-        // leave it dark while the old lamps fade)
         let free = this.pool.find((s) => !s.lamp);
-        if (!free) free = this.pool.filter((s) => s.out).sort((a, b) => a.f - b.f)[0];
+        if (!free) free = this.pool.find((s) => s.out && s.f <= 0.02);
         if (free) { free.lamp = l; free.f = 0; free.out = false; }
       }
     }
@@ -330,7 +335,7 @@ export class ShipSystems {
     for (const slot of this.pool) {
       const L = slot.lamp;
       if (!L) { slot.light.intensity = 0; continue; }
-      slot.f = slot.out ? slot.f - dt * 2.5 : Math.min(1, slot.f + dt * 2.5);
+      slot.f = slot.out ? Math.max(0, slot.f - dt * 1.4) : Math.min(1, slot.f + dt * 1.8);
       if (slot.f <= 0 && slot.out) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; continue; }
       slot.light.position.copy(L.pos);
       slot.light.distance = L.range || 7;
@@ -339,7 +344,7 @@ export class ShipSystems {
       if (on) slot.light.color.lerp(ALARM_RED, 0.18 + 0.3 * pulse);
       const f = flick > 0 && Math.random() < flick ? 0.1 : 1;   // impact jolt: lamps stutter for a moment
       // brown-out: lamps sag and stutter when the power bus is weak
-      const brown = power < 0.6 && Math.random() < (0.6 - power) * 0.3 ? 0.35 : 1;
+      const brown = power < 0.45 && Math.random() < (0.45 - power) * 0.2 ? 0.45 : 1;
       const fe = slot.f * slot.f * (3 - 2 * slot.f);
       slot.light.intensity = L.intensity * (L.room === 'station' ? 1 : 1.3) * fe * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
     }

@@ -10,7 +10,9 @@ import { buildCorridor, buildRoomCoves, doorFrame } from './architecture.js';
 export const INSET = HULL.inset;
 export const Z_FRONT = -12.9;  // inner nose (approx)
 export const LIFT = { x0: 0.95, x1: 2.05, z0: -4.3, z1: -3.2 };
-export const ENG_HATCH = { x0: -1.7, x1: -0.9, z0: 7.3, z1: 8.1 };
+// floor hatch in the middle of the engineering deck, right above the underfloor walkway (at the old
+// spot by the port wall the hull bottom curves up and the space below was too low to get into)
+export const ENG_HATCH = { x0: -0.36, x1: 0.36, z0: 6.5, z1: 7.3 };
 
 // doors: id -> definition (opening in a partition). axis: 'x' = wall plane normal along X, 'z' = along Z
 export const DOORS = {
@@ -110,10 +112,11 @@ export function buildInteriorShell(M) {
     // dark arcs standing off the curved walls read as floating bars)
     const lo = pts.filter((p) => p[1] < DECK_Y - 0.08);
     if (lo.length > 3) {
-      // lower part is split around the bottom (t=-PI/2); reorder from starboard to port going down
-      const left = lo.filter((p) => p[0] < 0).sort((a, c) => c[1] - a[1]);
-      const right = lo.filter((p) => p[0] >= 0).sort((a, c) => a[1] - c[1]);
-      const loop = [...right.reverse(), ...left];
+      // one continuous arc: down the starboard side to the keel, then up the port side (the port
+      // half used to run top-down too, which drew a straight bar from the keel up to the port deck)
+      const left = lo.filter((p) => p[0] < 0).sort((a, c) => a[1] - c[1]);
+      const right = lo.filter((p) => p[0] >= 0).sort((a, c) => c[1] - a[1]);
+      const loop = [...right, ...left];
       if (loop.length > 3) b.add(ribGeometry(loop, 0.07, 0.06, z), 'frame');
     }
   }

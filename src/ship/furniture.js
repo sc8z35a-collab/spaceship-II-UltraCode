@@ -53,7 +53,7 @@ export function hullCabinet(b, o) {
   }
   if (doors > 0) {
     for (let i = 0; i < doors; i++) for (let j = 0; j < rows; j++) {
-      const zc = z0 + len * ((i + (i % 2 ? 0.15 : 0.85)) / doors);
+      const zc = z0 + len * ((i + (i % 2 ? 0.25 : 0.75)) / doors);
       const yc = yB + (yT - yB) * ((j + 0.5) / rows);
       const p = frontAt(zc, yc);
       const n = V(-side, 0, 0);

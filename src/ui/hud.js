@@ -28,6 +28,17 @@ export class Hud {
 
   setFade(v) { this.fadeTarget = v; }
 
+  /** full-screen DOM overlay: only touch the style when the value really changes, and take the
+   * element out of compositing entirely while it is invisible */
+  setOverlay(key, v) {
+    const el = this.el[key];
+    const s = v < 0.004 ? 0 : Math.round(v * 200) / 200;
+    if (this.last['ov_' + key] === s) return;
+    this.last['ov_' + key] = s;
+    el.style.display = s > 0 ? 'block' : 'none';
+    el.style.opacity = String(s);
+  }
+
   update(dt) {
     const g = this.g;
     const st = g.player.state;
@@ -41,7 +52,8 @@ export class Hud {
     this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk' && !foc);
     this.show('camUi', g.mode === 'camera');
     this.fade += (this.fadeTarget - this.fade) * Math.min(1, dt * 2.5);
-    this.el.fade.style.opacity = this.fade.toFixed(3);
+    if (Math.abs(this.fade - this.fadeTarget) < 0.002) this.fade = this.fadeTarget;
+    this.setOverlay('fade', this.fade);
     // idle stick hints in pilot mode
     const pil = (g.mode === 'pilot' || g.mode === 'camera') && !foc;
     if (foc !== this.last.foc) {
@@ -63,7 +75,7 @@ export class Hud {
     const pulse = al.active && !al.silenced ? (0.55 + 0.45 * Math.sin(t * 7.5)) * al.level : 0;
     gr.set('uAlarm', pulse);
     if (!this.el.alarm) this.el.alarm = document.getElementById('fx-alarm');
-    this.el.alarm.style.opacity = (pulse * 0.42).toFixed(3);
+    this.setOverlay('alarm', pulse * 0.42);
     gr.set('uTime', t % 1000);
   }
 }

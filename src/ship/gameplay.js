@@ -211,7 +211,9 @@ export class Gameplay {
     const inShaft = p.x > LIFT.x0 && p.x < LIFT.x1 && p.z > LIFT.z0 && p.z < LIFT.z1;
     const inHatchway = p.x > ENG_HATCH.x0 - 0.1 && p.x < ENG_HATCH.x1 + 0.1 && p.z > ENG_HATCH.z0 - 0.1 && p.z < ENG_HATCH.z1 + 0.1;
     const nearHatch = p.distanceTo(HATCH.center) < 1.25;
-    env.lowCeiling = (p.y < DECK_Y - 0.1 && !inShaft && !inHatchway && (pl.state === 'walk' || pl.state === 'evaWalk')) || nearHatch;
+    // at the foot of the lift shaft / the hatch ladder Kaito ducks too, so he can step out under
+    // the deck (standing there, his head stuck up into the opening and the deck edge stopped him)
+    env.lowCeiling = (p.y < DECK_Y - 0.1 && (!(inShaft || inHatchway) || p.y < DECK_Y - 0.55) && (pl.state === 'walk' || pl.state === 'evaWalk')) || nearHatch;
     if (nearHatch) env.stepUp = 0.45;    // step over the hatch sill
     // ladders: the engineering floor hatch inside, hull rails / boarding ladder outside
     env.climb = false;
@@ -858,7 +860,8 @@ export class Gameplay {
     // anti-collision strobe: a short double blink every 2.4 s, bright but not a screen-filling
     // flash (at 40x it bloomed over the whole view and the picture flickered every 1.6 s)
     const ph = t % 2.4;
-    M.navWhite.emissiveIntensity = (ph < 0.05 || (ph > 0.2 && ph < 0.25)) ? 7 * power : 0;
+    const blink = (c) => Math.max(0, 1 - Math.abs(ph - c) / 0.035);   // short soft-edged pulse
+    M.navWhite.emissiveIntensity = 4 * power * Math.max(blink(0.035), blink(0.22));
     // main engine plume from thrust toward -z (exhaust out of +z)
     const qInv = f.quat.clone().invert();
     const thrLocal = f.thrustAcc.clone().applyQuaternion(qInv);

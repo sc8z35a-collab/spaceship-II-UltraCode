@@ -113,6 +113,8 @@ export class Space {
     this.sunColor = new THREE.Color(1, 1, 1);
     this.sunVisible = 1;
     this.flashT = 0;
+    this.strokes = 0;
+    this.strokeT = 0;
   }
 
   /**
@@ -172,17 +174,25 @@ export class Space {
     const S = 16384;
     const ce = this._camEcef.clone().normalize().multiplyScalar(Rc);
     cdo.set(Math.round(ce.x / S) * S / 1000, Math.round(ce.y / S) * S / 1000, Math.round(ce.z / S) * S / 1000);
-    // lightning on the night side, now and then
+    // lightning: storm cells in the tropics, only in darkness, a cell some tens of km across that
+    // flickers with a few return strokes (the old 900 km wide flash anywhere, day or night, every
+    // couple of seconds lit up the whole window)
     this.flashT -= dt;
     const cu = this.clouds.material.uniforms;
     if (this.flashT <= 0) {
-      this.flashT = 0.6 + Math.random() * 3.5;
-      // pick a random point in a tropical band on the night side
-      const lat = (Math.random() - 0.5) * 0.9, lon = Math.random() * Math.PI * 2;
-      cu.uFlashDir.value.set(Math.cos(lat) * Math.cos(lon), Math.sin(lat), -Math.cos(lat) * Math.sin(lon));
-      cu.uFlash.value = 1;
+      this.flashT = 4 + Math.random() * 9;
+      const sunE = sh.uSunDirEcef.value;
+      for (let k = 0; k < 8; k++) {
+        const lat = (Math.random() - 0.5) * 0.8, lon = Math.random() * Math.PI * 2;
+        const d = new THREE.Vector3(Math.cos(lat) * Math.cos(lon), Math.sin(lat), -Math.cos(lat) * Math.sin(lon));
+        if (d.dot(sunE) < -0.12) { cu.uFlashDir.value.copy(d); this.strokes = 1 + Math.floor(Math.random() * 3); this.strokeT = 0; break; }
+      }
     }
-    cu.uFlash.value *= Math.exp(-dt * 18);
+    if (this.strokes > 0) {
+      this.strokeT -= dt;
+      if (this.strokeT <= 0) { cu.uFlash.value = 0.5 + Math.random() * 0.5; this.strokes--; this.strokeT = 0.06 + Math.random() * 0.12; }
+    }
+    cu.uFlash.value *= Math.exp(-dt * 22);
 
     // sky background follows the camera
     for (const o of [this.milky, this.stars]) {

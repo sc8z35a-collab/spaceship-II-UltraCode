@@ -343,12 +343,14 @@ export class Game {
     // refresh the space reflection when the lighting really changed (sunrise / sunset, the ship
     // turned): a recapture swaps every reflection at once, so it must not happen on a timer
     this.envT = (this.envT || 0) + dt;
-    if (this.envT > 8 && this.running) {
+    if (this.envT > 30 && this.running) {
       this.envT = 0;
       const sunL = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
       const lum = this.space.sunColor.r + this.space.sunColor.g + this.space.sunColor.b;
       const last = this._envState;
-      if (!last || sunL.angleTo(last.sun) > 0.35 || Math.abs(lum - last.lum) > 0.25 * Math.max(0.2, last.lum)) {
+      // only for big changes (in / out of the Earth's shadow, the ship turned well round), and
+      // never more often than every 30 s: each recapture swaps every reflection at once
+      if (!last || sunL.angleTo(last.sun) > 0.7 || lum > 2.2 * Math.max(0.05, last.lum) || lum < 0.45 * last.lum) {
         this._envState = { sun: sunL, lum };
         this.shipVis.captureEnv(this.engine.scene, new THREE.Vector3(0, 0, 0), false);
       }

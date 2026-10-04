@@ -3,9 +3,10 @@
 // laundry, room name plates over the doors. Everything sits on a floor, a wall or a shelf.
 import * as THREE from 'three';
 import { rng } from './geom.js';
-import { halfWidthAt, Z_COCKPIT_BULK, Z_ENG_BULK } from './hullShape.js';
+import { halfWidthAt, Z_COCKPIT_BULK, Z_ENG_BULK, OPENINGS, HULL } from './hullShape.js';
+import { openingOutline } from './exterior.js';
 import { INSET, DOORS } from './interior.js';
-import { mug, plantPot, bookRow, sticker } from './props.js';
+import { mug, plantPot, bookRow, sticker, valveWheel, switchPanel, gauge } from './props.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const wallX = (side, z, y, off = 0) => side * (halfWidthAt(z, y, INSET) - off);
@@ -210,8 +211,53 @@ function roomSign(b, idx, pos, rotY) {
 }
 
 // ------------------------------------------------------------------ per room
+/**
+ * Portholes read as heavy windows from inside: a broad bolted flange ring on the wall around the
+ * deep reveal, a dark gasket and an ID plate (a bare dark ring with a dark disc looked like a ball)
+ */
+function windowBezels(b) {
+  for (const o of OPENINGS) {
+    if (o.kind !== 'win') continue;
+    const small = o.halfW < 0.2;
+    const n = 48, into = o.normal.clone().negate();
+    // outline on the inner wall, `off` metres proud of it
+    const ring = (grow, off, m = n) => openingOutline(o, HULL.inset, m, grow).map((p) => p.addScaledVector(into, off));
+    const ringA = ring(0.03, 0.012), ringB = ring(small ? 0.13 : 0.1, 0.012), ringC = ring(small ? 0.136 : 0.106, -0.006);
+    const pos = [];
+    const quad = (A, B, C, D) => pos.push(A.x, A.y, A.z, B.x, B.y, B.z, C.x, C.y, C.z, A.x, A.y, A.z, C.x, C.y, C.z, D.x, D.y, D.z);
+    for (let k = 0; k < n; k++) {
+      const k2 = (k + 1) % n;
+      quad(ringA[k], ringA[k2], ringB[k2], ringB[k]);     // flange face
+      quad(ringB[k], ringB[k2], ringC[k2], ringC[k]);     // chamfered outer edge into the wall
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    g.computeVertexNormals();
+    const nr = g.attributes.normal;
+    if (nr.getX(0) * into.x + nr.getY(0) * into.y + nr.getZ(0) * into.z < 0) {
+      const arr = g.attributes.position.array;
+      for (let i = 0; i < arr.length; i += 9) for (let c = 0; c < 3; c++) { const t = arr[i + 3 + c]; arr[i + 3 + c] = arr[i + 6 + c]; arr[i + 6 + c] = t; }
+      g.computeVertexNormals();
+    }
+    b.add(g, 'metal');
+    b.tube(ring(0.024, 0.006), 0.007, 'black', { closed: true, radial: 5, seg: n * 2 });   // rubber gasket
+    const nb = small ? 10 : 16;
+    const bolts = ring(small ? 0.088 : 0.068, 0.019, nb * 4);
+    const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), into);
+    const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+    for (let k = 0; k < bolts.length; k += 4) b.cyl(0.011, 0.011, 0.014, 'metalDark', bolts[k].toArray(), [e.x, e.y, e.z], 6);
+    if (small) {
+      const qz = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, 1), into);
+      const ez = new THREE.Euler().setFromQuaternion(qz, 'YXZ');
+      const lp = openingOutline(o, HULL.inset, 4, 0.2).sort((p, q2) => p.y - q2.y)[0].addScaledVector(into, 0.004);   // under the window
+      b.add(new THREE.PlaneGeometry(0.1, 0.03), 'labels', lp.toArray(), [ez.x, ez.y, ez.z]);
+    }
+  }
+}
+
 export function buildExtras(b, L) {
   const R = rng(9090);
+  windowBezels(b);
 
   // ---- cockpit: extinguisher + first aid on the aft bulkhead, a duffel by the jump seat, cables
   extinguisher(b, [-1.05, 0.42, Z_COCKPIT_BULK - 0.15], Math.PI);
@@ -280,10 +326,19 @@ export function buildExtras(b, L) {
     growRack(b, R, xh - 0.5, xh - 0.06, 3.28, 4.22, 3);
     L.lamps.push({ pos: V(xh - 0.3, 1.2, 3.75), color: 0xd070ff, intensity: 1.4, room: 'ls', range: 4 });
   }
+  // pump skid: suction from the deck, discharge over to the water tank through a check valve
   b.box(0.6, 0.06, 0.5, 'metalDark', [1.3, 0.03, 5.05], null, 0.01);
+  for (const [x, z] of [[1.04, 4.84], [1.56, 4.84], [1.04, 5.26], [1.56, 5.26]]) b.cyl(0.012, 0.012, 0.02, 'steel', [x, 0.065, z], null, 6);
   b.cyl(0.13, 0.13, 0.36, 'pipeBlue', [1.18, 0.2, 5.05], [0, 0, Math.PI / 2], 18);
   b.cyl(0.1, 0.1, 0.28, 'steel', [1.48, 0.2, 5.05], [0, 0, Math.PI / 2], 16);
-  b.pipe([1.18, 0.33, 5.05], [1.18, 0.6, 5.25], 0.03, 'pipeBlue', 8);
+  for (let k = 0; k < 6; k++) b.box(0.24, 0.006, 0.012, 'metalDark', [1.48, 0.2 + Math.cos(k / 6 * Math.PI * 2) * 0.1, 5.05 + Math.sin(k / 6 * Math.PI * 2) * 0.1], [k / 6 * Math.PI * 2, 0, 0], 0);
+  b.tube([V(1.18, 0.33, 5.05), V(1.18, 0.48, 5.0), V(1.38, 0.52, 4.86), V(1.62, 0.52, 4.7), V(1.82, 0.52, 4.62)], 0.03, 'pipeBlue', { radial: 10 });
+  b.cyl(0.05, 0.05, 0.03, 'steel', [1.8, 0.52, 4.62], [0, 0, Math.PI / 2], 16);              // flange at the tank
+  b.cyl(0.045, 0.045, 0.1, 'steel', [1.52, 0.52, 4.76], [0, 0, Math.PI / 2], 14);             // check valve body
+  b.pipe([1.52, 0.56, 4.76], [1.52, 0.66, 4.76], 0.008, 'steel', 6);
+  valveWheel(b, [1.52, 0.665, 4.76], [-Math.PI / 2, 0, 0], 0.055, 'pipeBlue');
+  b.tube([V(1.0, 0.2, 5.05), V(0.9, 0.18, 5.05), V(0.86, 0.05, 5.05), V(0.86, -0.12, 5.05)], 0.035, 'pipeBlue', { radial: 10 });
+  b.cyl(0.07, 0.075, 0.02, 'steel', [0.86, 0.01, 5.05], null, 16);                            // deck collar
   b.colBox(0.6, 0.4, 0.5, [1.3, 0.2, 5.05]);
 
   // ---- engineering: workbench aft on the port side, extinguisher, first aid

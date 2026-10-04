@@ -3,9 +3,10 @@
 import * as THREE from 'three';
 import { rng } from './geom.js';
 import { heightRangeAt, halfWidthAt, DECK_Y, LOWER_Y } from './hullShape.js';
-import { INSET, LIFT, ENG_HATCH } from './interior.js';
+import { INSET, LIFT } from './interior.js';
 import { valveWheel, gauge, cableBundle, sticker } from './props.js';
 import { buildUnderfloorDetail, boltedFlange } from './underfloorDetail.js';
+import { buildUnderfloorPlus } from './underfloorPlus.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -23,7 +24,16 @@ export function buildUnderfloor(b, L) {
   const R = rng(909);
   const zA = -8.6, zB = 9.3;
   // ---- central walkway (grating) at LOWER_Y, plus branches
-  const walk = [[-0.45, 0.45, zA, zB], [0.45, LIFT.x1, LIFT.z0 - 0.1, LIFT.z1 + 0.1], [ENG_HATCH.x0 - 0.1, -0.45, ENG_HATCH.z0 - 0.2, ENG_HATCH.z1 + 0.2], [-1.4, -0.45, -5.0, -4.2], [0.45, 1.4, 5.6, 6.4]];
+  // the lift landing stops at the shaft: under the platform there is a separate, slightly lower pit
+  // floor (two coplanar floors overlapping there caught Kaito's feet on the seam and he could not
+  // step off the platform)
+  const walk = [[-0.45, 0.45, zA, zB], [0.45, LIFT.x0 - 0.015, LIFT.z0 - 0.1, LIFT.z1 + 0.1], [-1.4, -0.45, -5.0, -4.2], [0.45, 1.4, 5.6, 6.4]];
+  {
+    const w = LIFT.x1 - LIFT.x0, d = LIFT.z1 - LIFT.z0, cx = (LIFT.x0 + LIFT.x1) / 2, cz = (LIFT.z0 + LIFT.z1) / 2;
+    b.add(new THREE.PlaneGeometry(w, d), 'grate', [cx, LOWER_Y - 0.075, cz], [-Math.PI / 2, 0, 0]);
+    b.colBox(w, 0.04, d, [cx, LOWER_Y - 0.095, cz]);
+    for (const [x, z, ww, dd] of [[cx, LIFT.z0, w, 0.04], [cx, LIFT.z1, w, 0.04], [LIFT.x1, cz, 0.04, d]]) b.box(ww, 0.1, dd, 'hazard', [x, LOWER_Y - 0.05, z], null, 0.004);
+  }
   for (const [x0, x1, z0, z1] of walk) {
     const w = x1 - x0, d = z1 - z0;
     b.add(new THREE.PlaneGeometry(w, d), 'grate', [(x0 + x1) / 2, LOWER_Y, (z0 + z1) / 2], [-Math.PI / 2, 0, 0]);
@@ -45,14 +55,16 @@ export function buildUnderfloor(b, L) {
   L.rails = L.rails || [];
   // ---- pipe runs
   const runs = [
-    { sys: 'coolant', pts: [V(1.1, -0.55, zA + 0.2), V(1.1, -0.55, 4.0), V(1.0, -0.8, 5.2), V(0.9, -1.1, 6.0), V(0.9, -1.1, zB)] },
-    { sys: 'coolant', pts: [V(1.32, -0.62, zA + 0.2), V(1.32, -0.62, 4.0), V(1.25, -0.95, 5.2), V(1.15, -1.25, 6.0), V(1.15, -1.25, zB)] },
+    // the coolant and propellant mains swing outboard around the lift shaft (they used to run
+    // straight through it and stopped the platform / anyone going down)
+    { sys: 'coolant', pts: [V(1.1, -0.55, zA + 0.2), V(1.1, -0.55, -5.5), V(1.6, -0.52, -5.0), V(2.3, -0.5, -4.55), V(2.3, -0.5, -2.95), V(1.6, -0.52, -2.5), V(1.1, -0.55, -2.0), V(1.1, -0.55, 4.0), V(1.0, -0.8, 5.2), V(0.9, -1.1, 6.0), V(0.9, -1.1, zB)] },
+    { sys: 'coolant', pts: [V(1.32, -0.62, zA + 0.2), V(1.32, -0.62, -5.6), V(1.85, -0.6, -5.05), V(2.52, -0.6, -4.55), V(2.52, -0.6, -2.95), V(1.85, -0.6, -2.45), V(1.32, -0.62, -1.9), V(1.32, -0.62, 4.0), V(1.25, -0.95, 5.2), V(1.15, -1.25, 6.0), V(1.15, -1.25, zB)] },
     { sys: 'air', pts: [V(0.75, -0.36, zA), V(0.75, -0.36, -2.0), V(0.95, -0.38, 0.0), V(0.75, -0.36, 2.5), V(0.75, -0.36, 5.4)] },
     { sys: 'water', pts: [V(-0.78, -0.32, -7.6), V(-0.78, -0.32, 6.0)] },
     { sys: 'waste', pts: [V(-0.95, -0.95, -7.8), V(-0.95, -1.0, -2.0), V(-0.9, -1.05, 4.5)] },
     { sys: 'o2', pts: [V(-1.35, -0.72, -7.8), V(-1.35, -0.72, 4.2)] },
     { sys: 'n2', pts: [V(-1.48, -0.86, -7.8), V(-1.48, -0.86, 4.2)] },
-    { sys: 'rcs', pts: [V(1.55, -0.9, -9.4), V(1.55, -0.9, -4.6), V(1.7, -1.05, -2.0), V(1.55, -0.9, 9.2)] },
+    { sys: 'rcs', pts: [V(1.55, -0.9, -9.4), V(1.55, -0.9, -5.4), V(2.0, -0.95, -4.85), V(2.3, -1.0, -4.5), V(2.3, -1.0, -3.0), V(1.95, -1.0, -2.6), V(1.7, -1.05, -2.0), V(1.55, -0.9, 9.2)] },
     { sys: 'rcs', pts: [V(-1.62, -1.02, -9.4), V(-1.62, -1.02, 9.2)] },
   ];
   // risers through the deck (to galley, bath, LS, cockpit)
@@ -112,8 +124,8 @@ export function buildUnderfloor(b, L) {
     tanks.push({ name, pos: V(-1.75, -1.25, zc) });
   }
   // water bladder (starboard)
-  b.box(0.75, 0.42, 2.2, 'pipeBlue', [1.7, -1.32, -5.0], null, 0.18, 3, true);
-  b.box(0.8, 0.04, 2.3, 'cargo' in b ? 'fabric' : 'rubber', [1.7, -1.1, -5.0], null, 0.01);
+  b.box(0.75, 0.42, 1.5, 'pipeBlue', [1.7, -1.32, -5.65], null, 0.18, 3, true);
+  b.box(0.8, 0.04, 1.6, 'rubber', [1.7, -1.1, -5.65], null, 0.01);
   // coolant pumps (with fan motors, animated elsewhere)
   L.spots.pumps = [];
   for (const z of [5.8, 6.9]) {
@@ -131,7 +143,7 @@ export function buildUnderfloor(b, L) {
   // isolation valves on main runs (interactive)
   L.valves = [];
   const valvePos = [
-    ['coolant', V(1.1, -0.42, -4.0)], ['coolant', V(1.1, -0.42, 2.4)],
+    ['coolant', V(1.1, -0.42, -6.2)], ['coolant', V(1.1, -0.42, 2.4)],
     ['water', V(-0.78, -0.2, -5.0)], ['water', V(-0.78, -0.2, 1.5)],
     ['o2', V(-1.35, -0.58, -2.0)], ['n2', V(-1.48, -0.7, 1.0)], ['rcs', V(1.55, -0.76, 0.5)],
   ];
@@ -154,5 +166,6 @@ export function buildUnderfloor(b, L) {
     b.box(0.03, 0.03, 0.01, R() > 0.5 ? 'ledGreen' : 'ledAmber', [0.32, -0.36, z + 0.065], null, 0);
   }
   buildUnderfloorDetail(b, L, R);
+  buildUnderfloorPlus(b, L, R);
   return { segs };
 }

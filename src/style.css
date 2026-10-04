@@ -49,9 +49,11 @@ html, body {
 /* ---------- HUD ---------- */
 #hud { position: absolute; inset: 0; z-index: 10; pointer-events: none; }
 #fx-vignette, #fx-alarm, #fx-fade { position: absolute; inset: 0; pointer-events: none; }
-#fx-alarm { opacity: 0; box-shadow: inset 0 0 14vh 3vh rgba(255, 20, 10, 0.95); mix-blend-mode: screen; }
-#fx-fade { background: #000; opacity: 0; transition: opacity 0.6s ease; }
-#fx-vignette { opacity: 0; background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 25%, rgba(0, 0, 0, 1) 75%); }
+/* no blend modes / backdrop filters over the WebGL canvas: on phones they made the compositor
+   re-blend the whole screen every frame and the picture flickered */
+#fx-alarm { opacity: 0; display: none; box-shadow: inset 0 0 14vh 3vh rgba(255, 20, 10, 0.8); }
+#fx-fade { background: #000; opacity: 0; display: none; }
+#fx-vignette { display: none; }
 
 .stick {
   position: absolute; width: 22vh; height: 22vh; margin: -11vh 0 0 -11vh; border-radius: 50%;
@@ -70,8 +72,8 @@ html, body {
 #cam-ui { position: absolute; right: calc(2vw + env(safe-area-inset-right, 0px)); top: calc(3vh + env(safe-area-inset-top, 0px)); }
 .hbtn {
   pointer-events: auto; width: 9vh; height: 9vh; border-radius: 50%; padding: 1.9vh;
-  border: 1.5px solid rgba(220, 230, 255, 0.28); background: rgba(10, 16, 28, 0.25); color: #e6ecf7;
-  backdrop-filter: blur(4px); -webkit-backdrop-filter: blur(4px); box-sizing: border-box;
+  border: 1.5px solid rgba(220, 230, 255, 0.28); background: rgba(10, 16, 28, 0.42); color: #e6ecf7;
+  box-sizing: border-box;
 }
 .hbtn.small { width: 7.6vh; height: 7.6vh; padding: 1.7vh; }
 .hbtn svg { width: 100%; height: 100%; fill: rgba(230, 238, 255, 0.85); }

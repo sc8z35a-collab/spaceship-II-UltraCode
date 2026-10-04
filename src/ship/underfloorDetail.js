@@ -141,12 +141,12 @@ export function buildUnderfloorDetail(b, L, R) {
   // catenary cable bundles along the deck underside (sagging between hangers)
   for (const [x, n, key] of [[-0.25, 6, 0], [0.22, 5, 1], [-1.0, 4, 2]]) {
     const pts = [];
-    for (let z = -8.3; z <= 7.0; z += 0.6) {
+    for (let z = -8.3; z <= 6.0; z += 0.6) {
       const k = Math.round((z + 8.3) / 0.6);
       pts.push([x + (key === 2 ? Math.sin(z) * 0.03 : 0), -0.16 - (k % 2 ? 0.09 : 0.0), z]);
     }
     cableBundle(b, pts, n, 0.02);
-    for (let z = -8.3; z <= 7.0; z += 1.2) b.box(0.12, 0.012, 0.02, 'steel', [x, -0.15, z], null, 0.003);
+    for (let z = -8.3; z <= 6.0; z += 1.2) b.box(0.12, 0.012, 0.02, 'steel', [x, -0.15, z], null, 0.003);
   }
 }
 

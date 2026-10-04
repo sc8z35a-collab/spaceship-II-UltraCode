@@ -223,12 +223,9 @@ export class Player {
     const bob = Math.sin(this.headBob) * 0.022 * Math.min(1, hs);
     const eyeH = THREE.MathUtils.lerp(EYE_STAND, EYE_CROUCH, this.crouch);
     this.eyeLocal.copy(this.pos).addScaledVector(this.up, eyeH + bob);
-    // gentle floating sway in zero-g
-    if (this.state === 'float' || this.state === 'eva') {
-      const t = performance.now() / 1000;
-      this.eyeLocal.y += Math.sin(t * 0.7) * 0.006;
-      this.roll = Math.sin(t * 0.33) * 0.012;
-    } else this.roll *= 0.9;
+    // no idle camera sway: the slow bob swept every fine highlight across the pixel grid and the
+    // picture shimmered every few seconds
+    this.roll *= 0.9;
     this.viewQuat(this.lookQuat);
   }
 

@@ -82,19 +82,24 @@ class AutoExposurePass extends Pass {
     super('AutoExposurePass');
     this.needsSwap = false;
     this.lumRT = new THREE.WebGLRenderTarget(64, 64, { type: THREE.HalfFloatType, generateMipmaps: true, minFilter: THREE.LinearMipmapLinearFilter, magFilter: THREE.LinearFilter, depthBuffer: false });
-    this.adaptA = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, depthBuffer: false });
-    this.adaptB = new THREE.WebGLRenderTarget(1, 1, { type: THREE.FloatType, depthBuffer: false });
+    // half float: renderable everywhere the HDR frame buffers are (32-bit float targets are not on
+    // every phone, and a failed target made the exposure jump with every frame)
+    this.adaptA = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
+    this.adaptB = new THREE.WebGLRenderTarget(1, 1, { type: THREE.HalfFloatType, depthBuffer: false, minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter });
     this.lumMat = new THREE.ShaderMaterial({
       uniforms: { tInput: { value: null } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: /* glsl */`
         uniform sampler2D tInput; varying vec2 vUv;
         void main(){
+          // 4 x 4 taps spread over the whole area this 64 x 64 texel stands for: small bright things
+          // (lamps, glints, stars) no longer pop in and out of a sparse sample grid as the view sways
           vec3 c = vec3(0.0);
-          for (int j = 0; j < 2; j++) for (int i = 0; i < 2; i++){
-            c += texture2D(tInput, vUv + (vec2(float(i), float(j)) - 0.5) / 128.0).rgb;
+          for (int j = 0; j < 4; j++) for (int i = 0; i < 4; i++){
+            vec3 s = texture2D(tInput, vUv + (vec2(float(i), float(j)) - 1.5) / 256.0).rgb;
+            c += min(s, vec3(8.0));
           }
-          c *= 0.25;
+          c *= 1.0 / 16.0;
           float l = dot(c, vec3(0.2126, 0.7152, 0.0722));
           if (!(l >= 0.0 && l < 65000.0)) l = 0.0;
           vec2 d = vUv - 0.5;
@@ -142,7 +147,7 @@ class AutoExposurePass extends Pass {
     const src = this.flip ? this.adaptB : this.adaptA;
     const dst = this.flip ? this.adaptA : this.adaptB;
     this.adaptMat.uniforms.tPrev.value = src.texture;
-    this.adaptMat.uniforms.uRate.value = 1 - Math.exp(-(dt || 0.016) * 1.6);
+    this.adaptMat.uniforms.uRate.value = 1 - Math.exp(-Math.min(0.1, dt || 0.016) * 1.1);
     this.quad.material = this.adaptMat;
     renderer.setRenderTarget(dst);
     renderer.render(this.qscene, this.qcam);
@@ -308,7 +313,7 @@ export class Engine {
     this.composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
     this.mfPass = new MultiFrustumPass(this.scene, this.camera);
     this.exposure = new AutoExposurePass();
-    this.bloom = new BloomEffect({ mipmapBlur: true, luminanceThreshold: 0.9, luminanceSmoothing: 0.35, intensity: 0.85, radius: 0.78, levels: 8 });
+    this.bloom = new BloomEffect({ mipmapBlur: true, luminanceThreshold: 1.05, luminanceSmoothing: 0.3, intensity: 0.75, radius: 0.75, levels: 8 });
     this.grade = new GradeEffect();
     this.exposure.onTexture = (t) => this.grade.set('tLum', t);
     this.composer.addPass(this.mfPass);
@@ -352,13 +357,16 @@ export class Engine {
     // Every change of resolution is visible (the image goes soft/sharp), so: settle during the first
     // ~25 s, never climb again after having had to drop (that ping-pong flickered every few
     // seconds on phones), and afterwards only drop when the frame rate really sags.
-    const settling = now - this.resStart < 25;
-    if (now - this.lastAdjust < (settling ? 2.5 : 15) || this.frameTimes.length < 90) return;
+    // after the first ~20 s the resolution is locked for good: a change of resolution re-creates
+    // every frame buffer and is seen as a flash on phones
+    const settling = now - this.resStart < 20;
+    if (!settling) return;
+    if (now - this.lastAdjust < 2.5 || this.frameTimes.length < 60) return;
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const med = sorted[Math.floor(sorted.length / 2)];
     let pr = this.pr;
-    if (med > (settling ? 1 / 45 : 1 / 34) && pr > 0.85) { pr = Math.max(0.85, pr - 0.15); this.resDropped = true; }
-    else if (settling && !this.resDropped && med < 1 / 58 && pr < this.maxPR) pr = Math.min(this.maxPR, pr + 0.1);
+    if (med > 1 / 40 && pr > 0.85) { pr = Math.max(0.85, pr - 0.2); this.resDropped = true; }
+    else if (!this.resDropped && med < 1 / 58 && pr < this.maxPR) pr = Math.min(this.maxPR, pr + 0.1);
     if (Math.abs(pr - this.pr) > 0.01) {
       this.pr = pr;
       this.resize();

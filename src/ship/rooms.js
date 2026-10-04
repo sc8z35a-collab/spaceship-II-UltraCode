@@ -82,6 +82,152 @@ function consoleSweep(b, C, R0, a0, a1, profile, key, steps = 40) {
   }
 }
 
+/** side console (builder-local: x across, z along, inner side toward -side): a closed body with a
+ * deck sloping toward the pilot, kick recess, switch bank, rotary knobs and a keypad */
+function sideConsole(b, R, side) {
+  const s = side;
+  const prof = roundPolygon([[s * 0.23, 0.0], [s * 0.23, 0.78], [s * 0.17, 0.81], [-s * 0.19, 0.70], [-s * 0.23, 0.66], [-s * 0.23, 0.12], [-s * 0.19, 0.08], [-s * 0.19, 0.0]],
+    [0, 0.02, 0.025, 0.03, 0.02, 0.01, 0.01, 0], 3);
+  const pts = s > 0 ? prof.slice().reverse() : prof;
+  const sh = new THREE.Shape(pts.map(([u, y]) => new THREE.Vector2(u, y)));
+  const g = new THREE.ExtrudeGeometry(sh, { depth: 1.13, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 4 });
+  g.translate(0, 0, -1.13 / 2);
+  b.add(g, 'panel');
+  b.colBox(0.46, 0.8, 1.16, [0, 0.4, 0]);
+  // kick recess light + a seam band
+  b.box(0.012, 0.016, 1.05, 'ledBlue', [-s * 0.192, 0.05, 0], null, 0);
+  b.box(0.008, 0.012, 1.1, 'black', [-s * 0.232, 0.4, 0], null, 0);
+  // control deck: tilted toward the pilot
+  const tilt = s * Math.atan2(0.11, 0.36);
+  b.push([-s * 0.01, 0.755, 0], [0, 0, tilt]);
+  b.box(0.3, 0.008, 1.0, 'panelDark', [0, 0.006, 0], null, 0.003);
+  switchPanel(b, R, [0, 0.012, 0.3], [-Math.PI / 2, 0, 0], 4, 3, 0.05);
+  for (let k = 0; k < 3; k++) {
+    b.cyl(0.018, 0.02, 0.022, 'plasticK', [-0.08 + k * 0.08, 0.02, 0.0], null, 14);
+    b.box(0.004, 0.006, 0.014, 'plasticW', [-0.08 + k * 0.08, 0.032, -0.008], null, 0);
+  }
+  b.box(0.2, 0.012, 0.09, 'plasticK', [0, 0.012, -0.12], null, 0.004);
+  for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) b.box(0.022, 0.007, 0.022, 'plasticW', [-0.075 + i * 0.03, 0.021, -0.15 + j * 0.03], null, 0.003);
+  for (let k = 0; k < 5; k++) b.box(0.012, 0.008, 0.012, k % 2 ? 'ledGreen' : 'ledAmber', [0.12, 0.014, 0.1 + k * 0.035], null, 0);
+  b.pop();
+}
+
+/**
+ * Dash between the console arc and the nose: a matte shelf at the console's back edge that runs
+ * forward to the hull, with a padded brow, defrost vents and standby instruments. An invisible
+ * curtain over the console's back edge keeps a floating player from drifting into the nose.
+ */
+function cockpitDash(b, C, R0, a0, a1) {
+  const yT = 0.775, th = 0.03, rB = R0 + 0.555;
+  const arc = [];
+  const N = 40;
+  for (let i = 0; i <= N; i++) { const a = a0 + (a1 - a0) * (i / N); arc.push([C.x + Math.sin(a) * rB, C.z - Math.cos(a) * rB]); }
+  const zE = arc[N][1];
+  const wall = [];
+  for (let i = 0; i <= 40; i++) {
+    const z = zE + (-13.34 - zE) * (i / 40);
+    const hw = halfWidthAt(z, yT, INSET) - 0.004;
+    if (hw <= 0.02) break;
+    wall.push([hw, z]);
+  }
+  const outline = [...arc, ...wall, ...wall.slice().reverse().map(([x, z]) => [-x, z])];
+  const sh = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, -z)));
+  const g = new THREE.ExtrudeGeometry(sh, { depth: th, bevelEnabled: false, curveSegments: 4 });
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, yT - th, 0);
+  b.add(g, 'panelDark');
+  b.colMesh(g);
+  // padded brow along the console's back edge
+  const brow = arc.map(([x, z]) => V(x, yT + 0.012, z).add(V(x - C.x, 0, z - C.z).normalize().multiplyScalar(0.03)));
+  b.tube(brow, 0.016, 'wallPad', { radial: 8 });
+  // defrost vent slots along the window base and a row of standby instruments
+  for (let i = -6; i <= 6; i++) {
+    const a = i * 0.12, r = rB + 0.42;
+    const p = V(C.x + Math.sin(a) * r, yT + 0.002, C.z - Math.cos(a) * r);
+    if (halfWidthAt(p.z, yT, INSET) - Math.abs(p.x) < 0.08) continue;
+    b.box(0.11, 0.004, 0.012, 'black', p.toArray(), [0, -a, 0], 0);
+  }
+  for (const a of [-0.33, 0.33]) {
+    // standby instrument pods between the console screens, tilted up toward the pilot
+    const r = rB + 0.13;
+    b.push([C.x + Math.sin(a) * r, yT, C.z - Math.cos(a) * r], [-0.55, -a, 0], [1, 1, 1]);
+    b.box(0.3, 0.1, 0.07, 'panelDark', [0, 0.04, 0], null, 0.012);
+    for (let k = 0; k < 3; k++) gaugeFlat(b, [-0.095 + k * 0.095, 0.05, 0.037], 0.027);
+    b.pop();
+  }
+  // service hatch seams on the shelf
+  for (const sx of [-1, 1]) {
+    const zc = -12.35, xc = sx * 0.9;
+    for (const [w, d, dx, dz] of [[0.42, 0.006, 0, -0.17], [0.42, 0.006, 0, 0.17], [0.006, 0.34, -0.21, 0], [0.006, 0.34, 0.21, 0]]) b.box(w, 0.003, d, 'black', [xc + dx, yT + 0.001, zc + dz], null, 0);
+  }
+  // collision curtain: from the brow up to the hull roof, plus wings out to the hull at the ends
+  const pos = [], idx = [];
+  const col = [...arc.map(([x, z]) => [x, z])];
+  const wingS = [], wingP = [];
+  for (let k = 1; k <= 6; k++) {
+    const t = k / 6, hw = halfWidthAt(zE, 1.2, INSET) + 0.05;
+    wingS.push([arc[N][0] + (hw - arc[N][0]) * t, zE]);
+    wingP.push([arc[0][0] + (-hw - arc[0][0]) * t, zE]);
+  }
+  const path = [...wingP.reverse(), ...col, ...wingS];
+  for (const [x, z] of path) {
+    const [, top] = heightRangeAt(z, Math.max(-2.5, Math.min(2.5, x)), INSET);
+    const yTop = Number.isFinite(top) ? top + 0.1 : 2.6;
+    pos.push(x, yT - 0.05, z, x, yTop, z);
+  }
+  for (let i = 0; i < path.length - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
+  const cg = new THREE.BufferGeometry();
+  cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  cg.setIndex(idx);
+  b.colMesh(cg.toNonIndexed());
+}
+
+/**
+ * Flat mounting bezel on a hull cabinet's curved front, centred at (zc, yc), w along z, h along y.
+ * Returns the x of its face (where a flat plate can be mounted without sinking into the curve).
+ */
+function cabinetBezel(b, cab, side, zc, yc, w, h) {
+  const xs = [];
+  for (const dz of [-w / 2, 0, w / 2]) for (const dy of [-h / 2, 0, h / 2]) xs.push(cab.frontAt(zc + dz, yc + dy).x);
+  const xFace = side > 0 ? Math.min(...xs) - 0.004 : Math.max(...xs) + 0.004;
+  const xBack = side > 0 ? Math.max(...xs) + 0.03 : Math.min(...xs) - 0.03;
+  b.box(Math.abs(xBack - xFace), h + 0.04, w + 0.04, 'panelDark', [(xFace + xBack) / 2, yc, zc], null, 0.008);
+  return xFace;
+}
+
+/** fan sunk into a surface at p facing n: dark well, motor hub, bezel, finger guard */
+function fanHousing(b, p, n, r) {
+  const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), n);
+  const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
+  b.push(p.toArray(), [e.x, e.y, e.z]);
+  b.cyl(r, r, 0.085, 'metalDark', [0, -0.042, 0], null, 32, true);
+  b.cyl(r, r, 0.004, 'black', [0, -0.083, 0], null, 32);
+  b.cyl(0.035, 0.045, 0.05, 'metalDark', [0, -0.058, 0], null, 16);
+  for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2; b.box(0.01, 0.01, r * 0.95, 'metalDark', [Math.cos(a) * r * 0.5, -0.07, Math.sin(a) * r * 0.5], [0, -a + Math.PI / 2, 0], 0); }
+  b.torus(r + 0.012, 0.014, 'steel', [0, 0.002, 0], [Math.PI / 2, 0, 0], 40);
+  for (const rr of [0.3, 0.6, 0.9]) b.torus(r * rr, 0.0028, 'steel', [0, 0.012, 0], [Math.PI / 2, 0, 0], 32);
+  for (let k = 0; k < 4; k++) b.box(r * 1.9, 0.004, 0.005, 'steel', [0, 0.012, 0], [0, k * Math.PI / 4, 0], 0);
+  for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2 + Math.PI / 4; b.cyl(0.008, 0.008, 0.008, 'steel', [Math.cos(a) * (r + 0.035), 0.003, Math.sin(a) * (r + 0.035)], null, 8); }
+  b.pop();
+}
+
+/** valve on a pipe at p: body + bonnet + stem + handwheel facing `out` (unit, horizontal) */
+function inlineValve(b, p, out, pipeR, wheelR, key) {
+  b.cyl(pipeR * 1.9, pipeR * 1.9, 0.11, 'steel', p.toArray(), null, 16);
+  b.sphere(pipeR * 1.7, 'metalDark', p.clone().addScaledVector(out, pipeR * 1.2).toArray(), 12);
+  const s0 = p.clone().addScaledVector(out, pipeR * 2.2), s1 = p.clone().addScaledVector(out, pipeR * 2.2 + 0.09);
+  b.pipe(s0, s1, 0.009, 'steel', 8);
+  const yaw = Math.atan2(out.x, out.z);
+  valveWheel(b, s1.toArray(), [0, yaw, 0], wheelR, key);
+}
+
+/** small round instrument set into a face (builder-local, facing +z) */
+function gaugeFlat(b, pos, r) {
+  b.cyl(r, r, 0.012, 'steel', pos, [Math.PI / 2, 0, 0], 18);
+  b.cyl(r * 0.85, r * 0.85, 0.004, 'paper', [pos[0], pos[1], pos[2] + 0.007], [Math.PI / 2, 0, 0], 18);
+  b.box(r * 0.08, r * 0.75, 0.002, 'plasticR', [pos[0] + r * 0.2, pos[1] + r * 0.15, pos[2] + 0.01], [0, 0, -0.7], 0);
+}
+
 export function buildCockpit(b, L) {
   const R = rng(101);
   const C = V(0, 0, -10.35);
@@ -93,7 +239,9 @@ export function buildCockpit(b, L) {
   b.colBox(0.6, 0.85, 0.9, [-1.0, 0.42, -10.9], [0, 0.9, 0]);
   b.colBox(0.6, 0.85, 0.9, [1.0, 0.42, -10.9], [0, -0.9, 0]);
   // kick plate + lighting strip at console base
-  consoleSweep(b, C, R0 - 0.005, -1.1, 1.1, [[0, 0.02], [0, 0.04], [-0.01, 0.04], [-0.01, 0.02]], 'ledBlue', 30);
+  consoleSweep(b, C, R0 - 0.005, -1.1, 1.1, [[0, 0.02], [0, 0.04], [-0.01, 0.04], [-0.01, 0.02]], 'ledBlue', 96);
+  // the nose in front of the console is closed by the dash (no gap to float into)
+  cockpitDash(b, C, R0, -1.12, 1.12);
   // monitors on the console (slots)
   const tilt = 0.82;
   const mons = [['sys', -0.66, 0.44, 0.28], ['nav', 0, 0.56, 0.32], ['cam', 0.66, 0.44, 0.28]];
@@ -113,13 +261,11 @@ export function buildCockpit(b, L) {
   L.spots.ultra = deskPt(0.06, 0.2, 0.02);
   L.spots.silence = deskPt(-0.06, 0.2, 0.02);
   L.spots.deskRot = (a) => deskRot(a);
-  // side consoles
+  // side consoles: one solid sculpted body whose control deck slopes toward the pilot
   for (const side of [-1, 1]) {
     const x = side * 1.36;
     b.push([x, 0, -10.0], [0, -side * 0.18, 0]);
-    b.box(0.46, 0.66, 1.15, 'panel', [0, 0.33, 0], null, 0.03, 2, true);
-    b.box(0.5, 0.06, 1.2, 'panelDark', [0, 0.69, 0], [0, 0, side * 0.28], 0.02);
-    switchPanel(b, R, [-side * 0.06, 0.73, 0.3], [-Math.PI / 2, 0, side * 0.28], 4, 3, 0.05);
+    sideConsole(b, R, side);
     b.pop();
     const mp = V(x - side * 0.02, 0.98, -10.25);
     const n = V(-side, 0.35, 0.15).normalize();
@@ -171,7 +317,6 @@ export function buildCockpit(b, L) {
   b.torus(0.08, 0.012, 'plasticK', [0.4, 1.95, -9.75], [0.2, 0, 0], 16, Math.PI); // headset band
   b.sphere(0.035, 'plasticK', [0.32, 1.9, -9.75], 10, [1, 1, 0.6]);
   b.sphere(0.035, 'plasticK', [0.48, 1.9, -9.75], 10, [1, 1, 0.6]);
-  cableBundle(b, [[-0.7, 0.05, -11.3], [-0.9, 0.1, -10.8], [-1.2, 0.05, -10.4], [-1.3, 0.3, -9.4]], 4);
   // rear storage cabinet + jump seat
   b.box(0.7, 1.0, 0.55, 'panel', [1.65, 0.5, -8.85], null, 0.03, 2, true);
   b.box(0.68, 0.02, 0.53, 'wood', [1.65, 1.01, -8.85], null, 0.005);
@@ -428,12 +573,16 @@ export function buildAirlock(b, L) {
 // ------------------------------------------------------------------ life support room
 export function buildLifeSupport(b, L) {
   const R = rng(707);
-  // CO2 scrubber cabinet
-  hullCabinet(b, { side: 1, z0: 1.02, z1: 1.98, yB: 0, yT: 1.75, depth: 0.95, doors: 1, rows: 1, key: 'panel' });
-  for (let i = 0; i < 2; i++) {
-    b.torus(0.15, 0.015, 'metalDark', [1.84, 1.2 - i * 0.5, 1.5], [0, Math.PI / 2, 0], 20);
+  // CO2 scrubber cabinet: two fans sunk into its curved front (housings follow the surface)
+  const scrub = hullCabinet(b, { side: 1, z0: 1.02, z1: 1.98, yB: 0, yT: 1.75, depth: 0.95, doors: 1, rows: 1, key: 'panel' });
+  L.spots.fans = [];
+  for (const y of [1.2, 0.7]) {
+    const p = scrub.frontAt(1.42, y);
+    const t = scrub.frontAt(1.42, y + 0.05).sub(scrub.frontAt(1.42, y - 0.05)).normalize();
+    const n = V(-1, 0, 0).addScaledVector(t, t.x).normalize();
+    fanHousing(b, p, n, 0.15);
+    L.spots.fans.push({ p: p.clone().addScaledVector(n, -0.032), n });
   }
-  L.spots.fans = [V(1.84, 1.2, 1.5), V(1.84, 0.7, 1.5)];
   // O2 generator: glass column with bubbles (anim) + electrodes
   b.cyl(0.14, 0.14, 0.05, 'steel', [2.3, 0.3, 3.0], null, 20);
   b.cyl(0.14, 0.14, 0.05, 'steel', [2.3, 1.55, 3.0], null, 20);
@@ -453,16 +602,24 @@ export function buildLifeSupport(b, L) {
   // ducts to the ceiling
   b.tube([[2.05, 1.7, 1.5], [1.75, 2.02, 1.6], [1.2, 2.3, 2.2], [1.1, 2.35, 4.0]], 0.09, 'insul', { radial: 12 });
   b.torus(0.1, 0.018, 'steel', [2.03, 1.72, 1.5], [Math.PI / 2 + 0.6, 0, 0], 16);
-  valveWheel(b, [1.6, 1.0, 3.9], [0, Math.PI / 2, 0], 0.07, 'pipeBlue');
-  valveWheel(b, [1.6, 1.2, 2.3], [0, Math.PI / 2, 0], 0.06, 'pipeRed');
+  // isolation valves sit on real pipes: the tank outlet and the red riser
+  inlineValve(b, V(2.1, 1.55, 4.6), V(-1, 0, 0), 0.02, 0.07, 'pipeBlue');
   for (let i = 0; i < 4; i++) {
     const x = 2.6 - i * 0.12, z = 2.6 + i * 0.05, r = 0.02 + (i % 2) * 0.01;
     b.pipe([x, -0.05, z], [x, 2.0, z], r, ['pipeBlue', 'pipeWhite', 'pipeGreen', 'pipeRed'][i]);
     b.cyl(r * 2.3, r * 2.6, 0.025, 'steel', [x, 0.012, z], null, 14);                     // deck penetration collar
     b.torus(r * 1.6, r * 0.45, 'steel', [x, 0.05, z], [Math.PI / 2, 0, 0], 14);
     b.cyl(r * 1.5, r * 1.5, 0.04, 'steel', [x, 1.0, z], null, 12);                         // clamp
+    b.cyl(r * 1.5, r * 1.5, 0.04, 'steel', [x, 1.55, z], null, 12);
   }
-  b.box(0.06, 0.03, 0.4, 'metalDark', [2.42, 1.0, 2.68], [0, 0.4, 0], 0.008);
+  inlineValve(b, V(2.24, 1.32, 2.75), V(-1, 0, 0), 0.03, 0.06, 'pipeRed');
+  // pipe rack: strut channels bolted to the hull wall, clamping the four risers
+  for (const y of [1.0, 1.55]) {
+    const A = V(halfWidthAt(2.53, y, INSET) - 0.01, y, 2.525), B = V(2.17, y, 2.78);
+    b.pipe(A, B, 0.02, 'metalDark', 4);
+    b.box(0.02, 0.12, 0.1, 'metalDark', [A.x, y, A.z], null, 0.004);
+    for (const dy of [-0.035, 0.035]) b.cyl(0.008, 0.008, 0.02, 'steel', [A.x - 0.01, y + dy, A.z], [0, 0, Math.PI / 2], 6);
+  }
   sticker(b, [1.84, 1.55, 1.5], [0, -Math.PI / 2, 0], 0.12, 0.08);
   L.lamps.push({ pos: V(1.6, 2.15, 3.0), color: 0xe9f2ff, intensity: 4.0, room: 'ls' });
   L.lamps.push({ pos: V(2.05, 1.0, 3.0), color: 0x7dffb0, intensity: 1.2, room: 'ls' });
@@ -482,8 +639,21 @@ export function buildEngineering(b, L) {
   L.spots.servers = [V(-1.23, 0.95, 6.15), V(-1.23, 0.95, 6.81)];
   // power distribution panel (starboard)
   const pwr = hullCabinet(b, { side: 1, z0: 5.72, z1: 6.92, yB: 0, yT: 1.8, depth: 0.82, doors: 0, rows: 1, key: 'panel' });
-  for (let i = 0; i < 3; i++) { const p = pwr.frontAt(6.32, 0.62 + i * 0.4); switchPanel(b, R, [p.x - 0.012, p.y, p.z], [0, -Math.PI / 2, 0], 8, 3, 0.05); }
-  for (const z of [5.98, 6.66]) { const p = pwr.frontAt(z, 1.6); gauge(b, [p.x - 0.015, p.y, p.z], [0, -Math.PI / 2, 0], 0.06); }
+  // switch banks and meters sit on flat bezels standing proud of the curved front (a flat plate
+  // laid on a curve sank into it and showed only a skewed sliver)
+  for (let i = 0; i < 3; i++) {
+    const xf = cabinetBezel(b, pwr, 1, 6.32, 0.62 + i * 0.4, 0.46, 0.2);
+    switchPanel(b, R, [xf - 0.013, 0.62 + i * 0.4, 6.32], [0, -Math.PI / 2, 0], 8, 3, 0.05);
+  }
+  for (const z of [5.98, 6.66]) {
+    const xf = cabinetBezel(b, pwr, 1, z, 1.55, 0.17, 0.17);
+    gauge(b, [xf - 0.016, 1.55, z], [0, -Math.PI / 2, 0], 0.06);
+  }
+  // breaker handles + a lockout tag on the side bezel
+  for (let k = 0; k < 4; k++) {
+    const xf = cabinetBezel(b, pwr, 1, 6.2 + k * 0.12, 1.25, 0.08, 0.16);
+    b.box(0.03, 0.09, 0.02, k === 2 ? 'plasticR' : 'plasticK', [xf - 0.02, 1.26, 6.2 + k * 0.12], [0, 0, k === 1 ? 0.5 : -0.5], 0.006);
+  }
   // reactor control console facing the aft viewport: sculpted desk with a sloped control deck
   reactorConsole(b, R, L);
   // tool board on the reactor bulkhead, beside the viewport (scaled to fit under the hull curve)

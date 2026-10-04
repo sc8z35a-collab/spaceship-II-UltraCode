@@ -342,8 +342,11 @@ export function patchShipMaterial(mat, opts = {}) {
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         ${o.panels > 0 || o.detail || o.belly ? `
         {
-          // relief: recessed panel seams + faint waviness (derivative bump, view space)
+          // relief: recessed panel seams + faint waviness (derivative bump, view space). It fades
+          // where a pixel spans several millimetres of wall (far away, low resolution): there the
+          // per-pixel slope only made highlights sparkle as the view moved
           vec2 dH = vec2(dFdx(_bumpH), dFdy(_bumpH));
+          dH *= 1.0 - 0.75 * smoothstep(0.0025, 0.009, length(fwidth(vShipPos)));
           vec3 sx = dFdx(-vViewPosition), sy = dFdy(-vViewPosition);
           vec3 r1 = cross(sy, normal), r2 = cross(normal, sx);
           float det = dot(sx, r1) * faceDirection;
