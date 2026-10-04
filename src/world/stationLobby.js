@@ -11,9 +11,9 @@ import { OPENINGS } from '../ship/hullShape.js';
 import { openingOutline } from '../ship/exterior.js';
 import { loft, roundPolygon } from '../ship/sweep.js';
 import { LAYER_NEAR } from '../core/layers.js';
-import { buildPromenade, PROM_DOOR } from './stationPromenade.js';
+import { buildPromenade, PROM, PROM_DOOR } from './stationPromenade.js';
 import { StationDoor } from './stationDoors.js';
-import { buildCoreAtrium, BRIDGE } from './stationAtrium.js';
+import { buildCoreAtrium, BRIDGE, CORE } from './stationAtrium.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
@@ -21,6 +21,8 @@ const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
 /** atrium cylinder (axis along ship z) and docking tunnel, ship-local metres */
 export const LOBBY = { xc: 11.0, yc: 2.25, R: 6.3, z0: -12.0, z1: 8.0, floorY: 0.25 };
 export const TUNNEL = { x0: 3.35, xEnd: 5.2, zc: HATCH.center.z, yc: 1.22, hu: 1.0, hv: 0.78, r: 0.45 };
+// the pressure door between the lobby and Shirasagi's skybridge (just inside the bridge)
+const BRIDGE_DOOR = { x: 18.15, w: 1.9, h: 2.3, depth: 0.3 };
 const D2R = Math.PI / 180;
 const TH_FLOOR = Math.asin((LOBBY.floorY - LOBBY.yc) / LOBBY.R);       // right-hand floor line (rad)
 
@@ -761,6 +763,11 @@ export function buildLobby(renderer, def) {
     const xw = xc + Math.sqrt(RR * RR - (1.6 - yc) * (1.6 - yc));
     for (const s2 of [-1, 1]) b.box(0.4, BRIDGE.h + 0.1, 0.1, 'gold', [xw - 0.15, floorY + BRIDGE.h / 2, BRIDGE.zc + s2 * (BRIDGE.hw + 0.05)], null, 0.02);
     b.box(0.4, 0.1, BRIDGE.hw * 2 + 0.2, 'gold', [xw - 0.2, floorY + BRIDGE.h + 0.05, BRIDGE.zc], null, 0.02);
+    // the pressure door a step into the bridge: its frame fills the glass tube (the leaves are
+    // kinematic colliders of their own)
+    const { x: bx, w: bw, h: bh } = BRIDGE_DOOR, fw = 0.34;
+    for (const s2 of [-1, 1]) b.colBox(0.34, bh + fw, fw, [bx, floorY + (bh + fw) / 2, BRIDGE.zc + s2 * (bw / 2 + fw / 2)]);
+    b.colBox(0.34, fw, bw, [bx, floorY + bh + fw / 2, BRIDGE.zc]);
   }
 
   const group = b.build(M, { castShadow: false, receiveShadow: false });
@@ -773,18 +780,40 @@ export function buildLobby(renderer, def) {
   globe.layers.set(LAYER_NEAR);
   group.add(globe);
 
-  // automatic doors (kinematic colliders are attached while docked)
-  const doors = [new StationDoor({ c: V(PROM_DOOR.x, floorY, PROM_DOOR.z), normal: 'z', w: PROM_DOOR.w, h: PROM_DOOR.h, depth: PROM_DOOR.depth, label: 'promenade' }, M)];
+  // automatic doors (kinematic colliders are attached while docked); each one is also a pressure
+  // door between two air sections of the station (link)
+  const doors = [new StationDoor({ c: V(PROM_DOOR.x, floorY, PROM_DOOR.z), normal: 'z', w: PROM_DOOR.w, h: PROM_DOOR.h, depth: PROM_DOOR.depth, label: 'promenade', link: ['lobby', 'promenade'] }, M)];
+  if (core) doors.push(new StationDoor({ c: V(BRIDGE_DOOR.x, floorY, BRIDGE.zc), normal: 'x', w: BRIDGE_DOOR.w, h: BRIDGE_DOOR.h, depth: BRIDGE_DOOR.depth, label: 'bridge', link: ['lobby', 'atrium'] }, M));
   for (const d of doors) { d.group.traverse((o) => o.layers.set(LAYER_NEAR)); group.add(d.group); }
 
-  const contains = (p) => {
+  const inLobby = (p) => {
     if (p.x > 2.9 && p.x < TUNNEL.xEnd + 0.3 && Math.abs(p.z - TUNNEL.zc) < TUNNEL.hv + 0.05 && p.y > floorY - 0.3 && p.y < TUNNEL.yc + TUNNEL.hu + 0.05) return true;
-    if (prom.contains(p)) return true;
-    if (core && core.contains(p)) return true;
     const dx = p.x - xc, dy = p.y - yc;
     return dx * dx + dy * dy < (RR - 0.05) * (RR - 0.05) && p.z > z0 && p.z < z1 && p.y > floorY - 0.4;
   };
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, doors, materials: M };
+  /** which air section of the station a point is in (null: not inside) */
+  const sectionAt = (p) => {
+    if (core && core.contains(p)) return p.x < BRIDGE_DOOR.x ? 'lobby' : 'atrium';
+    if (prom.contains(p)) return p.z < PROM_DOOR.z ? 'lobby' : 'promenade';
+    return inLobby(p) ? 'lobby' : null;
+  };
+  const contains = (p) => sectionAt(p) !== null;
+  // where a strike can hole each section (a point on the inside of its wall + the inward normal)
+  const breachSpots = { lobby: [], promenade: [], atrium: [] };
+  for (const th of [20, 55, 90, 125, 160]) for (const z of [-9, -4, 1, 5.5]) {
+    const a = th * D2R;
+    breachSpots.lobby.push({ p: V(xc + Math.cos(a) * (RR - 0.05), yc + Math.sin(a) * (RR - 0.05), z), n: V(-Math.cos(a), -Math.sin(a), 0) });
+  }
+  for (const th of [25, 70, 110, 155]) for (const z of [11, 16, 21, 26]) {
+    const a = th * D2R;
+    breachSpots.promenade.push({ p: V(PROM.x + Math.cos(a) * (PROM.R - 0.05), PROM.y + Math.sin(a) * (PROM.R - 0.05), z), n: V(-Math.cos(a), -Math.sin(a), 0) });
+  }
+  if (core) for (const lat of [10, 35, 60]) for (const lon of [-150, -60, 30, 120]) {
+    const la = lat * D2R, lo = lon * D2R;
+    const n = V(Math.cos(la) * Math.cos(lo), Math.sin(la), Math.cos(la) * Math.sin(lo));
+    breachSpots.atrium.push({ p: V(CORE.x, CORE.y, CORE.z).addScaledVector(n, CORE.R - 0.05), n: n.negate() });
+  }
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M };
 }
 
 /** paint the globe with the Earth colour map once it is available */

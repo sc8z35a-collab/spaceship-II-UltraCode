@@ -315,7 +315,7 @@ export class Gameplay {
     if (!pl.suit) {
       this.fadeAction(() => { pl.suit = true; pl.suitO2 = 1; pl.suitFuel = Math.max(pl.suitFuel, 0.98); g.asphalt.say('suit_on', {}, { force: true }); });
     } else {
-      const here = pl.outside ? g.lifeSupport.ambient : g.lifeSupport.pressure(g.lifeSupport.zoneAt(pl.pos));
+      const here = g.lifeSupport.pressureAt(pl.pos, pl.outside);
       if (!this.breathable(here)) { g.audio.denied(pl.eyeLocal); return; }
       this.fadeAction(() => { pl.suit = false; g.asphalt.say('suit_off', {}, { force: true }); });
     }
@@ -331,9 +331,9 @@ export class Gameplay {
   hatchTap() {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
     if (h.target > 0.5) { h.target = 0; g.audio.doorMotor(h.o.center, false); return; }
-    const p = ls.pressure('airlock');
-    if (!g.player.suit && !this.breathable(ls.ambient)) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
-    if (Math.abs(p - ls.ambient) > 4) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
+    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
     h.target = 1;
     g.audio.doorMotor(h.o.center, true);
   }
@@ -355,7 +355,7 @@ export class Gameplay {
     if (mode === 'dep') {
       // pump the air back into the reserve tanks (down to the outside pressure)
       const k = Math.min(1, dt * 0.08);
-      const floor = ls.ambient;
+      const floor = ls.portAmbient ?? ls.ambient;
       if (p > floor + 1.2) {
         const dn = z.n2 * k, doo = z.o2 * k;
         z.n2 -= dn; z.o2 -= doo; z.co2 *= 1 - k;
@@ -616,6 +616,8 @@ export class Gameplay {
   updateCrew(dt) {
     const g = this.g, pl = g.player, ls = g.lifeSupport;
     ls.zoneOfPlayer = ls.zoneAt(pl.pos);
+    ls.inStation = !!(g.docking && g.docking.contains(pl.pos));
+    this.herePressure = ls.pressureAt(pl.pos, pl.outside);
     const br = ls.breathing();
     let hurt = 0, blur = 0;
     let hyp = Math.max(0, Math.min(1, (17 - br.o2) / 9));
@@ -637,7 +639,7 @@ export class Gameplay {
     gr.get('uTint').set(1 - this.underwater * 0.55 + wet * 0.05, 1 - this.underwater * 0.25 + wet * 0.02, 1 - this.underwater * 0.05 - wet * 0.03);
     if (hyp > 0.3 || pl.health < 0.6) g.audio.heartbeat(70 + 70 * Math.max(hyp, 1 - pl.health));
     // what the ears hear: cabin air, suit, or outside air
-    g.audio.setAir(pl.outside ? ls.ambient : ls.pressure(ls.zoneOfPlayer), pl.suit);
+    g.audio.setAir(this.herePressure, pl.suit);
     if (pl.health <= 0 && pl.state !== 'dead') this.die();
   }
 
@@ -702,7 +704,7 @@ export class Gameplay {
     let lvl = 0;
     const openHole = dmg.breaches.some((b) => !b.patched) || dmg.cracks.some((c) => c && c.broken);
     if (integ < 0.8 || openHole || dmg.issues.some((i) => i.state === 'active' && i.sev > 0.5)) lvl = 1;
-    if (integ < 0.5 || (dmg.reactorTemp || 0) > 820 || ls.pressure(ls.zoneOfPlayer) < 70) lvl = 2;
+    if (integ < 0.5 || (dmg.reactorTemp || 0) > 820 || (this.herePressure ?? 101) < 70) lvl = 2;
     if (integ < 0.22) lvl = 3;
     // the station we are docked to (or right next to) in trouble
     const st = g.docking && g.docking.station;
@@ -893,7 +895,9 @@ export class Gameplay {
     const g = this.g, f = g.flight;
     const q = f.heatFlux;
     // outside air pressure for the life support
-    g.lifeSupport.ambient = g.docking.docked ? 101.3 : f.alt < 100000 ? 101.325 * Math.exp(-Math.max(0, f.alt - HULL_BOTTOM) / 8434) : 0;
+    // (docked, the outer hatch opens into the station lobby instead: its own air, which can fail)
+    g.lifeSupport.ambient = f.alt < 100000 ? 101.325 * Math.exp(-Math.max(0, f.alt - HULL_BOTTOM) / 8434) : 0;
+    g.lifeSupport.portAmbient = g.docking.portPressure();
     const heat = Math.max(0, Math.min(1.6, (f.hullTemp - 650) / 900));
     const vAir = V(7.292e-5 * f.pos.z, 0, -7.292e-5 * f.pos.x);
     const travel = f.vel.clone().sub(vAir).applyQuaternion(f.quat.clone().invert());

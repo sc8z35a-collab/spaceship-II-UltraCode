@@ -26,6 +26,7 @@ export class StationDoor {
     this.open = 0;
     this.target = 0;
     this.locked = false;
+    this.emergency = false;   // sealed by the station's pressure protocol
     this.hold = 0;
     this.cols = null;
     const w = def.w, h = def.h, d = def.depth;
@@ -95,7 +96,8 @@ export class StationDoor {
       this.leaves.push(leaf);
     }
     this.lw = lw; this.lt = lt;
-    this.leafMatOpen = M.ledGreen; this.leafMatLocked = M.ledRed;
+    if (!M.ledOff) M.ledOff = new THREE.MeshStandardMaterial({ color: 0x1a0606, roughness: 0.4 });
+    this.leafMatOpen = M.ledGreen; this.leafMatLocked = M.ledRed; this.leafMatOff = M.ledOff;
   }
 
   /** world (ship-local) centre of a leaf at the current opening */
@@ -130,16 +132,20 @@ export class StationDoor {
     else if (near) { this.target = 1; this.hold = 1.2; }
     else { this.hold -= dt; if (this.hold <= 0) this.target = 0; }
     const prev = this.open;
-    const sp = 1.15;
-    this.open = this.target > this.open ? Math.min(this.target, this.open + dt * sp) : Math.max(this.target, this.open - dt * sp * 0.8);
+    // an emergency closure slams the leaves shut more than twice as fast
+    const sp = this.locked ? 2.6 : 1.15;
+    this.open = this.target > this.open ? Math.min(this.target, this.open + dt * sp) : Math.max(this.target, this.open - dt * sp * (this.locked ? 1 : 0.8));
     if (audio && audio.ready && ((prev === 0 && this.open > 0) || (prev === 1 && this.open < 1))) {
       audio._burst(c.clone().add(V(0, 1.2, 0)), { dur: 0.55, freq: 1400, q: 0.5, gain: 0.12, type: 'white', filter: 'bandpass', sweep: -0.5 });
       audio.doorMotor && audio.doorMotor(c.clone().add(V(0, 2.2, 0)), this.target > 0.5);
     }
+    if (audio && audio.ready && prev > 0 && this.open === 0 && this.locked) audio.impact(c.clone().add(V(0, 1.2, 0)), 0.2);
+    this.t = (this.t || 0) + dt;
     // eased travel (heavy leaves start and stop softly)
     const e = this.open * this.open * (3 - 2 * this.open);
     for (const leaf of this.leaves) leaf.position.x = leaf.userData.side * (this.lw / 2 + e * (this.lw - 0.06));
-    const lockedMat = this.locked ? this.leafMatLocked : this.leafMatOpen;
+    // locked: the red lights flash
+    const lockedMat = this.locked ? ((this.t % 1) < 0.6 ? this.leafMatLocked : this.leafMatOff) : this.leafMatOpen;
     for (const leaf of this.leaves) leaf.userData.led.material = lockedMat;
     if (this.lampA) { this.lampA.material = lockedMat; this.lampB.material = lockedMat; }
     if (this.cols) {

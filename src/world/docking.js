@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { MU_EARTH, OMEGA_EARTH } from '../core/astro.js';
 import { DOCK_AT } from './stations.js';
 import { buildLobby, setGlobeTexture } from './stationLobby.js';
+import { StationAir } from './stationAir.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const SHIP_MASS = 42000;
@@ -197,6 +198,10 @@ export class Docking {
     this.lamps = lobby.lamps;
     g.systems.lamps.push(...this.lamps);
     g.stations.dockedId = s.id;
+    // the station's air, section by section (kept per station while the game runs)
+    this.airs = this.airs || new Map();
+    if (!this.airs.has(s.id)) this.airs.set(s.id, new StationAir(lobby, s));
+    this.air = this.airs.get(s.id);
   }
 
   despawn() {
@@ -210,6 +215,7 @@ export class Docking {
     for (const slot of g.systems.pool) if (slot.lamp && this.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     this.lamps = [];
     this.lobby = null;
+    this.air = null;
     g.stations.dockedId = null;
   }
 
@@ -367,13 +373,24 @@ export class Docking {
     }
   }
 
-  /** per frame while docked: the station's automatic doors */
+  /** per frame while docked: the station's air and its automatic (pressure) doors */
   updateInterior(dt) {
     if (this.state !== 'docked' || !this.lobby) return;
-    const g = this.g;
-    for (const d of this.lobby.doors || []) d.update(dt, g.player.state === 'dead' ? null : g.player.pos, g.audio);
+    const g = this.g, who = g.player.state === 'dead' ? null : g.player.pos;
+    const st = this.station.dmg ? this.station.dmg.status : 'ok';
+    if (this.air) {
+      this.air.update(dt, st, who);
+      for (const e of this.air.events.splice(0)) if (e.type === 'recovered') g.asphalt.say('st_air_ok', { sec: this.air.sec[e.sec].name }, { minGap: 20 });
+    }
+    for (const d of this.lobby.doors || []) d.update(dt, who, g.audio);
   }
 
   /** is a ship-local point inside the docked station's walkable space */
   contains(p) { return !!(this.lobby && this.lobby.contains(p)); }
+
+  /** the station air at a ship-local point inside it */
+  airAt(p) { return this.air ? this.air.airAt(p) : { p: 101.3, o2: 21.2, co2: 0.05 }; }
+
+  /** pressure on the far side of B-29's outer hatch while docked (the lobby), else null */
+  portPressure() { return this.state === 'docked' && this.air ? this.air.portPressure : null; }
 }

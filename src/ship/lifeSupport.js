@@ -42,6 +42,9 @@ export class LifeSupport {
     this.zoneOfPlayer = 'cockpit';
     this.vacuumZones = new Set();
     this.ambient = 0;                          // outside pressure (kPa): 0 in space, ~101 on the ground
+    this.portAmbient = null;                   // beyond the outer hatch when docked (the station lobby)
+    this.inStation = false;                    // Kaito is aboard the docked station
+    this.dampers = new Set();                  // zones cut off from the ducts (losing air)
     this.boost = 0;                            // manual re-pressurisation timer (s)
   }
 
@@ -76,9 +79,10 @@ export class LifeSupport {
     // lift shaft open when the platform is down
     if (g.lift && g.lift.shaftOpen > 0) c.push(['corridor', 'under', 1.1 * g.lift.shaftOpen]);
     if (g.engHatch && g.engHatch.open > 0) c.push(['eng', 'under', 0.5 * g.engHatch.open]);
-    // ducts (forced ventilation) — small effective areas between every zone and LS hub
-    if (this.fans.on && this.fans.health > 0.2 && !this.lockdown) {
-      for (const id of Object.keys(this.z)) if (id !== 'ls' && id !== 'airlock') c.push([id, 'ls', 0.004 * this.fans.health, true]);
+    // ducts (forced ventilation) — small effective areas between every zone and LS hub; the
+    // dampers of a zone that is losing air shut on their own so it cannot drain the others
+    if (this.fans.on && this.fans.health > 0.2 && !this.lockdown && !this.dampers.has('ls')) {
+      for (const id of Object.keys(this.z)) if (id !== 'ls' && id !== 'airlock' && !this.dampers.has(id)) c.push([id, 'ls', 0.004 * this.fans.health, true]);
     }
     return c;
   }
@@ -109,7 +113,19 @@ export class LifeSupport {
       if (z.fog < 1e-3) z.fog = 0;
       z.T += (293.5 - z.T) * Math.min(1, dt * 0.002) - Math.min(30, drop * 0.02) * dt;
       if (p < 0.5) this.vacuumZones.add(z.id); else this.vacuumZones.delete(z.id);
+      // automatic duct dampers: shut while a zone leaks or falls fast, open again once it holds
+      const leaking = z.leaks.some((l) => l.area > 2e-5) || z.dpdt < -0.25;
+      if (leaking && p < 99) this.dampers.add(z.id);
+      else if (!leaking && p > 95) this.dampers.delete(z.id);
     }
+  }
+
+  /** air pressure at a ship-local point: docked station, outside, or the cabin zone */
+  pressureAt(p, outside = false) {
+    const g = this.g;
+    if (g.docking && g.docking.contains(p)) return g.docking.airAt(p).p;
+    if (outside) return this.ambient;
+    return this.pressure(this.zoneAt(p));
   }
 
   _step(dt) {
@@ -147,9 +163,10 @@ export class LifeSupport {
     const out = [];
     for (const z of Object.values(Z)) for (const L of z.leaks) out.push([z, L.area]);
     const hatch = this.g.hatch;
-    if (hatch && hatch.flowArea > 0) out.push([Z.airlock, hatch.flowArea]);
-    const pa = this.ambient;
-    for (const [z, area] of out) {
+    if (hatch && hatch.flowArea > 0) out.push([Z.airlock, hatch.flowArea, true]);
+    for (const [z, area, port] of out) {
+      // hull leaks go to space (or the outside air); the open hatch to whatever is beyond it
+      const pa = port && this.portAmbient !== null ? this.portAmbient : this.ambient;
       const p = z.n2 + z.o2 + z.co2;
       if (p > pa + 1e-4) {
         // venting (choked to vacuum, subsonic when the outside has air)
@@ -165,7 +182,7 @@ export class LifeSupport {
     // crew metabolism (player zone, unless in suit)
     const pl = this.g.player;
     const zp = Z[this.zoneOfPlayer];
-    if (zp && !pl.suit && pl.state !== 'dead') {
+    if (zp && !pl.suit && pl.state !== 'dead' && !this.inStation) {
       const use = 7.4e-4 * dt / zp.vol;
       zp.o2 = Math.max(0, zp.o2 - use);
       zp.co2 += 6.4e-4 * dt / zp.vol;
@@ -209,7 +226,7 @@ export class LifeSupport {
     const pl = this.g.player;
     if (pl.suit) return { p: 30, o2: pl.suitO2 > 0.003 ? 29.6 : 0, co2: 0.1, suit: true };
     if (pl.outside) { const a = this.ambient; return { p: a, o2: a * 0.2095, co2: a * 0.0004, suit: false }; }
-    if (this.g.docking && this.g.docking.contains(pl.pos)) return { p: 101.3, o2: 21.2, co2: 0.05, suit: false };   // station air
+    if (this.inStation) { const a = this.g.docking.airAt(pl.pos); return { p: a.p, o2: a.o2, co2: a.co2, suit: false }; }   // station air
     const z = this.z[this.zoneOfPlayer];
     return { p: z.n2 + z.o2 + z.co2, o2: z.o2, co2: z.co2, suit: false };
   }

@@ -83,6 +83,7 @@ export class WorldDamage {
     D.lastHit = { sev, time: this.g.time };
     if (this.isElevator(t)) D.hitH = hit.h;
     if (D.health <= 0 || sev >= 1) this.destroy(t);
+    else this.dockedBreach(t, sev);
     D.dirty = true;
     const near = this.distTo(t);
     this.announceStrike(t, sev, near);
@@ -140,11 +141,42 @@ export class WorldDamage {
     // B-29 docked to it: the lobby is gone in an instant
     const g = this.g, dk = g.docking;
     if (dk && dk.station === t && dk.state !== 'free') {
-      const inside = dk.lobby && dk.lobby.contains(g.player.pos);
+      const pl = g.player;
+      const inside = dk.lobby && dk.lobby.contains(pl.pos) && pl.state !== 'dead';
       dk.forceRelease();
       g.damage.impact(new THREE.Vector3(3.0, 0.5, -1.0), new THREE.Vector3(-1, 0, 0), 2.5e6, { noBreakup: true });
-      if (inside && g.gameplay) { g.player.health = 0; g.gameplay.die(); }
+      if (inside) {
+        // the lobby is torn away around Kaito: thrown out into vacuum among the wreckage, bruised —
+        // a suit keeps him alive (fly back to B-29), without one there is under a minute left
+        pl.health = Math.max(0.05, pl.health - 0.3);
+        pl.vel.add(new THREE.Vector3().randomDirection().multiplyScalar(1.5)).add(new THREE.Vector3(1.2, 0, 0));
+        g.shake = Math.max(g.shake, 3);
+        g.asphalt.say(pl.suit ? 'st_gone_suit' : 'st_gone', {}, { force: true });
+      }
     }
+  }
+
+  /** a strike on the station B-29 is docked to: it may hole one of the pressurised sections */
+  dockedBreach(t, sev) {
+    const g = this.g, dk = g.docking;
+    if (!dk || dk.station !== t || dk.state !== 'docked' || !dk.air) return;
+    if (Math.random() > 0.35 + sev * 2.5) return;       // the truss or a tank took it
+    const b = dk.air.breach(0.004 + sev * 0.25);
+    g.shake = Math.max(g.shake, 0.6 + sev * 3);
+    if (g.audio.ready) {
+      g.audio.impact(b.p.clone(), Math.min(0.7, 0.25 + sev));
+      g.audio._burst(null, { dur: 2.2, freq: 55, q: 0.7, gain: 0.35 + sev * 0.4, type: 'brown', filter: 'lowpass', direct: true });
+    }
+    g.systems.flicker = 0.5; setTimeout(() => { g.systems.flicker = 0; }, 900 + sev * 2000);
+    if (g.gameplay) g.gameplay.raise(0.7 + sev * 0.3);
+    const name = dk.air.sec[b.sec].name;
+    const here = dk.lobby.sectionAt(g.player.pos);
+    setTimeout(() => {
+      g.asphalt.say('st_breach', { name: this.name(t), sec: name }, { force: true });
+      if (here === b.sec && !g.player.suit) setTimeout(() => g.asphalt.say('st_breach_here', {}, { force: true }), 5000);
+      else if (here && here !== b.sec) setTimeout(() => g.asphalt.say('st_sealed', {}, { minGap: 30 }), 6000);
+    }, 1500);
+    if (b.sec === 'lobby' && g.hatch && g.hatch.open > 0.2) setTimeout(() => g.asphalt.say('st_port_low', {}, { minGap: 60 }), 14000);
   }
 
   /** status changes: announcements, the ship's alarm when it concerns us */
