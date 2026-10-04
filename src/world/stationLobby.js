@@ -13,7 +13,8 @@ import { loft, roundPolygon } from '../ship/sweep.js';
 import { LAYER_NEAR } from '../core/layers.js';
 import { buildPromenade, PROM, PROM_DOOR } from './stationPromenade.js';
 import { StationDoor } from './stationDoors.js';
-import { buildCoreAtrium, BRIDGE, CORE } from './stationAtrium.js';
+import { buildCoreAtrium, BRIDGE, CORE, TERMINAL } from './stationAtrium.js';
+import { buildRingInterior } from './stationRing.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
@@ -813,7 +814,15 @@ export function buildLobby(renderer, def) {
     const n = V(Math.cos(la) * Math.cos(lo), Math.sin(la), Math.cos(la) * Math.sin(lo));
     breachSpots.atrium.push({ p: V(CORE.x, CORE.y, CORE.z).addScaledVector(n, CORE.R - 0.05), n: n.negate() });
   }
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M };
+  // Shirasagi: the habitat ring's inside (its own group, turned with the ring) and the hub
+  // terminal's call panel
+  let ring = null;
+  if (core) {
+    ring = buildRingInterior(def, M);
+    ring.group.traverse((o) => o.layers.set(LAYER_NEAR));
+    ring.terminal = { button: V(CORE.x + 1.55, CORE.y - 0.12, TERMINAL.z1 - 0.12), out: V(CORE.x, CORE.y - 0.4, TERMINAL.z1 - 1.3) };
+  }
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring };
 }
 
 /** paint the globe with the Earth colour map once it is available */

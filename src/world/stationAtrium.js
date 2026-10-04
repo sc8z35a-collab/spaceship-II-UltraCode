@@ -14,6 +14,9 @@ export const CORE = { x: 35.0, y: 2.25, z: -2.0, R: 8.1, floorY: -2.55, bridgeY:
 // skybridge: along +x from the lobby wall to the core wall
 export const BRIDGE = { x0: 16.9, x1: 27.4, zc: 1.3, hw: 1.3, h: 2.7 };
 export const SHAFT = { r: 1.3 };
+// the transit tube along the spine from the core's aft pole to the ring hub terminal (ship-local z)
+export const TRANSIT = { z1: 34.4 };
+export const TERMINAL = { z0: 34.4, z1: 37.6, r: 2.1 };
 
 function canvasMat(w, h, draw, emissive = 1.0) {
   const c = document.createElement('canvas');
@@ -228,6 +231,46 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
     }
     lamp(CX, CY, CZ + 4, 0x9fd8ff, 1.6, 7);
   }
+  // ---- onward: the transit tube along the spine to the hub terminal of the habitat ring (a
+  // moving handrail band carries you along), and the terminal with the spoke elevator
+  {
+    const zA = CZ + RA + 0.4, zB = TRANSIT.z1;
+    const ringAt = (r, z) => { const pts = []; for (let i = 0; i < 32; i++) { const a = i / 32 * Math.PI * 2; pts.push(V(CX + Math.cos(a) * r, CY + Math.sin(a) * r, z)); } return pts; };
+    const rings = [];
+    for (let k = 0; k <= 12; k++) rings.push(ringAt(SHAFT.r, zA + (zB - zA) * k / 12));
+    b.add(loft(rings, { ring: true, caps: false, invert: true }), 'atriumWall');
+    b.colMesh(loft(rings, { ring: true, caps: false }));
+    for (let k = 0; k < 6; k++) {
+      const a = k / 6 * Math.PI * 2 + Math.PI / 6;
+      b.pipe([CX + Math.cos(a) * (SHAFT.r - 0.06), CY + Math.sin(a) * (SHAFT.r - 0.06), zA], [CX + Math.cos(a) * (SHAFT.r - 0.06), CY + Math.sin(a) * (SHAFT.r - 0.06), zB], 0.03, k % 2 ? 'shaftGlow' : 'brass', 6);
+    }
+    for (let z = zA + 1.5; z < zB; z += 3.0) {
+      b.torus(SHAFT.r - 0.04, 0.05, 'gold', [CX, CY, z], [0, 0, 0], 40);
+      // porthole pairs looking out at the truss and the stars
+      if (Math.round(z) % 2 === 0) for (const s2 of [-1, 1]) b.cyl(0.24, 0.24, 0.04, 'glass', [CX + s2 * (SHAFT.r - 0.02), CY, z + 1.5], [0, 0, Math.PI / 2], 20);
+    }
+    for (let z = zA + 3; z < zB; z += 6) lamp(CX, CY + 0.9, z, 0xbfe3ff, 1.3, 6);
+    // the terminal: a round chamber at the hub, the spoke elevator's great round door at its end
+    const { z0, z1, r } = TERMINAL;
+    const tr = [];
+    for (let k = 0; k <= 6; k++) {
+      const t = k / 6, z = z0 + (z1 - z0) * t;
+      const rr = SHAFT.r + (r - SHAFT.r) * Math.sin(Math.min(1, t * 2.2) * Math.PI / 2);
+      tr.push(ringAt(rr, z));
+    }
+    b.add(loft(tr, { ring: true, caps: false, invert: true }), 'marble');
+    b.colMesh(loft(tr, { ring: true, caps: false }));
+    // the end wall with the elevator door (a heavy gold-rimmed round door) and a window band
+    b.cyl(r, r, 0.2, 'marbleDark', [CX, CY, z1 + 0.1], [Math.PI / 2, 0, 0], 40);
+    b.colBox(r * 2, r * 2, 0.2, [CX, CY, z1 + 0.1]);
+    b.cyl(1.05, 1.05, 0.12, 'steel', [CX, CY, z1 - 0.06], [Math.PI / 2, 0, 0], 40);
+    b.torus(1.1, 0.07, 'gold', [CX, CY, z1 - 0.1], [0, 0, 0], 40);
+    b.box(0.05, 2.0, 0.02, 'led', [CX, CY, z1 - 0.13], null, 0);
+    for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; b.sphere(0.035, 'gold', [CX + Math.cos(a) * 1.18, CY + Math.sin(a) * 1.18, z1 - 0.12], 8); }
+    // call panel beside the door
+    b.box(0.34, 0.5, 0.06, 'black', [CX + 1.55, CY - 0.2, z1 - 0.06], null, 0.02);
+    lamp(CX, CY + 1.4, z1 - 1.2, 0xffe2b8, 2.0, 7);
+  }
   // ---- lights, screens, vertical gardens around the wall
   for (let k = 0; k < 6; k++) {
     const a = k / 6 * Math.PI * 2 + 0.5;
@@ -242,6 +285,9 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
 
   const contains = (p) => {
     if (p.x > BRIDGE.x0 - 0.3 && p.x < BRIDGE.x1 + 0.3 && Math.abs(p.z - BRIDGE.zc) < BRIDGE.hw + 0.05 && p.y > bridgeY - 0.4 && p.y < bridgeY + BRIDGE.h + 0.05) return true;
+    // the transit tube and the hub terminal
+    const rr = Math.hypot(p.x - CX, p.y - CY);
+    if (p.z > CZ && p.z < TERMINAL.z1 + 0.1 && rr < (p.z > TERMINAL.z0 ? TERMINAL.r : SHAFT.r) + 0.05) return true;
     const d = Math.hypot(p.x - CX, p.y - CY, p.z - CZ);
     return d < RA - 0.05 && p.y > floorY - 0.3;
   };

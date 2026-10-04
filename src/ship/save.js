@@ -83,7 +83,15 @@ export class SaveSystem {
     const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - d.wall) / 1000));
     this.offline = this.catchUp(gap, d.dock ? null : d.ap);
     // docked: the ship rode along with the station the whole time
-    if (d.dock && g.docking) g.docking.redock(d.dock);
+    if (d.dock && g.docking) {
+      g.docking.redock(d.dock);
+      // saved inside the habitat ring (which has turned since): back at the hub terminal
+      const R = g.docking.lobby && g.docking.lobby.ring;
+      if (R && !g.docking.contains(g.player.pos) && g.player.pos.distanceTo(R.center || g.player.pos) < 70) {
+        g.player.teleport(R.terminal.out.clone());
+        g.player.outside = false; g.player.state = 'float';
+      }
+    }
     return true;
   }
 

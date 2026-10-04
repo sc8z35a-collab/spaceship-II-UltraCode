@@ -260,6 +260,12 @@ function hubModel(def, M) {
     b.pop();
   }
   box([0, 0, 0], [2.7, 2.7, 116]);
+  // Shirasagi: the pressurised transit tube inside the aft truss, from the core to the ring hub
+  if (def.id === 'shirasagi') {
+    b.cyl(1.55, 1.55, 38 - coreR, 'hull', [0, 0, (coreR + 38) / 2], [Math.PI / 2, 0, 0], 24);
+    for (let z = coreR + 3; z < 36; z += 4) b.torus(1.6, 0.08, 'gold', [0, 0, z], [0, 0, 0], 24);
+    b.cyl(2.45, 2.45, 3.4, 'hullDark', [0, 0, 38.1], [Math.PI / 2, 0, 0], 32);
+  }
   // ---- core: big sphere with window bands, node modules on the spine
   b.sphere(coreR, 'hull', [0, 0, 0], 48);
   for (const y of [-0.35, 0.35]) b.torus(coreR * Math.cos(y) + 0.05, 0.16, 'gold', [0, coreR * Math.sin(y), 0], [Math.PI / 2, 0, 0], 64);
@@ -599,7 +605,9 @@ export class Stations {
         // a crippled station's habitat ring spins down
         const ringTarget = !s.dmg || s.dmg.status === 'ok' || s.dmg.status === 'damaged' ? 1 : 0;
         s.ringK = (s.ringK ?? 1) + (ringTarget - (s.ringK ?? 1)) * Math.min(1, dt * 0.05);
-        if (ring) { ring.rotation.z += dt * 0.12 * s.ringK; ring.updateMatrix(); }
+        // (about half a g on the deck: 0.28 rad/s at 60 m; the ring B-29 is docked to is turned by
+        // the docking, together with its walkable inside)
+        if (ring && !s.ringDriven) { ring.rotation.z += dt * 0.28 * s.ringK; ring.updateMatrix(); }
         s.model.updateMatrixWorld(true);
         const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });

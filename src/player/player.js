@@ -8,6 +8,7 @@ const CROUCH_HH = 0.28;
 const EYE_STAND = 0.66, EYE_CROUCH = 0.36; // above capsule centre
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
+const _qUp = new THREE.Quaternion(), _Y = new THREE.Vector3(0, 1, 0);
 
 export class Player {
   constructor(phys) {
@@ -128,6 +129,9 @@ export class Player {
     // keep the look direction stable while the up vector changes
     this.up.lerp(targetUp, k).normalize();
     this.kcc.setUp({ x: this.up.x, y: this.up.y, z: this.up.z });
+    // the capsule stands along the body's up (inside a turning habitat ring "up" points at the axis)
+    _qUp.setFromUnitVectors(_Y, this.up);
+    this.body.setNextKinematicRotation({ x: _qUp.x, y: _qUp.y, z: _qUp.z, w: _qUp.w });
 
     if (this.state === 'seated') return;
     const inEva = this.state === 'eva' || this.state === 'evaWalk';
@@ -164,7 +168,7 @@ export class Player {
       if (this.grounded && !env.climb && input.up > 0.5) vy = 3.0;
       this.vel.copy(hv).addScaledVector(this.up, vy);
     } else if (this.state === 'float') {
-      const speed = 1.15;
+      const speed = 1.15 * (env.speedK || 1);
       desired.addScaledVector(camF, input.moveY * speed).addScaledVector(camR, input.moveX * speed).addScaledVector(this.up, input.up * speed);
       const has = desired.lengthSq() > 0.001;
       // pushing off / grabbing handholds: velocity follows input, otherwise slow drift decay

@@ -238,10 +238,20 @@ export class Game {
     this.lifeSupport.step(sdt);
     this.damage.update(sdt);
     this.asteroids.update(sdt, dt);
-    // ---- player
-    const env = this.systems.playerEnv();
+    // ---- player (inside the habitat ring he walks in the ring's own turning frame)
+    const inRing = this.docking.inRing;
+    let env, gPl = this.gLocal;
+    if (inRing) {
+      this.docking.restoreRingState();
+      gPl = this.docking.ringGravity(pl.pos, pl.vel, this._gRing || (this._gRing = new THREE.Vector3()));
+      env = { nearRail: false, lowCeiling: false, liftDelta: null };
+    } else {
+      env = this.systems.playerEnv();
+      this.docking.envFor(env, pl);
+    }
     const lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
-    pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), this.gLocal, env);
+    pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
+    if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     // ---- taps
     for (const tap of inp.taps) {
       if (this.mode === 'camera' || dead) continue;
@@ -287,6 +297,8 @@ export class Game {
     const root = this.shipVis.root;
     root.matrix.compose(new THREE.Vector3(), f.quat, new THREE.Vector3(1, 1, 1));
     root.matrixWorld.copy(root.matrix);
+    // the docked station's habitat ring turns (and Kaito with it, if he is inside)
+    this.docking.updateRingFrame(dt * this.timeScale);
     // camera
     const pl = this.player;
     let eyeLocal, viewQ;

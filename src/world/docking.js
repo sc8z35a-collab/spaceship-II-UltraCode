@@ -14,8 +14,10 @@ import { MU_EARTH, OMEGA_EARTH } from '../core/astro.js';
 import { DOCK_AT } from './stations.js';
 import { buildLobby, setGlobeTexture } from './stationLobby.js';
 import { StationAir } from './stationAir.js';
+import { RING } from './stationRing.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const _Z = new THREE.Vector3(0, 0, 1);
 const SHIP_MASS = 42000;
 // hull spheres (ship-local): body, nose, tail, reactor, engine, radiators
 const SHIP_SPHERES = [
@@ -72,6 +74,10 @@ export class Docking {
     this._q = new THREE.Quaternion();
     this._p = new THREE.Vector3();
     this._v = new THREE.Vector3();
+    // the habitat ring: Kaito inside it walks in the ring's own (turning) frame
+    this.inRing = false;
+    this.ringState = { pos: new THREE.Vector3(), eye: new THREE.Vector3(), look: new THREE.Quaternion(), up: new THREE.Vector3(), vel: new THREE.Vector3() };
+    this.riding = false;
   }
 
   get docked() { return this.state === 'docked'; }
@@ -202,11 +208,193 @@ export class Docking {
     this.airs = this.airs || new Map();
     if (!this.airs.has(s.id)) this.airs.set(s.id, new StationAir(lobby, s));
     this.air = this.airs.get(s.id);
+    this.air.ringContains = lobby.ring ? (p) => this.inRing && this.ringContainsRender(p) : null;
+    if (lobby.ring) this.spawnRing(lobby.ring);
+  }
+
+  // ------------------------------------------------------------------ the habitat ring
+  /** the ring's centre in the ship frame (docked: the station frame shifted by the berth) */
+  ringCenter() {
+    const ring = this.station.model.userData.ring;
+    return ring.position.clone().sub(DOCK_AT);
+  }
+
+  spawnRing(R) {
+    const g = this.g, s = this.station;
+    const C = this.ringCenter();
+    R.center = C;
+    R.group.position.copy(C);
+    g.shipVis.root.add(R.group);
+    // colliders in ring space (= the ring as it stands at angle 0)
+    const cols = R.colliders.map((c) => {
+      if (c.type === 'mesh') { const geo = c.geo.clone(); geo.translate(C.x, C.y, C.z); return { type: 'mesh', geo }; }
+      return Object.assign({}, c, { m: new THREE.Matrix4().makeTranslation(C.x, C.y, C.z).multiply(c.m) });
+    });
+    this.ringCols = g.phys.addColliders(cols);
+    this.ringLamps = R.lamps;
+    g.systems.lamps.push(...R.lamps);
+    // the call panel at the hub terminal, the call buttons in the ring's elevator halls
+    const proxyMat = new THREE.MeshBasicMaterial({ visible: false });
+    this.ringTaps = [g.interact.addSphere(R.terminal.button, 0.32, () => this.rideRing(true), { maxDist: 2.4 })];
+    for (const h of R.halls) {
+      if (!h.proxy) { h.proxy = new THREE.Mesh(new THREE.SphereGeometry(0.3, 8, 6), proxyMat); h.proxy.position.copy(h.button.position); R.group.add(h.proxy); }
+      this.ringTaps.push(g.interact.addMesh(h.proxy, () => this.rideRing(false), { maxDist: 2.6 }));
+    }
+    s.ringDriven = true;
+  }
+
+  despawnRing() {
+    const g = this.g, R = this.lobby && this.lobby.ring;
+    if (!R) return;
+    if (this.inRing) this.leaveRingFrame();
+    g.shipVis.root.remove(R.group);
+    if (this.ringCols) for (const c of this.ringCols) g.phys.world.removeCollider(c, true);
+    this.ringCols = null;
+    g.systems.lamps = g.systems.lamps.filter((l) => !R.lamps.includes(l));
+    for (const slot of g.systems.pool) if (slot.lamp && R.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
+    for (const t of this.ringTaps || []) g.interact.remove(t);
+    this.ringTaps = null;
+    if (this.station) this.station.ringDriven = false;
+    this.setRingDetail(true);
+  }
+
+  ringAngle() { return this.station.model.userData.ring.rotation.z; }
+
+  /** a ring-space point (the ring at angle 0) into the ship frame, and back */
+  ringToRender(p, out = new THREE.Vector3()) {
+    const C = this.lobby.ring.center;
+    return out.copy(p).sub(C).applyAxisAngle(_Z, this.ringAngle()).add(C);
+  }
+
+  renderToRing(p, out = new THREE.Vector3()) {
+    const C = this.lobby.ring.center;
+    return out.copy(p).sub(C).applyAxisAngle(_Z, -this.ringAngle()).add(C);
+  }
+
+  ringContainsRender(p) {
+    const R = this.lobby && this.lobby.ring;
+    if (!R) return false;
+    return R.contains(this.renderToRing(p, this._p).sub(R.center));
+  }
+
+  /** apparent gravity in the ring (ring space): the spin pushes you outward; walking with or
+   * against the spin makes you a little heavier or lighter (Coriolis) */
+  ringGravity(p, v, out = new THREE.Vector3()) {
+    const C = this.lobby.ring.center;
+    const w = RING.omega * (this.station.ringK ?? 1);
+    out.set(p.x - C.x, p.y - C.y, 0);
+    const r = out.length();
+    if (r < 1e-3) return out.set(0, 0, 0);
+    const rad = out.divideScalar(r);
+    // -2 w x v, radial part only (the sideways part would tip the view while walking)
+    const cor = 2 * w * (v.y * rad.x - v.x * rad.y);
+    return rad.multiplyScalar(w * w * r + cor);
+  }
+
+  /** ride the spoke elevator: down into the ring (true) or up to the hub terminal (false) */
+  rideRing(down) {
+    const g = this.g, R = this.lobby && this.lobby.ring;
+    if (!R || this.riding || this.state !== 'docked' || g.player.state === 'dead') return;
+    if (down === this.inRing) return;
+    const st = this.station.dmg ? this.station.dmg.status : 'ok';
+    if (st === 'destroyed') { g.audio.denied(g.player.eyeLocal); return; }
+    // no power: the cars stand still — the ladder in the spoke is a long climb
+    const dark = st === 'failed';
+    if (dark) g.asphalt.say('ring_dark', {}, { minGap: 20, force: true });
+    this.riding = true;
+    g.audio.beep(880, 0.12, 0.08, { pos: g.player.eyeLocal });
+    g.audio.doorMotor && g.audio.doorMotor(g.player.eyeLocal, false);
+    g.hud.setFade(1);
+    if (g.audio.ready) {
+      g.audio._burst(null, { dur: 3.2, freq: 140, q: 0.6, gain: 0.18, type: 'brown', filter: 'lowpass', direct: true, attack: 0.6, sweep: down ? 1.8 : 0.6 });
+      g.audio._burst(null, { dur: 2.6, freq: 900, q: 1.2, gain: 0.05, type: 'pink', direct: true, attack: 0.8, sweep: down ? 0.5 : 2 });
+    }
+    setTimeout(() => {
+      const pl = g.player;
+      if (this.state !== 'docked' || !this.lobby || this.lobby.ring !== R) { this.riding = false; g.hud.setFade(0); return; }
+      if (down) {
+        // step out of the car in the first hall, facing along the deck
+        const h = R.halls[0];
+        this.inRing = true;
+        const p = h.out.clone().add(R.center);
+        pl.teleport(p);
+        pl.up.set(-Math.cos(h.a * Math.PI / 180), -Math.sin(h.a * Math.PI / 180), 0);
+        pl.yaw = -Math.PI / 2; pl.pitch = 0; pl.state = 'walk';
+        pl.eyeLocal.copy(p).addScaledVector(pl.up, 0.7);
+        this.storeRingState();
+        this.toRenderSpace();
+        g.asphalt.say('ring_arrive', { g: (RING.omega * RING.omega * RING.floor / 9.81 * Math.pow(this.station.ringK ?? 1, 2)).toFixed(2) }, { force: true });
+      } else {
+        this.leaveRingFrame();
+        pl.teleport(R.terminal.out.clone());
+        pl.up.set(0, 1, 0);
+        pl.yaw = 0; pl.pitch = 0; pl.state = 'float';
+        g.asphalt.say('ring_leave', {}, { minGap: 30 });
+      }
+      g.audio.beep(1320, 0.1, 0.08, { pos: pl.eyeLocal });
+      setTimeout(() => { g.hud.setFade(0); this.riding = false; }, 600);
+    }, dark ? 7000 : 2400);
+  }
+
+  /** stop walking in the ring's frame: Kaito stays where he is in the ship frame */
+  leaveRingFrame() {
+    if (!this.inRing) return;
+    const pl = this.g.player;
+    this.inRing = false;
+    this.toRenderSpace();
+    pl.teleport(pl.pos.clone());
+  }
+
+  storeRingState() {
+    const pl = this.g.player, s = this.ringState;
+    s.pos.copy(pl.pos); s.eye.copy(pl.eyeLocal); s.look.copy(pl.lookQuat); s.up.copy(pl.up); s.vel.copy(pl.vel);
+  }
+
+  /** before the player's step: put Kaito back into ring space */
+  restoreRingState() {
+    const pl = this.g.player, s = this.ringState;
+    pl.pos.copy(s.pos); pl.eyeLocal.copy(s.eye); pl.lookQuat.copy(s.look); pl.up.copy(s.up); pl.vel.copy(s.vel);
+  }
+
+  /** what everyone else sees of Kaito this frame: ring-space state turned with the ring */
+  toRenderSpace() {
+    const pl = this.g.player, s = this.ringState;
+    const q = this._q.setFromAxisAngle(_Z, this.ringAngle());
+    this.ringToRender(s.pos, pl.pos);
+    this.ringToRender(s.eye, pl.eyeLocal);
+    pl.lookQuat.copy(q).multiply(s.look);
+    pl.up.copy(s.up).applyQuaternion(q);
+    pl.vel.copy(s.vel).applyQuaternion(q);
+  }
+
+  /** per render frame (before the camera): turn the ring, its inside and its lamps together */
+  updateRingFrame(dt) {
+    const R = this.lobby && this.lobby.ring;
+    if (!R || this.state !== 'docked') return;
+    const s = this.station, ring = s.model.userData.ring;
+    ring.rotation.z += dt * RING.omega * (s.ringK ?? 1);
+    ring.updateMatrix();
+    const th = ring.rotation.z;
+    R.group.rotation.z = th;
+    const C = R.center;
+    for (const l of R.lamps) l.pos.copy(l.local).applyAxisAngle(_Z, th).add(C);
+    if (this.inRing) this.toRenderSpace();
+    this.setRingDetail(!this.inRing);
+  }
+
+  /** the outer ring's window glows, gold bands and strobes cut through the inside: hidden there */
+  setRingDetail(on) {
+    const ring = this.station && this.station.model.userData.ring;
+    if (!ring || this._ringDetail === on) return;
+    this._ringDetail = on;
+    const M = this.g.stations.M;
+    ring.traverse((o) => { if (o.isMesh && (o.material === M.gold || o.material === M.windowLit || o.material === M.strobe)) o.visible = on; });
   }
 
   despawn() {
     const g = this.g;
     if (!this.lobby) return;
+    this.despawnRing();
     g.shipVis.root.remove(this.lobby.group);
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
     this.cols = null;
@@ -386,7 +574,14 @@ export class Docking {
   }
 
   /** is a ship-local point inside the docked station's walkable space */
-  contains(p) { return !!(this.lobby && this.lobby.contains(p)); }
+  contains(p) { return !!(this.lobby && (this.lobby.contains(p) || (this.inRing && this.ringContainsRender(p)))); }
+
+  /** extra hints for the player's step: the moving handrail band of the transit tube */
+  envFor(env, pl) {
+    if (!this.lobby || !this.lobby.ring || this.inRing) return;
+    const C = this.lobby.ring.terminal.out;
+    if (pl.pos.z > 6.5 && pl.pos.z < C.z && Math.hypot(pl.pos.x - C.x, pl.pos.y - (C.y + 0.4)) < 1.35) env.speedK = 3.2;
+  }
 
   /** the station air at a ship-local point inside it */
   airAt(p) { return this.air ? this.air.airAt(p) : { p: 101.3, o2: 21.2, co2: 0.05 }; }

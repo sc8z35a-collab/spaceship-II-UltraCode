@@ -14,6 +14,8 @@ export class StationAir {
     const sec = (name, vol) => ({ name, vol, p: P0, o2: P0 * O2F });
     this.sec = { lobby: sec('ロビー', 2500), promenade: sec('プロムナード', 900) };
     if (lobby.hasAtrium) this.sec.atrium = sec('中央アトリウム', 2300);
+    if (lobby.ring) this.sec.ring = sec('リング居住区', 12000);
+    this.ringContains = null;
     // links between sections through the station doors
     this.links = [];
     for (const d of lobby.doors) if (d.def.link) this.links.push({ a: d.def.link[0], b: d.def.link[1], door: d });
@@ -25,7 +27,10 @@ export class StationAir {
     if (st === 'critical') for (const s of Object.values(this.sec)) { s.p = 78; s.o2 = 78 * O2F * 0.9; }
   }
 
-  sectionAt(p) { return this.lobby.sectionAt ? this.lobby.sectionAt(p) : 'lobby'; }
+  sectionAt(p) {
+    if (this.ringContains && this.ringContains(p)) return 'ring';
+    return this.lobby.sectionAt ? this.lobby.sectionAt(p) || 'lobby' : 'lobby';
+  }
 
   airAt(p) {
     const s = this.sec[this.sectionAt(p)] || this.sec.lobby;
