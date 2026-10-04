@@ -92,7 +92,7 @@ export function tForPoint(z, x, y, inset = 0) {
 
 /**
  * Hull openings (windows / hatches). Each: centre on outer skin, local frame and half sizes.
- * kind: 'win' glass window, 'hatch' airlock door
+ * kind: 'win' glass window, 'hatch' airlock door, 'port' the dorsal docking port
  */
 export function makeOpening(name, z, t, halfW, halfH, radius, kind = 'win', room = null) {
   const c = sectionPoint(z, t, 0);
@@ -119,6 +119,8 @@ export const OPENINGS = [
   makeOpening('eng_p', 7.2, 0.3, 0.15, 0.15, 0.15, 'win', 'eng'),
   // airlock outer hatch (starboard)
   makeOpening('hatch', -1.05, 0.18, 0.84, 0.44, 0.4, 'hatch', 'airlock'),
+  // dorsal docking port over the corridor (H8 rides here); kept last so saved indices hold
+  makeOpening('port', 1.15, Math.PI / 2, 0.47, 0.47, 0.47, 'port', 'corridor'),
 ];
 
 export function openingByName(n) { return OPENINGS.find((o) => o.name === n); }

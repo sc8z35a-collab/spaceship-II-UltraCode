@@ -82,13 +82,21 @@ export class Docking {
 
   get docked() { return this.state === 'docked'; }
 
+  /** B-29's hull spheres and the proxy distance (shared with H8's collisions) */
+  get shipSpheres() { return SHIP_SPHERES; }
+  proxyDist(p, P, n) { return proxyDist(p, P, n); }
+
   /** hub station close enough to start a docking */
   candidate() {
     const g = this.g, ap = g.autopilot;
     const open = (s) => !s.dmg || (s.dmg.status !== 'failed' && s.dmg.status !== 'destroyed');
     if (ap.state === 'hold' && ap.target && ap.target.kind === 'hub' && ap.dist < 3000 && open(ap.target)) return ap.target;
     let best = null;
-    for (const s of g.stations.list) if (s.kind === 'hub' && open(s) && s.dist < 2000 && (!best || s.dist < best.dist)) best = s;
+    for (const s of g.stations.list) {
+      const d = s.pos.distanceTo(g.flight.pos);
+      if (s.kind === 'hub' && open(s) && d < 2000 && (!best || d < best.d)) best = { s, d };
+    }
+    best = best && best.s;
     return best;
   }
 
@@ -526,7 +534,9 @@ export class Docking {
       const qInv = pose.quat.clone().invert();
       let worst = null;
       const n = new THREE.Vector3(), pl = new THREE.Vector3();
-      for (const sp of SHIP_SPHERES) {
+      // H8 riding on B-29's back is part of the hull here
+      const spheres = g.h8 && g.h8.docked ? SHIP_SPHERES.concat(this._h8Sphere || (this._h8Sphere = { c: V(0, 7.85, 0.8), r: 3.7 })) : SHIP_SPHERES;
+      for (const sp of spheres) {
         pl.copy(sp.c).applyQuaternion(f.quat).add(f.pos).sub(pose.pos).applyQuaternion(qInv);
         for (const pr of P) {
           const d = proxyDist(pl, pr, n) - sp.r;

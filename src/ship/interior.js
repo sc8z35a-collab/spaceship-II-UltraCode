@@ -98,7 +98,8 @@ export function buildInteriorShell(M) {
   const inner = loftGeometry(z0, z1, 230, 140, INSET, true);
   b.add(inner, 'wall');
   // collision shell: lower resolution, open at the airlock hatch so EVA is possible
-  b.colMesh(cutOpeningTris(loftGeometry(z0, z1, 120, 72, INSET, true), OPENINGS.find((o) => o.kind === 'hatch'), 0.06));
+  // (and at the dorsal port, so Kaito can float up into a docked H8)
+  b.colMesh(cutOpeningTris(cutOpeningTris(loftGeometry(z0, z1, 120, 72, INSET, true), OPENINGS.find((o) => o.kind === 'hatch'), 0.06), OPENINGS.find((o) => o.kind === 'port'), 0.03));
   // nose cap closure inside (small dome) — the loft already closes near the tip
   // ---------- ribs (frames) every 0.8 m, underfloor ----------
   for (let z = -11.6; z <= 9.2; z += 0.8) {

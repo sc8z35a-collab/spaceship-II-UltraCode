@@ -38,6 +38,7 @@ export class SaveSystem {
       sys: g.systems.serializeState(),
       ast: { timer: g.asteroids.timer, micro: g.asteroids.microTimer },
       world: g.worldDamage ? g.worldDamage.serialize() : null,
+      h8: g.h8 ? g.h8.serialize() : null,
       dead: g.player.state === 'dead',
     };
     return d;
@@ -75,13 +76,16 @@ export class SaveSystem {
     g.player.yaw = p.yaw; g.player.pitch = p.pitch;
     g.player.suit = p.suit; g.player.suitO2 = p.suitO2 ?? 1; g.player.suitFuel = p.suitFuel ?? 1; g.player.health = Math.max(0.3, p.health ?? 1);
     if (p.outside) { g.player.outside = true; g.player.state = 'eva'; }
-    if (p.seat) { const seat = g.layout.seats.find((s) => s.id === p.seat); if (seat) g.systems.sit(seat); }
+    // H8 before the seat: Kaito may have been sitting in H8's cockpit
+    if (d.h8 && g.h8) g.h8.restore(d.h8);
+    if (p.seat) { const seat = g.layout.seats.find((s) => s.id === p.seat) || (g.h8 && p.seat === g.h8.seat.id ? g.h8.seat : null); if (seat) g.systems.sit(seat); }
     g.systems.restoreState(d.sys || {});
     if (d.ast) { g.asteroids.timer = d.ast.timer; g.asteroids.microTimer = d.ast.micro; }
     if (d.world && g.worldDamage) g.worldDamage.restore(d.world);
     // ---- the world did not stop: simulate the elapsed real time
     const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - d.wall) / 1000));
     this.offline = this.catchUp(gap, d.dock ? null : d.ap);
+    if (g.h8 && gap > 5) g.h8.catchUp(gap);
     // docked: the ship rode along with the station the whole time
     if (d.dock && g.docking) {
       g.docking.redock(d.dock);
@@ -103,6 +107,7 @@ export class SaveSystem {
     if (!g.running || !this.enabled || gap < 8 || g.player.state === 'dead') return;
     const ap = g.autopilot.state !== 'off' && g.autopilot.target ? g.autopilot.target.id : null;
     const rep = this.catchUp(gap, ap, true);
+    if (g.h8) g.h8.catchUp(gap);
     g.last = 0;
     if (gap > 60) {
       const h = gap / 3600;

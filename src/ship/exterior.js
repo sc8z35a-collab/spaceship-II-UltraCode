@@ -4,6 +4,7 @@ import * as THREE from 'three';
 import { Builder, roundedRectShape, rng, fixNormals } from './geom.js';
 import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, CANOPY, inCanopy, onMullion, canopyZ } from './hullShape.js';
 import { createGlassMaterial } from './glass.js';
+import { buildPortExterior, PORT } from '../h8/b29Port.js';
 
 /** lofted superellipse surface between z0..z1 (inset = inner wall) */
 export function loftGeometry(z0, z1, rings, segs, inset = 0, flip = false, closeNose = true) {
@@ -228,14 +229,8 @@ export function buildExterior(M) {
     b.pipe(p, p.clone().addScaledVector(n, 1.1), 0.012, 'metal', 6);
     b.sphere(0.03, 'plasticK', p.clone().addScaledVector(n, 1.1).toArray(), 8);
   }
-  // docking port (top, mid)
-  const dp = sectionPoint(0.8, Math.PI / 2, 0);
-  b.cyl(0.7, 0.75, 0.25, 'hullDark', [dp.x, dp.y + 0.1, dp.z], null, 40);
-  b.torus(0.62, 0.06, 'metal', [dp.x, dp.y + 0.24, dp.z], [Math.PI / 2, 0, 0], 40);
-  for (let k = 0; k < 3; k++) {
-    const a = (k / 3) * Math.PI * 2;
-    b.box(0.12, 0.2, 0.12, 'plasticY', [dp.x + Math.cos(a) * 0.68, dp.y + 0.3, dp.z + Math.sin(a) * 0.68], [0, -a, 0], 0.02);
-  }
+  // dorsal docking port (H8's berth) with its collar, and H8's power receptacle beside it
+  buildPortExterior(b);
   // sensor turret (belly, front)
   const bt = sectionPoint(-8.0, -Math.PI / 2, 0);
   b.cyl(0.25, 0.32, 0.3, 'hullDark', [bt.x, bt.y - 0.12, bt.z], null, 20);
@@ -364,7 +359,7 @@ export function buildExterior(M) {
   }
 
   // ---------- collision: outer skin (hatch cut out) + main external modules ----------
-  b.colMesh(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch, 0.06));
+  b.colMesh(cutOpeningTris(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch, 0.06), OPENINGS.find((o) => o.kind === 'port'), 0.03));
   b.colCyl(1.72, 0.5, [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0]);
   b.colCyl(1.5, zR1 - zR0, [0, 0.4, (zR0 + zR1) / 2], [Math.PI / 2, 0, 0]);
   b.colCyl(1.9, 0.22, [0, 0.4, zR0 - 0.15], [Math.PI / 2, 0, 0]);
@@ -394,7 +389,8 @@ function hullGreebles(b) {
     for (const rt of railT) if (Math.abs(t - rt) < 0.09 || Math.abs(t - rt - Math.PI * 2) < 0.09) return false;
     if (Math.abs(p.z + 5.6) < 1.5 && Math.abs(Math.abs(t > Math.PI ? t - Math.PI * 2 : t) - 0.32) < 0.4 && p.x > 0) return false;   // lettering
     if (Math.abs(p.z + 5.6) < 1.5 && Math.abs(t - (Math.PI - 0.32)) < 0.4) return false;
-    if (Math.abs(p.z - 0.8) < 1.1 && Math.abs(t - Math.PI / 2) < 0.35) return false;    // docking port
+    if (Math.abs(p.z - 1.15) < 1.0 && Math.abs(t - Math.PI / 2) < 0.4) return false;    // docking port collar
+    if (p.distanceTo(PORT.receptacle) < 0.6) return false;                                // power receptacle
     if ((Math.abs(p.z - 2.6) < 0.5 || Math.abs(p.z + 2.8) < 0.8) && Math.abs(t - Math.PI / 2) < 0.3) return false;   // mast, array
     for (const zr of [-7.6, 6.2]) if (Math.abs(p.z - zr) < 0.45) for (const tr of [1, 3, 5, 7]) if (Math.abs(t - tr * Math.PI / 4) < 0.18 || Math.abs(t + (8 - tr) * Math.PI / 4) < 0.18) return false;
     return true;

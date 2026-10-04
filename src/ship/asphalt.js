@@ -137,6 +137,46 @@ const LINES = {
   hurt: ['カイト、大丈夫ですか！？', '強い衝撃でした…ケガはありませんか。'],
   eva_impact: ['危ない！すぐ近くに衝突がありました！'],
   breach_patched: ['穴をふさぎました。再加圧できます。'],
+  // H8 (Kaito's old sub-base) — Asphalt's side
+  h8_call: ['H8に呼びかけます。…応答あり。HACHIが起きました。距離は{d}です。'],
+  h8_docked: ['H8の結合を確認しました。…久しぶりですね、ハチ。'],
+  h8_undocked: ['H8、離脱しました。'],
+  h8_port_none: ['上部ポートの外は真空です。H8が結合していないと開けられません。'],
+  h8_link_down: ['サーバーが損傷していて、H8と通信できません。'],
+  h8_zap_thanks: ['…HACHIが撃ち落としました。助かりました。'],
+  h8_hint: ['そういえばカイト。昔のサブ拠点、H8が上の停泊軌道で眠っています。ナビ画面の左上から呼べますよ。…呼べば、HACHIが自分で飛んできて、この船の背中にドッキングします。'],
+};
+
+// HACHI — H8's AI: terse, dry, very sure of itself
+const HACHI = {
+  hachi_wake: ['HACHI、起動。…ずいぶん待たせたな、カイト。距離{d}、そっちへ向かう。', 'HACHI、起動。久しぶりだな、カイト。今から行く。距離{d}。'],
+  hachi_coming: ['了解。B-29へ向かう。距離{d}。'],
+  hachi_meet: ['B-29を確認。ここからは私がやる。上部ポートに付ける。'],
+  hachi_final: ['最終進入。B-29の上部ポートに合わせる。そのまま姿勢を保ってくれ。'],
+  hachi_docked: ['ラッチ閉鎖、結合完了。H8の推力をB-29に回す。給電があれば、最大12倍だ。'],
+  hachi_reply: ['アスファルト。相変わらず丁寧だな。'],
+  hachi_undock: ['ラッチ解放。H8、離脱する。上で待機している。'],
+  hachi_undock_crew: ['ラッチ解放、離脱する。…操縦は任せる、カイト。'],
+  hachi_manual: ['安全距離に出た。操縦をそちらへ渡す。'],
+  hachi_home: ['停泊軌道へ戻る。用があれば呼べ。'],
+  hachi_parked: ['停泊軌道に到着。省電力モードに入る。'],
+  hachi_arrived: ['{name}に到着。相対位置を保持する。'],
+  hachi_hatch_closing: ['ハッチを閉める。少し待て。'],
+  hachi_vestibule: ['ハッチの間に人がいる。離脱できない。'],
+  hachi_busy: ['B-29がドッキング操作中だ。終わるまで待つ。'],
+  hachi_feed_on: ['給電を受ける。ブースト出力が使える。'],
+  hachi_feed_off: ['給電を切った。内部電源だけだと、推力は6倍までだ。'],
+  hachi_boost_on: ['ブースト、許可。'],
+  hachi_boost_off: ['ブースト解除。巡航出力で行く。'],
+  hachi_zap: ['レーザー照射。岩塊を除去した。', '迎撃完了。小石だ、問題ない。', '進路上の岩を焼いた。'],
+  hachi_big_rock: ['大きい岩だ、焼き切れない。距離{km}キロ。回避機動に入る。'],
+  hachi_rock: ['岩塊接近、距離{km}キロ。大きい。回避する。'],
+  hachi_rock_small: ['小石が来る。距離{km}キロ。迎撃する。'],
+  hachi_hit: ['被弾。外部装甲で止めた。残り{pct}パーセント。'],
+  hachi_hit_hard: ['被弾。外部装甲が薄くなってきた。残り{pct}パーセント。'],
+  hachi_leak: ['内部装甲を抜かれた。船内の気圧が下がる。B-29へ戻れ、カイト。'],
+  hachi_bump: ['接触した。装甲が厚くて助かったな。'],
+  hachi_enter: ['ようこそ、カイト。…狭いのは昔のままだ。'],
 };
 
 export class Asphalt {
@@ -154,6 +194,8 @@ export class Asphalt {
       const pick = () => {
         const vs = speechSynthesis.getVoices();
         this.voice = vs.find((v) => /ja[-_]JP/i.test(v.lang) && /Kyoko|O-ren|Google|Nanami|Haruka/i.test(v.name)) || vs.find((v) => /ja/i.test(v.lang)) || null;
+        // HACHI: a different (lower, male if there is one) Japanese voice
+        this.voiceH = vs.find((v) => /ja/i.test(v.lang) && /Otoya|Ichiro|Keita|Hattori|Daichi|Naoki|male/i.test(v.name)) || null;
       };
       pick();
       speechSynthesis.onvoiceschanged = pick;
@@ -165,8 +207,8 @@ export class Asphalt {
     try { const u = new SpeechSynthesisUtterance(' '); u.volume = 0; speechSynthesis.speak(u); } catch (e) { /* ignore */ }
   }
 
-  say(key, params = {}, { force = false, minGap = 20 } = {}) {
-    const arr = LINES[key];
+  say(key, params = {}, { force = false, minGap = 20, who = 'asphalt' } = {}) {
+    const arr = who === 'hachi' ? HACHI[key] : LINES[key];
     if (!arr) return;
     const now = performance.now() / 1000;
     if (!force && this.lastKey[key] && now - this.lastKey[key] < minGap) return;
@@ -176,26 +218,30 @@ export class Asphalt {
     // server damage garbles the voice
     const sv = this.g.damage ? this.g.damage.health.servers : 1;
     if (sv < 0.5 && Math.random() < 0.6) text = text.replace(/(.)(.)/, '$1…$1$2');
-    this.log.push({ t: this.g.time, text, key });
+    this.log.push({ t: this.g.time, text: who === 'hachi' ? 'HACHI: ' + text : text, key, who });
     if (this.log.length > 60) this.log.shift();
-    this.queue.push(text);
+    this.queue.push({ text, who });
     this._next();
   }
 
   _next() {
     if (this.speaking || !this.queue.length) return;
-    const text = this.queue.shift();
-    this.g.audio.chime && this.g.audio.chime();
+    const { text, who } = this.queue.shift();
+    const hachi = who === 'hachi';
+    // HACHI announces itself with two short digital pips instead of Asphalt's chime
+    if (hachi) { const A = this.g.audio; if (A.beep) { A.beep(1760, 0.05, 0.05, { direct: true }); A.beep(2350, 0.06, 0.05, { direct: true, when: 0.08 }); } }
+    else this.g.audio.chime && this.g.audio.chime();
     if (!this.voiceOn || !('speechSynthesis' in window)) { this.speaking = true; setTimeout(() => { this.speaking = false; this._next(); }, 1800); return; }
     this.speaking = true;
     setTimeout(() => {
       try {
         const u = new SpeechSynthesisUtterance(text);
         u.lang = 'ja-JP';
-        if (this.voice) u.voice = this.voice;
+        const v = hachi ? (this.voiceH || this.voice) : this.voice;
+        if (v) u.voice = v;
         const sv = this.g.damage ? this.g.damage.health.servers : 1;
-        u.rate = sv < 0.5 ? 0.85 : 1.02;
-        u.pitch = sv < 0.5 ? 0.7 : 1.08;
+        u.rate = hachi ? 1.12 : sv < 0.5 ? 0.85 : 1.02;
+        u.pitch = hachi ? (this.voiceH ? 0.85 : 0.55) : sv < 0.5 ? 0.7 : 1.08;
         u.volume = 0.9;
         u.onend = u.onerror = () => { this.speaking = false; setTimeout(() => this._next(), 250); };
         speechSynthesis.speak(u);

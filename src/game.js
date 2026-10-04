@@ -33,6 +33,7 @@ import { Gameplay } from './ship/gameplay.js';
 import { createLooseProps } from './ship/loose.js';
 import { Breakup } from './ship/breakup.js';
 import { WorldDamage } from './world/worldDamage.js';
+import { H8Vessel } from './h8/h8.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -71,6 +72,13 @@ export class Game {
     if (this.params.has('noRooms')) extra.length = 0;
     this.shipVis.build(extra);
     this.engine.scene.add(this.shipVis.root);
+    // the frame the view, the light pool and the sounds live in: B-29's, or H8's while Kaito flies
+    // H8 away from B-29 (see H8Vessel.frameMatrix)
+    this.frameRoot = new THREE.Group();
+    this.frameRoot.name = 'frame';
+    this.frameRoot.matrixAutoUpdate = false;
+    this.engine.scene.add(this.frameRoot);
+    this.origin = new THREE.Vector3();
     P(0.35);
     this.phys.addColliders(this.shipVis.colliders);
     this.phys.addColliders(this.shipVis.extColliders);
@@ -114,6 +122,12 @@ export class Game {
     this.worldDamage = new WorldDamage(this);
     this.hud = new Hud(this);
     this.initWorldState();
+    // H8 — Kaito's old sub-base (parked on its orbit until called)
+    if (!this.params.has('noH8')) {
+      this.h8 = new H8Vessel(this);
+      this.h8.init();
+      this.systems.add({ env: (env) => this.h8env(env) });
+    }
     P(0.6);
     // warm-up: stream terrain, compile shaders, capture environment maps
     for (let i = 0; i < 30; i++) {
@@ -223,14 +237,18 @@ export class Game {
     }
     // ---- flight
     this.autopilot.update(sdt);
+    if (this.h8) flightIn = this.h8.preStep(sdt, flightIn);
     if (!this.docking.preStep(sdt)) this.flight.step(sdt, flightIn, (pos) => this.terrainAt(pos));
     this.docking.postStep(sdt);
+    if (this.h8) this.h8.update(sdt, dt);
     // apparent gravity in the ship frame
     const qInv = this.flight.quat.clone().invert();
     this.gLocal.copy(this.flight.properAcc).negate().applyQuaternion(qInv);
     // ULTRA burns are compensated by the drive's inertial damper (otherwise the 0.27 g push and
     // the 0.7 g braking pulled everybody onto the bulkheads)
     if (this.flight.damp > 0.001) this.gLocal.multiplyScalar(1 - 0.985 * this.flight.damp);
+    // riding H8 alone: its own manoeuvres are what Kaito feels
+    if (this.h8 && this.h8.solo) this.gLocal.copy(this.h8.gLocal);
     this.phys.setGravity(this.gLocal);
     this.fx.gravity.copy(this.gLocal);
     this.phys.step(sdt);
@@ -292,11 +310,30 @@ export class Game {
     this.monitors.setFocus(F.m, false);
   }
 
+  /** climbing B-29's dorsal well and H8's shaft under thrust: hand over hand */
+  h8env(env) {
+    const h = this.h8, pl = this.player;
+    if (!h || !(h.docked || h.crew)) return;
+    if (this.gLocal.length() > 2 && h.inColumn(pl.pos)) env.climb = true;
+    // inside H8 the ceiling is low (crouch in the shaft only when gravity pulls)
+    if (h.containsPF(pl.pos) && !h.inCockpit(pl.pos)) env.lowCeiling = false;
+  }
+
   updateRender(dt) {
     const f = this.flight;
     const root = this.shipVis.root;
-    root.matrix.compose(new THREE.Vector3(), f.quat, new THREE.Vector3(1, 1, 1));
+    // render origin: B-29, or H8 while Kaito flies it away from B-29
+    const solo = !!(this.h8 && this.h8.solo);
+    this.origin.copy(solo ? this.h8.flight.pos : f.pos);
+    const one = new THREE.Vector3(1, 1, 1);
+    root.matrix.compose(f.pos.clone().sub(this.origin), f.quat, one);
     root.matrixWorld.copy(root.matrix);
+    const fr = this.frameRoot;
+    if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
+    fr.matrixWorld.copy(fr.matrix);
+    fr.updateMatrixWorld(true);
+    const frameQ = new THREE.Quaternion().setFromRotationMatrix(fr.matrix);
+    const frameP = new THREE.Vector3().setFromMatrixPosition(fr.matrix);
     // the docked station's habitat ring turns (and Kaito with it, if he is inside)
     this.docking.updateRingFrame(dt * this.timeScale);
     // camera
@@ -309,7 +346,7 @@ export class Game {
       eyeLocal = c.pos;
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
     } else if (this.mode === 'camera' && this.systems) {
-      const c = this.systems.externalCamera(this.extCam);
+      const c = solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
       eyeLocal = c.pos; viewQ = c.quat;
     } else if (!this.running && !this.params.has('view')) {
       // title: slow cinematic around the ship
@@ -334,17 +371,21 @@ export class Game {
       shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02 * k, Math.sin(t * 39 + 1) * sh * 0.02 * k, Math.sin(t * 31 + 2) * sh * 0.03 * k));
       this.shake *= Math.exp(-dt * 2.2);
     }
-    this.camWorld.copy(eyeLocal).applyQuaternion(f.quat);
-    this.camQuat.copy(f.quat).multiply(viewQ).multiply(shakeQ);
+    this.camWorld.copy(eyeLocal).applyQuaternion(frameQ).add(frameP);
+    this.camQuat.copy(frameQ).multiply(viewQ).multiply(shakeQ);
     const cam = this.engine.camera;
     cam.matrix.compose(this.camWorld, this.camQuat, new THREE.Vector3(1, 1, 1));
     // world
-    this.space.update(f.pos, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
+    const origin = this.origin;
+    this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
     // inside the docked station's lobby its outer shell is hidden so the windows look out
     this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
-    this.stations.update(this.time, f.pos, this.camWorld, dt);
+    this.stations.update(this.time, origin, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
-    this.elevator.update(this.time, f.pos, this.camWorld, this.space.sunDir, dt);
+    this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt);
+    if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
+    const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
+    if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.worldDamage) this.worldDamage.updateVisual(dt);
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
@@ -360,7 +401,9 @@ export class Game {
     this.fx.alpha.pts.material.uniforms.uScale.value = sc;
     this.fx.update(Math.min(dt * this.timeScale, 0.1));
     if (this.systems) this.systems.updateVisual(dt, this.camWorld.length());
-    // listener at the player's head (also while watching an external camera)
+    // listener at the player's head (also while watching an external camera); while Kaito is away
+    // in H8, B-29's own machinery is far behind him
+    this.audio.mutePred = solo ? (p) => this.h8.muteB29Sound(p) : null;
     this.audio.setListener(pl.eyeLocal, pl.lookQuat);
     // refresh the space reflection when the lighting really changed (sunrise / sunset, the ship
     // turned): a recapture swaps every reflection at once, so it must not happen on a timer

@@ -53,42 +53,7 @@ export class Monitors {
   init() {
     const g = this.g;
     const root = g.shipVis.root;
-    for (const slot of g.layout.monitors) {
-      const W = slot.res, H = Math.round(slot.res * slot.h / slot.w);
-      const canvas = document.createElement('canvas');
-      canvas.width = W; canvas.height = H;
-      const kit = new Kit(canvas);
-      const tex = new THREE.CanvasTexture(canvas);
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.anisotropy = 4;
-      tex.minFilter = THREE.LinearFilter;
-      tex.generateMipmaps = false;
-      const mat = new THREE.ShaderMaterial({
-        uniforms: {
-          tUI: { value: tex }, tFeed: { value: null }, uFeed: { value: 0 }, uFeedRect: { value: new THREE.Vector4(0, 0, 1, 1) },
-          uPower: { value: 1 }, uGlitch: { value: 0 }, uTime: { value: 0 }, uBright: { value: 1.6 }, uGrid: { value: 0.1 },
-        },
-        vertexShader: SCREEN_VERT, fragmentShader: SCREEN_FRAG,
-      });
-      const mesh = new THREE.Mesh(new THREE.PlaneGeometry(slot.w, slot.h), mat);
-      const X = new THREE.Vector3().crossVectors(slot.up, slot.n).normalize();
-      const Y = new THREE.Vector3().crossVectors(slot.n, X).normalize();
-      mesh.matrix.makeBasis(X, Y, slot.n).setPosition(slot.pos);
-      mesh.matrixAutoUpdate = false;
-      mesh.layers.set(LAYER_NEAR);
-      root.add(mesh);
-      // bezel + glass
-      const bez = new THREE.Mesh(new THREE.BoxGeometry(slot.w + 0.035, slot.h + 0.035, 0.03), g.shipVis.M.plasticK);
-      bez.matrix.copy(mesh.matrix).multiply(new THREE.Matrix4().makeTranslation(0, 0, -0.017));
-      bez.matrixAutoUpdate = false; bez.layers.set(LAYER_NEAR);
-      bez.castShadow = true; bez.receiveShadow = true;
-      root.add(bez);
-      const rate = { nav: 8, status: 6, cam: 3, airlock: 6 }[slot.id] || 4;
-      const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
-      this.list.push(m);
-      this.byId[slot.id] = m;
-      g.interact.addMesh(mesh, (hit) => this.tap(m, hit), { maxDist: 2.6 });
-    }
+    for (const slot of g.layout.monitors) this.addSlot(slot, root);
     // camera feed render targets
     this.feedRT = new THREE.WebGLRenderTarget(480, 270, { type: THREE.HalfFloatType });
     this.feedLDR = new THREE.WebGLRenderTarget(480, 270, { type: THREE.UnsignedByteType });
@@ -124,6 +89,52 @@ export class Monitors {
     }));
     this.toneQuad.frustumCulled = false;
     this.toneScene.add(this.toneQuad);
+  }
+
+  /**
+   * A screen for a slot { id, pos, n, up, w, h, res } placed in parent (local coordinates). offset:
+   * where that parent's origin sits in the physics frame (the eye's frame) — H8's cockpit screens
+   * live in H8 but are looked at from B-29's frame.
+   */
+  addSlot(slotIn, parent, offset = null) {
+    const g = this.g;
+    const slot = offset ? Object.assign({}, slotIn, { pos: slotIn.pos.clone().add(offset), local: slotIn.pos.clone() }) : slotIn;
+    const lpos = slot.local || slot.pos;
+    const W = slot.res, H = Math.round(slot.res * slot.h / slot.w);
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const kit = new Kit(canvas);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    tex.minFilter = THREE.LinearFilter;
+    tex.generateMipmaps = false;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: {
+        tUI: { value: tex }, tFeed: { value: null }, uFeed: { value: 0 }, uFeedRect: { value: new THREE.Vector4(0, 0, 1, 1) },
+        uPower: { value: 1 }, uGlitch: { value: 0 }, uTime: { value: 0 }, uBright: { value: 1.6 }, uGrid: { value: 0.1 },
+      },
+      vertexShader: SCREEN_VERT, fragmentShader: SCREEN_FRAG,
+    });
+    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(slot.w, slot.h), mat);
+    const X = new THREE.Vector3().crossVectors(slot.up, slot.n).normalize();
+    const Y = new THREE.Vector3().crossVectors(slot.n, X).normalize();
+    mesh.matrix.makeBasis(X, Y, slot.n).setPosition(lpos);
+    mesh.matrixAutoUpdate = false;
+    mesh.layers.set(LAYER_NEAR);
+    parent.add(mesh);
+    // bezel + glass
+    const bez = new THREE.Mesh(new THREE.BoxGeometry(slot.w + 0.035, slot.h + 0.035, 0.03), g.shipVis.M.plasticK);
+    bez.matrix.copy(mesh.matrix).multiply(new THREE.Matrix4().makeTranslation(0, 0, -0.017));
+    bez.matrixAutoUpdate = false; bez.layers.set(LAYER_NEAR);
+    bez.castShadow = true; bez.receiveShadow = true;
+    parent.add(bez);
+    const rate = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[slot.id] || 4;
+    const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
+    this.list.push(m);
+    this.byId[slot.id] = m;
+    g.interact.addMesh(mesh, (hit) => this.tap(m, hit), { maxDist: 2.6 });
+    return m;
   }
 
   /** while a monitor is looked at closely its canvas is rendered at a higher resolution and rate */
@@ -192,7 +203,7 @@ export class Monitors {
     this._sph = this._sph || new THREE.Sphere();
     for (const m of this.list) {
       const d = m.slot.pos.distanceTo(eye);
-      this._sph.center.copy(m.slot.pos).applyMatrix4(g.shipVis.root.matrixWorld);
+      this._sph.center.setFromMatrixPosition(m.mesh.matrixWorld);
       this._sph.radius = Math.max(m.slot.w, m.slot.h);
       const inView = this._frustum.intersectsSphere(this._sph);
       m.mat.uniforms.uTime.value = time % 100;
@@ -205,7 +216,7 @@ export class Monitors {
       m.boot = Math.min(1, m.boot + 0.12);
       this.draw(m);
       m.tex.needsUpdate = true;
-      if (m.feed) feedWanted = d < 5;
+      if (m.feed && d < 5) { feedWanted = true; this.feedSrc = m.feedSrc || null; }
     }
     // camera feed
     this.feedTimer -= dt;
@@ -217,11 +228,20 @@ export class Monitors {
 
   renderFeed() {
     const g = this.g, r = g.engine.renderer;
-    const c = g.systems.externalCamera(this.camIndex);
-    const camHealth = g.damage ? g.damage.health.cameras[((this.camIndex % 5) + 5) % 5] : 1;
-    const wq = g.flight.quat.clone().multiply(c.quat);
-    const wp = c.pos.clone().applyQuaternion(g.flight.quat);
-    const m = new THREE.Matrix4().compose(wp, wq, new THREE.Vector3(1, 1, 1));
+    // B-29's cameras (ship frame), or a source that gives its own world pose (H8's cameras)
+    let m, camHealth = 1;
+    if (this.feedSrc) {
+      m = this.feedSrc();
+      camHealth = this.feedHealth ?? 1;
+    } else {
+      const c = g.systems.externalCamera(this.camIndex);
+      camHealth = g.damage ? g.damage.health.cameras[((this.camIndex % 5) + 5) % 5] : 1;
+      const rm = g.shipVis.root.matrix;
+      const rq = new THREE.Quaternion().setFromRotationMatrix(rm);
+      const wq = rq.clone().multiply(c.quat);
+      const wp = c.pos.clone().applyMatrix4(rm);
+      m = new THREE.Matrix4().compose(wp, wq, new THREE.Vector3(1, 1, 1));
+    }
     const prevTarget = r.getRenderTarget();
     const prevAuto = r.shadowMap.autoUpdate;
     r.setRenderTarget(this.feedRT);
@@ -331,6 +351,14 @@ export class Monitors {
       K.circle(x, y, 3, { fill: COL.red, stroke: null });
     }
     K.button(12, H - 26, 70, 20, ['近傍', '静止軌道', '月軌道'][zoom], () => { m.zoom = ((m.zoom || 0) + 1) % 3; }, { size: 10 });
+    // H8 on the map and its call / release strip
+    if (g.h8) {
+      if (g.h8.mode !== 'docked') {
+        const [hx, hy] = proj(g.h8.flight.pos);
+        if (Math.hypot(hx - cx, hy - cy) < 140) { K.circle(hx, hy, 3, { fill: COL.amber, stroke: null }); K.text('H8', hx + 6, hy - 4, { size: 8, color: COL.amber }); }
+      }
+      this.drawH8Strip(K, 12, 32);
+    }
     {
       const es = g.elevator.dmg ? g.elevator.dmg.status : 'ok';
       K.text('宇宙エレベーター：' + STATUS_JP[es], 12, H - 34, { size: 9, color: es === 'ok' ? COL.dim : es === 'damaged' ? COL.amber : COL.red });
@@ -354,7 +382,8 @@ export class Monitors {
       K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + 192, 76, { size: 16, color: COL.text, align: 'right', mono: true });
       K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
     }
-    K.bar(X + 10, 96, 182, 5, sp / (f.ultra || sp > 60 ? 900 : 60), f.ultra ? COL.amber : COL.cyan);
+    K.bar(X + 10, 96, 182, 5, sp / (f.ultra || sp > f.vNormal ? f.vUltra : f.vNormal), f.ultra ? COL.amber : COL.cyan);
+    if (f.mul > 1) K.text(`H8 推力 ×${f.mul}`, X + 192, 52, { size: 9, color: COL.amber, align: 'right', weight: 700 });
     // ULTRA button
     const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 ? 'disabled' : 'normal');
     K.button(X, 114, 202, 30, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });
@@ -362,6 +391,18 @@ export class Monitors {
     K.text('目的地', X + 4, 160, { size: 10, color: COL.dim });
     let y = 166;
     const ap = g.autopilot;
+    // H8 (Kaito's sub-base) is a destination too while it is away from B-29
+    if (g.h8 && g.h8.mode !== 'docked') {
+      const s = g.h8.navTarget();
+      const d = s.pos.distanceTo(f.pos);
+      const sel = this.selDest === 'h8';
+      const dd = d < 1e5 ? (d / 1000).toFixed(d < 1e4 ? 1 : 0) + ' km' : (d / 1000 / 1000).toFixed(1) + ' 千km';
+      K.rect(X, y, 202, 20, { fill: sel ? 'rgba(255,170,60,0.16)' : 'rgba(255,170,60,0.04)', stroke: sel ? COL.amber : 'rgba(255,170,80,0.25)', r: 5 });
+      K.text('H8（サブ拠点）', X + 8, y + 14, { size: 10, color: COL.amber });
+      K.text(dd, X + 196, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
+      K.buttons.push({ x: X, y, w: 202, h: 20, onTap: () => { this.selDest = 'h8'; } });
+      y += 23;
+    }
     for (const s of st.list) {
       const d = s.dist || s.pos.distanceTo(f.pos);
       const sel = this.selDest === s.id;

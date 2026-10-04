@@ -10,7 +10,7 @@ import { ENG_HATCH, LIFT } from './interior.js';
 import { RoundedBoxGeometry } from './geom.js';
 import { LAYER_NEAR, LAYER_MID, setLayersDeep } from '../core/layers.js';
 import { R_EARTH } from '../core/astro.js';
-import { HULL_BOTTOM, ULTRA_MAX } from './flight.js';
+import { HULL_BOTTOM } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -189,6 +189,8 @@ export class Gameplay {
       setTimeout(() => g.asphalt.say(off.hits ? 'offline_hits' : 'offline_quiet', { n: off.hits }, { force: true }), 3000);
     } else if (cont) setTimeout(() => g.asphalt.say('boot', {}, { force: true }), 2500);
     else setTimeout(() => g.asphalt.say('welcome', {}, { force: true }), 3000);
+    // a new game: Asphalt mentions H8 once things have settled
+    if (!cont && g.h8) setTimeout(() => { if (g.h8.mode === 'parked') g.asphalt.say('h8_hint', {}, { force: true }); }, 50000);
     // ambient machinery (positional, muffled when the air thins)
     const a = g.audio;
     a.humLoop('reactorHum', { pos: V(0, 1.0, 9.0), freq: 47, gain: 0.05, harm: [1, 0.7, 0.3, 0.2] });
@@ -385,7 +387,9 @@ export class Gameplay {
     // inside / outside the pressure hull
     const [bot, top] = heightRangeAt(p.z, p.x, 0);
     const hw = halfWidthAt(p.z, p.y, 0);
-    const insideHull = (p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || g.docking.contains(p);
+    const h8 = g.h8;
+    const insideHull = (p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || g.docking.contains(p) ||
+      !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p)));
     const wasOut = pl.outside;
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {
@@ -602,6 +606,7 @@ export class Gameplay {
     const g = this.g;
     this.watched = this.watched.filter((a) => {
       if (a.hit) return false;
+      if (a.zapped) { setTimeout(() => g.asphalt.say('h8_zap_thanks', {}, { minGap: 60 }), 2500); return false; }
       if (a.dead || (a.closing !== undefined && a.closing < 0 && a.dist > 60)) { g.asphalt.say('evaded', {}, { force: true }); return false; }
       return true;
     });
@@ -652,7 +657,7 @@ export class Gameplay {
     const g = this.g, f = g.flight;
     const integ = g.damage.integrityNow ?? g.damage.integrity();
     return {
-      vf: Math.min(1, Math.max(0, f.setSpeed) / ULTRA_MAX),
+      vf: Math.min(1, Math.max(0, f.setSpeed) / f.vUltra),
       air: Math.min(1, f.dynPressure / 1.5e4 + (f.alt < 100000 ? 0.15 : 0)),
       wear: Math.min(1, (1 - integ) * 1.4 + (1 - f.engineHealth) * 0.6),
     };
@@ -661,7 +666,8 @@ export class Gameplay {
   /** while the ULTRA drive runs the ship hums, shudders now and then, and something may give */
   ultraStress(dt) {
     const g = this.g, f = g.flight;
-    if (!(f.ultra || f.ultraDown) || f.landed) { this.ultraHum = 0; return; }
+    // (with H8 pushing, its inertial damper and frame carry the load: no ULTRA stress on B-29)
+    if (!(f.ultra || f.ultraDown) || f.landed || f.mul > 1) { this.ultraHum = 0; return; }
     const c = this.ultraConditions();
     // safety interlock: Asphalt throttles the drive back once the frame starts giving way (the
     // pilot may light it again — then it is on them; she steps in again if it gets worse)
@@ -729,6 +735,8 @@ export class Gameplay {
   breakup(reason) {
     const g = this.g;
     if (this.brokenUp) return;
+    // Kaito is away in H8: Asphalt holds the empty ship together (nothing stresses it) until he is back
+    if (g.h8 && g.h8.solo) return;
     this.brokenUp = true;
     g.damage.broken = true;
     if (this.sleeping) { this.sleeping = false; g.timeScale = 1; }
@@ -817,6 +825,7 @@ export class Gameplay {
     g.hud.setFade(1);
     setTimeout(() => {
       g.damage.repairAll();
+      if (g.h8 && g.h8.docked) { g.h8.armour.outer = 1; g.h8.armour.inner = 1; if (g.h8._leak) { g.lifeSupport.removeLeak(g.h8._leak); g.h8._leak = null; } }
       const ls = g.lifeSupport;
       ls.reserve.o2 = 9100; ls.reserve.n2 = 17000; ls.water = 180;
       for (const z of Object.values(ls.z)) { z.n2 = 79.2; z.o2 = 21.3; z.co2 = 0.04; z.leaks = []; }

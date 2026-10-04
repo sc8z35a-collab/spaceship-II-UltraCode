@@ -12,6 +12,8 @@ export const ZONES = {
   store: { name: '倉庫', vol: 19, center: [-1.8, 1.2, 3.0] },
   eng: { name: '機関室', vol: 22, center: [0, 1.2, 7.4] },
   under: { name: '配管層', vol: 60, center: [0, -0.9, 0] },
+  // H8 (docked on the dorsal port: cockpit + shaft + the tunnel; its own life support)
+  h8: { name: 'H8 船内', vol: 9, center: [0, 8.15, 0.5] },
 };
 
 // gas constant factor: kPa*m^3/s per (m^2 * kPa) of upstream pressure, air at 293 K (choked)
@@ -52,6 +54,8 @@ export class LifeSupport {
   repress() { this.boost = 120; }
 
   zoneAt(p) {
+    const h8 = this.g.h8;
+    if (p.y > 2.8 && h8 && (h8.containsPF(p) || h8.inVestibule(p))) return 'h8';
     if (p.y < -0.1) return 'under';
     if (p.z < -8.4) return 'cockpit';
     if (p.z > 5.6) return 'eng';
@@ -79,10 +83,12 @@ export class LifeSupport {
     // lift shaft open when the platform is down
     if (g.lift && g.lift.shaftOpen > 0) c.push(['corridor', 'under', 1.1 * g.lift.shaftOpen]);
     if (g.engHatch && g.engHatch.open > 0) c.push(['eng', 'under', 0.5 * g.engHatch.open]);
+    // B-29's dorsal port open to a docked H8
+    if (g.h8) { const a = g.h8.portFlowArea(); if (a > 1e-5) c.push(['corridor', 'h8', a]); }
     // ducts (forced ventilation) — small effective areas between every zone and LS hub; the
     // dampers of a zone that is losing air shut on their own so it cannot drain the others
     if (this.fans.on && this.fans.health > 0.2 && !this.lockdown && !this.dampers.has('ls')) {
-      for (const id of Object.keys(this.z)) if (id !== 'ls' && id !== 'airlock' && !this.dampers.has(id)) c.push([id, 'ls', 0.004 * this.fans.health, true]);
+      for (const id of Object.keys(this.z)) if (id !== 'ls' && id !== 'airlock' && id !== 'h8' && !this.dampers.has(id)) c.push([id, 'ls', 0.004 * this.fans.health, true]);
     }
     return c;
   }
@@ -199,6 +205,7 @@ export class LifeSupport {
     } else this.o2gen.rate = 0;
     if (this.scrubber.on && this.scrubber.health > 0.1 && power > 0.3) {
       for (const z of Object.values(Z)) {
+        if (z.id === 'h8') continue;   // H8 scrubs its own air
         const k = (this.fans.on ? 0.0025 : 0.0) * this.scrubber.health * (z.id === 'ls' ? 3 : 1);
         z.co2 -= (z.co2 - 0.03) * Math.min(1, k * dt);
       }
@@ -208,6 +215,7 @@ export class LifeSupport {
       this.boost = Math.max(0, this.boost - dt);
       const k = this.boost > 0 ? 6 : 1;
       for (const z of Object.values(Z)) {
+        if (z.id === 'h8') continue;   // H8's own tanks (see H8Vessel.updateAir)
         if (z.id === 'airlock' && ((this.g.airlockMode && this.g.airlockMode !== 'idle') || (this.g.hatch && !this.g.hatch.sealed))) continue;
         if (z.leaks.length && z.leaks.some((l) => l.area > 2e-4)) continue;
         const p = z.n2 + z.o2 + z.co2;

@@ -86,8 +86,10 @@ export class AudioEngine {
   }
 
   _setPannerPos(p, pos) {
-    // convert ship-local to listener space
+    // convert ship-local to listener space (sources the listener has left far behind — B-29's
+    // machinery while Kaito flies H8 — are pushed out of earshot)
     const v = pos.clone().sub(this.listenerPos).applyQuaternion(this.listenerQuat.clone().invert());
+    if (this.mutePred && this.mutePred(pos)) v.set(0, 0, 5000);
     if (p.positionX) { p.positionX.value = v.x; p.positionY.value = v.y; p.positionZ.value = v.z; }
     else p.setPosition(v.x, v.y, v.z);
   }

@@ -2,7 +2,6 @@
 // decelerates for arrival and then holds station; the repair dock can be docked with.
 import * as THREE from 'three';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH } from '../core/astro.js';
-import { ULTRA_MAX, NORMAL_MAX } from './flight.js';
 
 export class Autopilot {
   constructor(game) {
@@ -14,7 +13,7 @@ export class Autopilot {
   }
 
   engage(stationId) {
-    const s = this.g.stations.byId(stationId);
+    const s = stationId === 'h8' && this.g.h8 ? this.g.h8.navTarget() : this.g.stations.byId(stationId);
     if (!s) return false;
     if (this.g.docking && this.g.docking.state !== 'free') { this.g.asphalt && this.g.asphalt.say('st_docked_ap', {}, { force: true }); return false; }
     if (this.g.systems.serversHealth !== undefined && this.g.systems.serversHealth < 0.25) { this.g.asphalt && this.g.asphalt.say('autopilot_fail'); return false; }
@@ -48,14 +47,15 @@ export class Autopilot {
     if (f.landed) { this.disengage(true); return; }
     const s = this.target;
     // keep the target's orbit current with the simulation clock (also while time is accelerated)
-    this.g.stations.posOf(s, tShip, s.pos, s.vel);
+    if (s.posOf) s.posOf(tShip, s.pos, s.vel); else this.g.stations.posOf(s, tShip, s.pos, s.vel);
     const rel = s.pos.clone().sub(f.pos);
     const dist = rel.length();
     this.dist = dist;
     const dir = rel.clone().divideScalar(Math.max(dist, 1e-6));
-    const vmax = Math.min(f.ultra ? ULTRA_MAX : NORMAL_MAX, f.speedLimit);
-    const standoff = s.kind === 'dock' ? 120 : 320;
-    const a = f.ultra ? 2.2 : 0.55;   // braking profile (the ULTRA drive can shed speed much faster)
+    const vmax = Math.min(f.ultra ? f.vUltra : f.vNormal, f.speedLimit);
+    const standoff = s.standoff || (s.kind === 'dock' ? 120 : 320);
+    // braking profile (the ULTRA drive can shed speed much faster; with H8 pushing, faster still)
+    const a = (f.ultra ? 2.2 : 0.55) * Math.min(8, f.mul);
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
     let v, moveDir;
     const rShip = f.pos.length(), rTgt = s.pos.length();

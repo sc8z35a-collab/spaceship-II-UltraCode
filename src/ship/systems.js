@@ -32,7 +32,7 @@ export class ShipSystems {
     for (let i = 0; i < 16; i++) {
       const l = new THREE.PointLight(0xffffff, 0, 7, 1.8);
       l.layers.enableAll();
-      root.add(l);
+      (g.frameRoot || root).add(l);
       this.pool.push({ light: l, lamp: null, f: 0 });
     }
     // alarm beacons (red rotating spots)
@@ -286,7 +286,8 @@ export class ShipSystems {
       const tx = pil ? inp.rx : 0, ty = pil ? inp.ry : 0;
       c.stick.rotation.x += ((-ty * 0.35) - c.stick.rotation.x) * Math.min(1, dt * 12);
       c.stick.rotation.z += ((-tx * 0.35) - c.stick.rotation.z) * Math.min(1, dt * 12);
-      const sp = g.flight.setSpeed / (g.flight.ultra || g.flight.setSpeed > 60 ? 900 : 120);
+      const f = g.flight;
+      const sp = f.setSpeed / (f.ultra || f.setSpeed > f.vNormal ? f.vUltra : f.vNormal * 2);
       c.throttle.rotation.x += ((-0.6 + sp * 1.2 + (pil ? inp.moveY * 0.15 : 0)) - c.throttle.rotation.x) * Math.min(1, dt * 6);
     }
     if (c.ultra) {

@@ -16,7 +16,19 @@ const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vect
 const _q1 = new THREE.Quaternion(), _m = new THREE.Matrix4();
 
 export class Flight {
-  constructor() {
+  /**
+   * spec: { normalMax, ultraMax (m/s), aMax (m/s^2), mass (kg), CdA (m^2), comfortK (how hard
+   * the flight assist may push, x), rampK (speed-command ramps, x) } — B-29's by default.
+   * mul / aExtra / boostDamp / extHealth: what a docked H8 adds (speed multiplier, extra engine
+   * acceleration, its inertial damper, the health of its drive)
+   */
+  constructor(spec = {}) {
+    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1 }, spec);
+    this.mul = 1;
+    this.aExtra = 0;
+    this.boostDamp = false;
+    this.extHealth = 0;
+    this.offsetVel = new THREE.Vector3();   // a short evasive step on top of the command (ECI)
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
     this.hRef = new THREE.Vector3(0, 1, 0);
@@ -52,6 +64,13 @@ export class Flight {
   }
 
   get alt() { return this.pos.length() - R_EARTH; }
+
+  /** speed limits with whatever drive is attached */
+  get vNormal() { return this.spec.normalMax * this.mul; }
+  get vUltra() { return this.spec.ultraMax * this.mul; }
+
+  /** the drive that moves the ship: B-29's engine, or H8 pushing when docked */
+  get driveHealth() { return Math.max(this.engineHealth, this.extHealth); }
 
   /** initialise on a circular orbit at position with prograde direction */
   initOrbit(pos, prograde) {
@@ -107,10 +126,10 @@ export class Flight {
   setUltra(on) {
     if (on === this.ultra) return;
     if (on) {
-      if (this.engineHealth < 0.45) { this.events.push('ultra_denied'); return; }
+      if (this.driveHealth < 0.45) { this.events.push('ultra_denied'); return; }
       this.ultra = true;
       this.ultraAuto = true;                 // spools up to full ULTRA speed unless the pilot takes over
-      this.preUltraSpeed = Math.min(this.setSpeed, NORMAL_MAX);
+      this.preUltraSpeed = Math.min(this.setSpeed, this.vNormal);
       this.ultraDown = null;
       this.events.push('ultra_on');
     } else {
@@ -119,7 +138,7 @@ export class Flight {
       const from = this.setSpeed;
       const to = this.preUltraSpeed;
       const steps = [];
-      const n = Math.max(1, Math.ceil((from - to) / 120));
+      const n = Math.max(1, Math.ceil((from - to) / (120 * this.spec.rampK * this.mul)));
       for (let i = 1; i <= n; i++) steps.push(from + (to - from) * (i / n));
       this.ultraDown = { steps, i: 0, hold: 0 };
       this.events.push('ultra_off');
@@ -151,7 +170,7 @@ export class Flight {
     // --- attitude control (relative to LVLH)
     const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180;
     const rcs = Math.max(0.15, this.rcsHealth);
-    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs;
+    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1);
     const wDes = _v2.set(0, 0, 0);
     if (inp && !this.landed) wDes.set(inp.pitch * maxRate, -inp.yaw * maxRate, -inp.roll * maxRate);
     if (this.autopilot && this.autopilot.wDes) wDes.copy(this.autopilot.wDes);
@@ -170,30 +189,31 @@ export class Flight {
 
     // --- speed command
     if (inp && !this.autopilot) {
-      const rate = this.ultra ? 16 : 4;
+      const rate = (this.ultra ? 16 : 4) * this.mul * this.spec.rampK;
       this.setSpeed += inp.throttle * rate * dt * (Math.abs(this.setSpeed) < 5 ? 0.5 : 1);
       if (Math.abs(inp.throttle) > 0.25) this.ultraAuto = false;
     }
-    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(ULTRA_MAX, this.setSpeed + 14 * dt);
+    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(this.vUltra, this.setSpeed + 14 * this.mul * this.spec.rampK * dt);
     if (this.ultraDown) {
       const u = this.ultraDown;
       const target = u.steps[u.i];
       // each stage: ramp at ~2.5 m/s^2 then hold briefly
-      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 14.0 * dt);
+      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 14.0 * this.mul * this.spec.rampK * dt);
       else { u.hold += dt; if (u.hold > 0.9) { u.i++; u.hold = 0; this.events.push('ultra_stage'); if (u.i >= u.steps.length) this.ultraDown = null; } }
     }
-    this.speedLimit = this.ultra ? ULTRA_MAX : (this.ultraDown ? Math.max(NORMAL_MAX, this.setSpeed) : NORMAL_MAX);
-    this.speedLimit *= Math.max(0.2, this.engineHealth);
+    this.speedLimit = this.ultra ? this.vUltra : (this.ultraDown ? Math.max(this.vNormal, this.setSpeed) : this.vNormal);
+    this.speedLimit *= Math.max(0.2, this.driveHealth);
     this.setSpeed = Math.max(-15, Math.min(this.speedLimit, this.setSpeed));
     this.ultraLevel += ((this.ultra ? 1 : 0) - this.ultraLevel) * Math.min(1, dt * 0.5);
     // the ULTRA drive's inertial damper is on for the whole ULTRA run including the staged
     // slow-down, and comes up before the burn does (ramp 1.5/s vs. the 6 m/s^2 speed ramp)
-    this.damp += (((this.ultra || this.ultraDown || (this.autopilot && this.autopilot.fast)) ? 1 : 0) - this.damp) * Math.min(1, dt * 1.5);
+    this.damp += (((this.ultra || this.ultraDown || this.boostDamp || (this.autopilot && this.autopilot.fast)) ? 1 : 0) - this.damp) * Math.min(1, dt * 1.5);
 
     // --- desired velocity
     const vRef = this.refVelocity(pos, new THREE.Vector3());
     let vDes = vRef.clone().addScaledVector(fwd, this.setSpeed);
     if (this.autopilot && this.autopilot.vRel) vDes = vRef.clone().add(this.autopilot.vRel);
+    if (this.offsetVel.lengthSq() > 1e-6) vDes.add(this.offsetVel);
     // feed-forward: the curvature of a constant-altitude path at our horizontal speed
     // (equals gravity at orbital speed: no thrust needed; hovering in air: full support)
     const g = this.gravity(pos, new THREE.Vector3());
@@ -204,8 +224,8 @@ export class Flight {
     const vAir = _v3.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
     const vRelAir = vel.clone().sub(vAir);
     const sp = vRelAir.length();
-    const CdA = 0.9 * 30; // m^2 (broadside-ish average)
-    const drag = rho > 0 ? vRelAir.clone().multiplyScalar(-0.5 * rho * sp * CdA / SHIP_MASS) : new THREE.Vector3();
+    const CdA = this.spec.CdA; // m^2 (broadside-ish average)
+    const drag = rho > 0 ? vRelAir.clone().multiplyScalar(-0.5 * rho * sp * CdA / this.spec.mass) : new THREE.Vector3();
     this.dragAcc.copy(drag);
     this.dynPressure = 0.5 * rho * sp * sp;
     this.mach = sp / 300;
@@ -215,13 +235,13 @@ export class Flight {
     const T = this.hullTemp;
     this.hullTemp = Math.max(150, Math.min(4000, T + (this.heatFlux * 0.85 - 0.8 * 5.67e-8 * (T ** 4 - 250 ** 4)) / 4000 * dt));
     // --- thrust
-    const aMaxEngine = 15 * Math.max(0, this.engineHealth);
+    const aMaxEngine = this.spec.aMax * Math.max(0, this.engineHealth) + this.aExtra;
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     // stays stable for coarse (catch-up) steps too; tighter during a docking manoeuvre
     const tau = Math.max(this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
     const fast = this.autopilot && this.autopilot.fast;   // station docking manoeuvre
-    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.engineHealth);
+    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.driveHealth) * (this.mul > 1 ? Math.min(6, this.mul) : 1) * this.spec.comfortK;
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
     // altitude (radial) errors are corrected first, the rest of the budget goes to the

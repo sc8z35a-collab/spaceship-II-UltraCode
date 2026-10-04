@@ -67,7 +67,8 @@ export class Asteroids {
 
   /** spawn a rock that will pass at 'miss' metres from the ship centre (0 = direct hit) */
   spawn({ radius = 0.6, speed = 60, miss = 0, dist = 6000, from = null } = {}) {
-    const g = this.g, f = g.flight;
+    // aimed at the vessel Kaito is in (B-29, or H8 while he flies it alone)
+    const g = this.g, f = g.h8 && g.h8.solo ? g.h8.flight : g.flight;
     const seed = Math.floor(Math.random() * 1e9);
     const geo = rockGeometry(seed, 1);
     const mesh = new THREE.Mesh(geo, this.mat);
@@ -128,13 +129,13 @@ export class Asteroids {
   schedule(dt) {
     if (!this.enabled) return;
     const g = this.g;
-    const f = g.flight;
+    const f = g.h8 && g.h8.solo ? g.h8.flight : g.flight;
     if (f.landed || f.alt < 120000) return;
     this.timer -= dt;
     this.microTimer -= dt;
     if (this.microTimer <= 0) {
       this.microTimer = 25 * 60 + Math.random() * 40 * 60;
-      this.micro();
+      if (!(g.h8 && g.h8.solo)) this.micro();
     }
     if (this.timer <= 0) {
       this.timer = 40 * 60 + Math.random() * 60 * 60;
@@ -156,6 +157,7 @@ export class Asteroids {
       // previous position relative to the ship as it was then (the ship itself moved ~400 m
       // along its orbit this frame; sweeping from rock(old) - ship(new) would cast along the orbit)
       const prevRel = a.rel ? a.rel.clone() : a.pos.clone().sub(f.pos);
+      const prevPos = a.pos.clone();
       // rocks fall around the Earth like the ship does (same second-order step as the flight model,
       // otherwise the two drift metres apart during an approach)
       const r = a.pos.length();
@@ -165,16 +167,17 @@ export class Asteroids {
       const rel = a.pos.clone().sub(f.pos);
       a.rel = rel.clone();
       a.q.multiply(new THREE.Quaternion().setFromAxisAngle(a.spin.clone().normalize(), a.spin.length() * dt));
-      a.mesh.matrix.compose(rel, a.q, new THREE.Vector3(a.radius, a.radius, a.radius));
-      a.mesh.matrixWorld.copy(a.mesh.matrix);
-      const d = rel.distanceTo(g.camWorld);
-      assignLayers(a.mesh, Math.max(0, d - a.radius * 1.5), d + a.radius * 1.5);
       a.dist = rel.length();
+      // H8 (wherever it is) can be struck too
+      if (g.h8 && g.h8.mode !== 'parked' && g.h8.rockCheck(a, prevPos, dt)) continue;
       // warnings
       const relVel = a.vel.clone().sub(f.vel);
       const closing = -rel.dot(relVel) / Math.max(a.dist, 1);
       a.closing = closing;
-      if (!a.warned && a.dist < 3500 && closing > 0) {
+      if (g.h8 && g.h8.solo) {
+        // Kaito is away in H8: HACHI watches the rocks round H8
+        if (!a.warned) { const hr = a.pos.clone().sub(g.h8.flight.pos); if (hr.length() < 3500 && -hr.dot(a.vel.clone().sub(g.h8.flight.vel)) > 0) { a.warned = true; g.h8.rockWarning(a); } }
+      } else if (!a.warned && a.dist < 3500 && closing > 0) {
         a.warned = true;
         g.systems.onAsteroidWarning(a, rel.clone().applyQuaternion(invQ));
       }
@@ -215,5 +218,18 @@ export class Asteroids {
       if (a.hit || a.dead) { if (a.mesh.parent) a.mesh.parent.remove(a.mesh); a.mesh.geometry.dispose(); return false; }
       return true;
     });
+  }
+
+  /** per render frame: place the rocks relative to the render origin */
+  updateVisual(origin, camWorld) {
+    const s = new THREE.Vector3();
+    for (const a of this.list) {
+      const rel = a.pos.clone().sub(origin);
+      s.setScalar(a.radius);
+      a.mesh.matrix.compose(rel, a.q, s);
+      a.mesh.matrixWorld.copy(a.mesh.matrix);
+      const d = rel.distanceTo(camWorld);
+      assignLayers(a.mesh, Math.max(0, d - a.radius * 1.5), d + a.radius * 1.5);
+    }
   }
 }

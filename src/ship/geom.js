@@ -30,10 +30,11 @@ export function fixNormals(g) {
   return g;
 }
 
-/** normalise attributes so geometries can be merged (position, normal, uv only) */
+/** normalise attributes so geometries can be merged (position, normal, uv; vertex colours are
+ * kept when present — geometries sharing a material key must then all carry them) */
 export function clean(g) {
   if (g.index) g = g.toNonIndexed();
-  for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv'].includes(k)) g.deleteAttribute(k);
+  for (const k of Object.keys(g.attributes)) if (!['position', 'normal', 'uv', 'color'].includes(k)) g.deleteAttribute(k);
   if (!g.attributes.normal) g.computeVertexNormals();
   fixNormals(g);
   if (!g.attributes.uv) g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
@@ -51,6 +52,12 @@ export class Builder {
 
   push(pos = [0, 0, 0], rot = [0, 0, 0], scl = [1, 1, 1]) {
     this.stack.push(this.top.clone().multiply(mat4(pos, rot, scl)));
+    return this;
+  }
+
+  /** push an arbitrary local transform (Matrix4) */
+  pushM(m) {
+    this.stack.push(this.top.clone().multiply(m));
     return this;
   }
 
