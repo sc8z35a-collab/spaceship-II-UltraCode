@@ -13,6 +13,7 @@ import { loft, roundPolygon } from '../ship/sweep.js';
 import { LAYER_NEAR } from '../core/layers.js';
 import { buildPromenade, PROM_DOOR } from './stationPromenade.js';
 import { StationDoor } from './stationDoors.js';
+import { buildCoreAtrium, BRIDGE } from './stationAtrium.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
@@ -400,13 +401,17 @@ export function buildLobby(renderer, def) {
   const lamp = (x, y, z, color, intensity, range = 9) => lamps.push({ pos: V(x, y, z), color, intensity, range, room: 'station' });
 
   // ---- windows (angles from the +x axis toward +y, z ranges)
-  const WIN_R = { th: [-6 * D2R, 28 * D2R], z: [[-10.9, -6.9], [-6.3, -2.3], [-1.7, 2.3], [2.9, 6.9]] };       // toward the station core
+  // Shirasagi: the skybridge to the core leaves through the starboard wall where a window was
+  const sky = def.id === 'shirasagi';
+  const WIN_R = { th: [-6 * D2R, 28 * D2R], z: sky ? [[-10.9, -6.9], [-6.3, -2.3], [2.9, 6.9]] : [[-10.9, -6.9], [-6.3, -2.3], [-1.7, 2.3], [2.9, 6.9]] };       // toward the station core
+  const thBridge = Math.asin((BRIDGE.h + 0.25 + 0.06 - yc) / RR);
+  const bridgeHole = (th, z) => sky && th < thBridge && th < Math.PI / 2 && Math.abs(z - BRIDGE.zc) < BRIDGE.hw + 0.05;
   const WIN_SKY = { th: [76 * D2R, 104 * D2R], z: [[-10.4, -6.8], [-4.4, -0.4], [2.0, 5.6]] };              // skylights
   const WIN_L = { th: [151 * D2R, 171 * D2R], z: [[-10.8, -6.2], [3.0, 7.0]] };                             // toward the ship
   const WIN_B = { th: [253 * D2R, 287 * D2R], z: [[-6.9, -2.3]] };                                          // under the glass floor
   const inWin = (W, th, z) => th > W.th[0] && th < W.th[1] && W.z.some(([a, c]) => z > a && z < c);
   const tunnelHole = (th, z) => z > TUNNEL.zc - TUNNEL.hv - 0.05 && z < TUNNEL.zc + TUNNEL.hv + 0.05 && th > 175 * D2R && th < thL + 0.01;
-  const skipUpper = (th, z) => inWin(WIN_R, th, z) || inWin(WIN_SKY, th, z) || inWin(WIN_L, th, z) || tunnelHole(th, z);
+  const skipUpper = (th, z) => inWin(WIN_R, th, z) || inWin(WIN_SKY, th, z) || inWin(WIN_L, th, z) || tunnelHole(th, z) || bridgeHole(th, z);
 
   // ---- shell: upper (cabin) + lower (under the floor)
   b.add(shellGrid(TH_FLOOR, thL, 150, z0, z1, 100, RR, skipUpper), 'cream');
@@ -433,16 +438,17 @@ export function buildLobby(renderer, def) {
   }
   // wainscot (wood) up to 1.4 m on both sides, gold rail on top, dark marble skirting
   const thW = Math.asin((1.4 - yc) / RR);
-  b.add(shellGrid(TH_FLOOR, thW, 8, z0, z1, 60, RR - 0.025), 'wood');
+  b.add(shellGrid(TH_FLOOR, thW, 8, z0, z1, 60, RR - 0.025, bridgeHole), 'wood');
   b.add(shellGrid(Math.PI - thW, thL, 8, z0, z1, 60, RR - 0.025, tunnelHole), 'wood');
   for (const th of [thW, Math.PI - thW]) {
     if (th > Math.PI / 2) { shellRail(b, th, z0 + 0.1, TUNNEL.zc - TUNNEL.hv - 0.25, 0.022, 'gold'); shellRail(b, th, TUNNEL.zc + TUNNEL.hv + 0.25, z1 - 0.1, 0.022, 'gold'); }
+    else if (sky) { shellRail(b, th, z0 + 0.1, BRIDGE.zc - BRIDGE.hw - 0.2, 0.022, 'gold'); shellRail(b, th, BRIDGE.zc + BRIDGE.hw + 0.2, z1 - 0.1, 0.022, 'gold'); }
     else shellRail(b, th, z0 + 0.1, z1 - 0.1, 0.022, 'gold');
   }
   // handrails for zero-g (brass, on stand-offs) at 1.1 m
   const thH = Math.asin((1.1 - yc) / RR);
   for (const th of [thH, Math.PI - thH]) {
-    const segs = th > Math.PI / 2 ? [[z0 + 0.6, TUNNEL.zc - TUNNEL.hv - 0.4], [TUNNEL.zc + TUNNEL.hv + 0.4, z1 - 0.6]] : [[z0 + 0.6, z1 - 0.6]];
+    const segs = th > Math.PI / 2 ? [[z0 + 0.6, TUNNEL.zc - TUNNEL.hv - 0.4], [TUNNEL.zc + TUNNEL.hv + 0.4, z1 - 0.6]] : sky ? [[z0 + 0.6, BRIDGE.zc - BRIDGE.hw - 0.4], [BRIDGE.zc + BRIDGE.hw + 0.4, z1 - 0.6]] : [[z0 + 0.6, z1 - 0.6]];
     for (const [a, c] of segs) {
       shellRail(b, th, a, c, 0.018, 'brass', 0.12);
       for (let z = a; z <= c + 0.01; z += 1.5) b.pipe(shellP(th, z, RR - 0.03), shellP(th, z, RR - 0.12), 0.012, 'brass', 8);
@@ -734,6 +740,7 @@ export function buildLobby(renderer, def) {
     for (let i = 0; i < a.length; i += 9) {
       const cx = (a[i] + a[i + 3] + a[i + 6]) / 3, cy = (a[i + 1] + a[i + 4] + a[i + 7]) / 3, cz = (a[i + 2] + a[i + 5] + a[i + 8]) / 3;
       if (cx < xc - 4 && cy < 2.9 && cy > -0.2 && Math.abs(cz - TUNNEL.zc) < 1.4) continue;
+      if (sky && cx > xc + 4 && cy < 3.2 && cy > -0.2 && Math.abs(cz - BRIDGE.zc) < BRIDGE.hw + 0.3) continue;
       for (let k = 0; k < 9; k++) out.push(a[i + k]);
     }
     cut.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
@@ -746,8 +753,15 @@ export function buildLobby(renderer, def) {
       b.colBox(dw * 2, yc + RR - (floorY + dh), 0.12, [px, (floorY + dh + yc + RR) / 2, z1 + 0.05]);
     }
   }
-  // ---- the promenade wing behind the portal
+  // ---- the promenade wing behind the portal; at Shirasagi also the skybridge and core atrium
   const prom = buildPromenade(b, M, lamp, R, def);
+  const core = sky ? buildCoreAtrium(b, M, lamp, R, def) : null;
+  if (sky) {
+    // a gold-framed mouth where the bridge leaves the lobby
+    const xw = xc + Math.sqrt(RR * RR - (1.6 - yc) * (1.6 - yc));
+    for (const s2 of [-1, 1]) b.box(0.4, BRIDGE.h + 0.1, 0.1, 'gold', [xw - 0.15, floorY + BRIDGE.h / 2, BRIDGE.zc + s2 * (BRIDGE.hw + 0.05)], null, 0.02);
+    b.box(0.4, 0.1, BRIDGE.hw * 2 + 0.2, 'gold', [xw - 0.2, floorY + BRIDGE.h + 0.05, BRIDGE.zc], null, 0.02);
+  }
 
   const group = b.build(M, { castShadow: false, receiveShadow: false });
   group.traverse((o) => { o.layers.set(LAYER_NEAR); });
@@ -766,6 +780,7 @@ export function buildLobby(renderer, def) {
   const contains = (p) => {
     if (p.x > 2.9 && p.x < TUNNEL.xEnd + 0.3 && Math.abs(p.z - TUNNEL.zc) < TUNNEL.hv + 0.05 && p.y > floorY - 0.3 && p.y < TUNNEL.yc + TUNNEL.hu + 0.05) return true;
     if (prom.contains(p)) return true;
+    if (core && core.contains(p)) return true;
     const dx = p.x - xc, dy = p.y - yc;
     return dx * dx + dy * dy < (RR - 0.05) * (RR - 0.05) && p.z > z0 && p.z < z1 && p.y > floorY - 0.4;
   };
