@@ -220,7 +220,7 @@ export function buildInteriorShell(M) {
     // shape is in (z,y); map to world: x = const, shape.x -> z, shape.y -> y
     g.applyMatrix4(new THREE.Matrix4().makeRotationY(-Math.PI / 2)); // shape x -> world z, extrusion -> -x
     g.translate(x + 0.035, 0, 0);
-    b.add(g, 'panel');
+    b.add(g, 'bulk');
     b.colMesh(g);
   }
   // side cross walls (z planes, from corridor wall to hull)
@@ -232,11 +232,18 @@ export function buildInteriorShell(M) {
 
   // ---------- chunky rounded door / alcove frames with LED lines ----------
   // (walls are thick: every opening gets a deep lined reveal with the frames on its two ends)
-  for (const d of Object.values(DOORS)) doorFrame(b, Object.assign({ reveal: 0.1 }, d), 0.1, d.hatch ? 'hullOrange' : 'frame', d.hatch ? 'ledAmber' : 'ledStrip');
-  for (const a of ALCOVES) doorFrame(b, { axis: 'x', at: a.side * CORRIDOR_X, c: a.c, w: a.w, h: a.h, y0: a.y0, r: a.r, reveal: 0.1 }, 0.1, 'frame', 'ledStrip');
+  // (walls are thick: every door is set in a heavy bolted surround, 32-38 cm through)
+  for (const d of Object.values(DOORS)) {
+    const bulk = d.axis === 'z';
+    doorFrame(b, Object.assign({ reveal: bulk ? 0.19 : 0.16, heavy: true, collar: bulk ? 0.24 : 0.17, wallHalf: bulk ? 0.08 : 0.035 }, d), bulk ? 0.19 : 0.16, d.hatch ? 'hullOrange' : 'frameHeavy', d.hatch ? 'ledAmber' : 'ledStrip');
+  }
+  for (const a of ALCOVES) doorFrame(b, { axis: 'x', at: a.side * CORRIDOR_X, c: a.c, w: a.w, h: a.h, y0: a.y0, r: a.r, reveal: 0.12, heavy: true }, 0.12, 'frameHeavy', 'ledStrip');
+
+  doorSigns(b, M);
 
   // ---------- corridor vault, ribs, coves, padding; fillets in every room ----------
   const corr = buildCorridor(b, { doors: DOORS, alcoves: ALCOVES });
+  floorEdges(b);
   buildRoomCoves(b, INSET);
   return { builder: b, lampsCorridor: corr.lamps };
 }
@@ -247,7 +254,7 @@ function partitionZ(b, z, doors, M) {
   for (const d of doors) sh.holes.push(doorPath(d.c, d.w, d.h));
   const g = new THREE.ExtrudeGeometry(sh, { depth: 0.16, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 8 });
   g.translate(0, 0, z - 0.08);
-  b.add(g, 'panel');
+  b.add(g, 'bulk');
   b.colMesh(g);
 }
 
@@ -268,6 +275,95 @@ function crossWall(b, z, side) {
   const sh = shapeFromPts(poly);
   const g = new THREE.ExtrudeGeometry(sh, { depth: 0.14, bevelEnabled: false, curveSegments: 4 });
   g.translate(0, 0, z - 0.07);
-  b.add(g, 'panel');
+  b.add(g, 'bulk');
   b.colMesh(g);
+}
+
+// ---------- room name plates on the door lintels (one texture atlas, softly lit) ----------
+const SIGNS = [
+  { door: 'cockpit', jp: 'コックピット', en: 'FLIGHT DECK  FD-01', col: '#5fd0ff' },
+  { door: 'living', jp: 'リビング', en: 'CREW LOUNGE  L-01', col: '#ffb347' },
+  { door: 'store', jp: '倉庫', en: 'STORES  S-01', col: '#c8c8c8' },
+  { door: 'bath', jp: 'バスルーム', en: 'HYGIENE  H-01', col: '#7fd6c2' },
+  { door: 'airlock', jp: 'エアロック', en: 'AIRLOCK  A-01', col: '#ff8a1e' },
+  { door: 'ls', jp: '生命維持室', en: 'LIFE SUPPORT  LS-01', col: '#5fe08f' },
+  { door: 'eng', jp: '機関室', en: 'ENGINEERING  E-01', col: '#ff4d3d' },
+  { alcove: 1, jp: '昇降機・配管層', en: 'LIFT  ▼ UNDERDECK', col: '#ffd34a' },
+  { alcove: 0, jp: '寝台', en: 'BUNK  B-01', col: '#b48cff' },
+];
+
+function signAtlas() {
+  const W = 768, RH = 128, c = document.createElement('canvas');
+  c.width = W; c.height = RH * 16;
+  const g = c.getContext('2d');
+  g.fillStyle = '#05070a'; g.fillRect(0, 0, W, c.height);
+  SIGNS.forEach((sg, i) => {
+    const y = i * RH;
+    g.fillStyle = '#0c1117'; g.fillRect(4, y + 4, W - 8, RH - 8);
+    g.strokeStyle = 'rgba(200,215,230,0.35)'; g.lineWidth = 3; g.strokeRect(8, y + 8, W - 16, RH - 16);
+    g.fillStyle = sg.col; g.fillRect(16, y + 16, 22, RH - 32);
+    g.fillStyle = '#eef4fa'; g.textBaseline = 'middle';
+    g.font = '700 62px "Hiragino Sans", "Noto Sans JP", "Yu Gothic", sans-serif';
+    g.fillText(sg.jp, 58, y + RH * 0.5);
+    g.fillStyle = 'rgba(200,214,228,0.75)'; g.textAlign = 'right';
+    g.font = '600 26px "Helvetica Neue", Arial, sans-serif';
+    g.fillText(sg.en, W - 26, y + RH * 0.72);
+    g.textAlign = 'left';
+  });
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+function doorSigns(b, M) {
+  const tex = signAtlas();
+  M.signs = new THREE.MeshStandardMaterial({ map: tex, emissive: new THREE.Color(1, 1, 1), emissiveMap: tex, emissiveIntensity: 0.6, roughness: 0.35, metalness: 0.1 });
+  const SW = 0.45, SH = 0.075;
+  SIGNS.forEach((sg, i) => {
+    let pos, rotY;
+    if (sg.door) {
+      const d = DOORS[sg.door];
+      const bulk = d.axis === 'z';
+      const front = (bulk ? 0.19 : 0.16) + 0.07 + 0.009;
+      const y = DECK_Y + d.h + 0.062;
+      if (bulk) { const s = d.at < 0 ? 1 : -1; pos = [d.c, y, d.at + s * front]; rotY = s > 0 ? 0 : Math.PI; }
+      else { const s = -Math.sign(d.at); pos = [d.at + s * front, y, d.c]; rotY = s * Math.PI / 2; }
+    } else {
+      const a = ALCOVES[sg.alcove];
+      const front = 0.12 + 0.07 + 0.009, s = -a.side;
+      pos = [a.side * CORRIDOR_X + s * front, a.y0 + a.h + 0.062, a.c]; rotY = s * Math.PI / 2;
+    }
+    const g = new THREE.PlaneGeometry(SW, SH);
+    const uv = g.attributes.uv;
+    const v0 = 1 - (i + 1) / 16, v1 = 1 - i / 16;
+    for (let k = 0; k < uv.count; k++) uv.setY(k, v0 + uv.getY(k) * (v1 - v0));
+    b.add(g, 'signs', pos, [0, rotY, 0]);
+    // dark bezel behind the plate
+    const back = new THREE.Vector3(0, 0, -0.007).applyEuler(new THREE.Euler(0, rotY, 0));
+    b.box(SW + 0.03, SH + 0.026, 0.012, 'frameHeavy', [pos[0] + back.x, pos[1], pos[2] + back.z], [0, rotY, 0], 0.004);
+  });
+}
+
+/** yellow-and-black hazard edging on the corridor floor along the wall coves */
+function floorEdges(b) {
+  const op = { 1: [], [-1]: [] };
+  for (const d of Object.values(DOORS)) if (d.axis === 'x') op[Math.sign(d.at)].push([d.c - d.w / 2 - 0.06, d.c + d.w / 2 + 0.06]);
+  for (const a of ALCOVES) op[a.side].push([a.c - a.w / 2 - 0.06, a.c + a.w / 2 + 0.06]);
+  const z0 = Z_COCKPIT_BULK + 0.3, z1 = Z_ENG_BULK - 0.3;
+  for (const side of [1, -1]) {
+    const list = op[side].sort((p, q) => p[0] - q[0]);
+    let cur = z0;
+    const runs = [];
+    for (const [a, c] of list) { if (a > cur) runs.push([cur, Math.min(a, z1)]); cur = Math.max(cur, c); }
+    if (cur < z1) runs.push([cur, z1]);
+    for (const [a, c] of runs) {
+      const len = c - a;
+      if (len < 0.2) continue;
+      const g = new THREE.PlaneGeometry(0.032, len);
+      const uv = g.attributes.uv;
+      for (let k = 0; k < uv.count; k++) uv.setY(k, uv.getY(k) * len / 0.1);
+      b.add(g, 'hazard', [side * 0.548, DECK_Y + 0.0015, (a + c) / 2], [-Math.PI / 2, 0, 0]);
+    }
+  }
 }

@@ -231,7 +231,7 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false }, opts);
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
@@ -309,6 +309,19 @@ export function patchShipMaterial(mat, opts = {}) {
             diffuseColor.rgb *= 0.5 + D.g;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.08, 0.085, 0.09), (1.0 - D.a) * 0.6);
             _detailRough = (D.b - 0.5) * 0.55;
+          }` : ''}
+          ${o.wainscot ? `
+          {
+            // two-tone lining on the main deck: a dark gunmetal dado below the handrail line with
+            // a recessed amber pinstripe along its top edge
+            float wy = vShipPos.y;
+            float onDeck = step(0.0, wy) * (1.0 - step(9.62, vShipPos.z));
+            float low = 1.0 - smoothstep(0.893, 0.899, wy);
+            diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.29, 0.315, 0.35), low * onDeck);
+            float stripe = smoothstep(0.903, 0.906, wy) * (1.0 - smoothstep(0.925, 0.928, wy));
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.62, 0.27, 0.05), stripe * onDeck);
+            _bumpH -= (smoothstep(0.896, 0.901, wy) - smoothstep(0.93, 0.935, wy)) * 0.0018 * onDeck;
+            _detailRough -= 0.1 * low * onDeck;
           }` : ''}
           ${o.belly ? `
           {
@@ -416,8 +429,14 @@ export function createMaterials() {
   M.nozzle = patchShipMaterial(std(0x55504a, 0.4, 0.95, { emissive: new THREE.Color(1.0, 0.35, 0.1), emissiveIntensity: 0.0 }), { wear: 0.9, grime: 0.6, heat: true });
   M.solar = std(0x1a2a55, 0.25, 0.6);
   // ---- interior ----
-  M.wall = patchShipMaterial(std(0xbfc3c4, 0.66, 0.08), { dentable: true, openings: true, wear: 0.5, grime: 0.35, detail: 'panel' });
-  M.wallPad = patchShipMaterial(std(0xa3a7ab, 0.88, 0.0), { dentable: true, openings: true, wear: 0.3, grime: 0.25, triScale: 2.0, detail: 'pad', detailDepth: 0.006 });
+  M.wall = patchShipMaterial(std(0xb4b9bc, 0.62, 0.12), { dentable: true, openings: true, wear: 0.55, grime: 0.4, detail: 'panel', detailDepth: 0.005, wainscot: true });
+  // bulkheads and corridor walls: the same armoured lining (kept apart from 'panel', which the
+  // furniture and consoles use)
+  M.bulk = patchShipMaterial(std(0xa4a9ae, 0.56, 0.22), { wear: 0.6, grime: 0.38, detail: 'panel', detailDepth: 0.005, wainscot: true });
+  // heavy structure: dark gunmetal frames, kick plates and hatch collars
+  M.armor = patchShipMaterial(std(0x3e434a, 0.44, 0.62), { wear: 0.85, grime: 0.42, detail: 'panel', detailDepth: 0.004 });
+  M.frameHeavy = patchShipMaterial(std(0x30343a, 0.38, 0.78), { dentable: true, wear: 0.9, grime: 0.35 });
+  M.wallPad = patchShipMaterial(std(0x6f7a87, 0.78, 0.0), { dentable: true, openings: true, wear: 0.3, grime: 0.22, triScale: 2.0, detail: 'pad', detailDepth: 0.007 });
   M.panel = patchShipMaterial(std(0xadb1b4, 0.56, 0.18), { wear: 0.6, grime: 0.3, detail: 'panel' });
   M.panelDark = patchShipMaterial(std(0x5a5f66, 0.52, 0.32), { wear: 0.5, grime: 0.25, detail: 'panel', detailDepth: 0.003 });
   M.vault = patchShipMaterial(std(0xadb1b4, 0.56, 0.18), { wear: 0.6, grime: 0.3, breaches: true, detail: 'panel' });   // corridor vault: torn open by breaches above it

@@ -68,113 +68,179 @@ function fakeText(g, R, x, y, w, lines, size) {
   }
 }
 
+/** chamfered-corner rectangle path (octagonal corners) */
+function chamf(g, x, y, w, h, c) {
+  g.beginPath();
+  g.moveTo(x + c, y); g.lineTo(x + w - c, y); g.lineTo(x + w, y + c); g.lineTo(x + w, y + h - c);
+  g.lineTo(x + w - c, y + h); g.lineTo(x + c, y + h); g.lineTo(x, y + h - c); g.lineTo(x, y + c);
+  g.closePath();
+}
+
+/** raised plate with a stepped chamfer: f(level) fills the shape inset by `level` pixels */
+function bevelled(H, levels, from, to, shape) {
+  for (let b = 0; b < levels; b++) { H.fillStyle = grey(from + (to - from) * (b + 1) / levels); shape(b); H.fill(); }
+}
+
+function hexBolt(H, A, Rg, cx, cy, r) {
+  H.fillStyle = grey(96); H.beginPath(); H.arc(cx, cy, r * 1.35, 0, Math.PI * 2); H.fill();     // washer seat
+  H.fillStyle = grey(176); H.beginPath(); H.arc(cx, cy, r * 1.2, 0, Math.PI * 2); H.fill();
+  H.fillStyle = grey(222); H.beginPath(); for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + 0.3; H.lineTo(cx + Math.cos(a) * r, cy + Math.sin(a) * r); } H.closePath(); H.fill();
+  A.fillStyle = grey(150); A.beginPath(); A.arc(cx, cy, r * 1.2, 0, Math.PI * 2); A.fill();
+  Rg.fillStyle = grey(70); Rg.beginPath(); Rg.arc(cx, cy, r * 1.2, 0, Math.PI * 2); Rg.fill();
+}
+
+function rivet(H, A, cx, cy, r) {
+  const gr = H.createRadialGradient(cx - r * 0.3, cy - r * 0.3, 0, cx, cy, r);
+  gr.addColorStop(0, grey(225)); gr.addColorStop(1, grey(150));
+  H.fillStyle = gr; H.beginPath(); H.arc(cx, cy, r, 0, Math.PI * 2); H.fill();
+  A.fillStyle = grey(146); A.beginPath(); A.arc(cx, cy, r, 0, Math.PI * 2); A.fill();
+}
+
 function makePanel() {
-  const R = rng(1201);
+  // heavy armoured lining: staggered 0.6 m plates with deep chamfered seams, rivet rows along
+  // every edge, bolted reinforcement plates, ribbed plates, access hatches and vents, brushed grain
+  const R = rng(1207);
   const H = layer(), A = layer(), Rg = layer(), I = layer();
   I.fillStyle = grey(0); I.fillRect(0, 0, S, S);
   const px = S / DETAIL_TILE.panel;                       // pixels per metre
-  const seam = 0.006 * px;
-  // panel layout (metres): three bands, different splits
-  const rows = [[0, 0.4, [0, 0.6, 1.2]], [0.4, 0.8, [0, 0.4, 0.8, 1.2]], [0.8, 1.2, [0, 1.2]]];
-  H.fillStyle = grey(52); H.fillRect(0, 0, S, S);         // the seams are recessed
-  Rg.fillStyle = grey(175); Rg.fillRect(0, 0, S, S);
-  A.fillStyle = grey(96); A.fillRect(0, 0, S, S);
-  let n = 0;
-  for (const [y0, y1, xs] of rows) for (let k = 0; k < xs.length - 1; k++) {
-    const x = xs[k] * px + seam / 2, y = y0 * px + seam / 2, w = (xs[k + 1] - xs[k]) * px - seam, h = (y1 - y0) * px - seam;
-    const r = 0.018 * px;
-    // face with a soft bevel toward the edges
-    for (let b = 0; b < 6; b++) { H.fillStyle = grey(118 + b * 5); rr(H, x + b, y + b, w - 2 * b, h - 2 * b, Math.max(2, r - b)); H.fill(); }
-    H.fillStyle = grey(150); rr(H, x + 6, y + 6, w - 12, h - 12, Math.max(2, r - 6)); H.fill();
-    const tint = 126 + (R() - 0.5) * 16;
-    A.fillStyle = grey(tint); rr(A, x, y, w, h, r); A.fill();
-    Rg.fillStyle = grey(118 + (R() - 0.5) * 20); rr(Rg, x, y, w, h, r); Rg.fill();
-    // screws in the corners
-    const sc = 0.022 * px;
-    for (const [cx, cy] of [[x + sc, y + sc], [x + w - sc, y + sc], [x + sc, y + h - sc], [x + w - sc, y + h - sc]]) {
-      H.fillStyle = grey(110); H.beginPath(); H.arc(cx, cy, 8.5, 0, Math.PI * 2); H.fill();
-      H.fillStyle = grey(178); H.beginPath(); H.arc(cx, cy, 6.5, 0, Math.PI * 2); H.fill();
-      H.strokeStyle = grey(120); H.lineWidth = 1.6; const a = R() * Math.PI;
-      H.beginPath(); H.moveTo(cx - Math.cos(a) * 5, cy - Math.sin(a) * 5); H.lineTo(cx + Math.cos(a) * 5, cy + Math.sin(a) * 5); H.stroke();
-      Rg.fillStyle = grey(70); Rg.beginPath(); Rg.arc(cx, cy, 7, 0, Math.PI * 2); Rg.fill();
-      A.fillStyle = grey(150); A.beginPath(); A.arc(cx, cy, 6.5, 0, Math.PI * 2); A.fill();
-    }
-    n++;
-    // detail per panel
-    if (n === 4) {
-      // vent grille: rows of rounded slots
-      const gx = x + w * 0.2, gy = y + h * 0.28, gw = w * 0.6, gh = h * 0.44;
-      H.fillStyle = grey(132); rr(H, gx - 6, gy - 6, gw + 12, gh + 12, 8); H.fill();
-      for (let s = 0; s < 8; s++) { H.fillStyle = grey(40); rr(H, gx, gy + s * gh / 8, gw, gh / 8 * 0.5, 3); H.fill(); A.fillStyle = grey(70); rr(A, gx, gy + s * gh / 8, gw, gh / 8 * 0.5, 3); A.fill(); }
-    } else if (n === 6) {
-      // wide panel: two embossed ribs and a label plate
-      for (const f of [0.3, 0.7]) { H.fillStyle = grey(168); H.fillRect(x + 30, y + h * f - 3, w - 60, 6); }
-      I.fillStyle = grey(255);
-      I.lineWidth = 3; I.strokeStyle = grey(255); I.strokeRect(x + w * 0.07, y + h * 0.4, w * 0.22, h * 0.2);
-      fakeText(I, R, x + w * 0.08, y + h * 0.43, w * 0.2, 3, 7);
-      I.fillRect(x + w * 0.75, y + h * 0.44, w * 0.14, 12);
-    } else if (n === 1 || n === 5) {
-      // access port: recessed circle with a quarter-turn fastener
-      const cx = x + w * 0.5, cy = y + h * 0.55;
-      H.fillStyle = grey(92); H.beginPath(); H.arc(cx, cy, 34, 0, Math.PI * 2); H.fill();
-      H.fillStyle = grey(140); H.beginPath(); H.arc(cx, cy, 28, 0, Math.PI * 2); H.fill();
-      H.fillStyle = grey(110); H.fillRect(cx - 14, cy - 3, 28, 6);
-      I.fillStyle = grey(255); fakeText(I, R, x + w * 0.12, y + h * 0.16, w * 0.4, 1, 8);
-    } else if (n === 3) {
-      I.fillStyle = grey(255);
-      // hazard chevrons strip
-      for (let c = 0; c < 6; c++) { I.beginPath(); const bx = x + w * 0.15 + c * 22; I.moveTo(bx, y + h - 40); I.lineTo(bx + 10, y + h - 40); I.lineTo(bx + 22, y + h - 28); I.lineTo(bx + 12, y + h - 28); I.closePath(); I.fill(); }
-      fakeText(I, R, x + w * 0.15, y + h * 0.2, w * 0.6, 2, 9);
-    }
+  const seam = 0.016 * px;                                // groove width
+  H.fillStyle = grey(34); H.fillRect(0, 0, S, S);         // deep grooves everywhere between plates
+  Rg.fillStyle = grey(196); Rg.fillRect(0, 0, S, S);
+  A.fillStyle = grey(66); A.fillRect(0, 0, S, S);         // grime in the seams
+  // brickwork of plates: lower rows aligned, upper rows offset half a plate
+  const plates = [];
+  for (let row = 0; row < 2; row++) for (let col = -1; col < 2; col++) {
+    const off = row ? 0.3 : 0;
+    plates.push({ x: (col * 0.6 + off) * px, y: row * 0.6 * px, w: 0.6 * px, h: 0.6 * px, kind: (row * 3 + col + 1) % 6 });
   }
-  // wear: scuffs and scratches (albedo lighter, roughness lower), grime along the seams
-  for (let k = 0; k < 160; k++) {
-    const x = R() * S, y = R() * S, a = (R() - 0.5) * 0.6, l = 8 + R() * 60;
+  // a horizontal reinforcing strap crossing the tile at mid height (drawn over the plates later)
+  const kinds = ['armour', 'ribbed', 'plain', 'hatch', 'vent', 'plain'];
+  for (const P of plates) {
+    const kind = kinds[P.kind];
     wrapped((dx, dy) => {
-      A.strokeStyle = greyA(R() > 0.5 ? 160 : 90, 0.35); A.lineWidth = 0.8 + R() * 1.4;
+      const x = P.x + dx + seam / 2, y = P.y + dy + seam / 2, w = P.w - seam, h = P.h - seam;
+      if (x > S || y > S || x + w < 0 || y + h < 0) return;
+      // chamfered edge into the groove (6 steps), then the face
+      bevelled(H, 7, 70, 150, (b) => chamf(H, x + b, y + b, w - 2 * b, h - 2 * b, 16 - b * 0.8));
+      const tint = 128 + (R() - 0.5) * 14;
+      A.fillStyle = grey(tint); chamf(A, x + 2, y + 2, w - 4, h - 4, 15); A.fill();
+      // worn bright edge on the chamfer
+      A.strokeStyle = greyA(168, 0.55); A.lineWidth = 2.2; chamf(A, x + 3, y + 3, w - 6, h - 6, 14); A.stroke();
+      Rg.fillStyle = grey(124 + (R() - 0.5) * 18); chamf(Rg, x + 2, y + 2, w - 4, h - 4, 15); Rg.fill();
+      // brushed grain on the face
+      for (let k = 0; k < 140; k++) {
+        const yy = y + 10 + R() * (h - 20);
+        A.strokeStyle = greyA(R() > 0.5 ? 150 : 110, 0.12); A.lineWidth = 0.7;
+        A.beginPath(); A.moveTo(x + 10 + R() * 30, yy); A.lineTo(x + w - 10 - R() * 30, yy); A.stroke();
+      }
+      // rivet row inside every edge
+      const ri = 15, step = 0.045 * px;
+      for (let t = ri + 10; t < w - ri - 6; t += step) for (const yy of [y + ri, y + h - ri]) rivet(H, A, x + t, yy, 3.2);
+      for (let t = ri + 10; t < h - ri - 6; t += step) for (const xx of [x + ri, x + w - ri]) rivet(H, A, xx, y + t, 3.2);
+      const cx = x + w / 2, cy = y + h / 2;
+      if (kind === 'armour') {
+        // raised reinforcement plate with big hex bolts
+        const pw = w * 0.62, ph = h * 0.5, ax = cx - pw / 2, ay = cy - ph / 2;
+        bevelled(H, 6, 150, 196, (b) => chamf(H, ax + b, ay + b, pw - 2 * b, ph - 2 * b, 22 - b));
+        A.fillStyle = grey(tint - 10); chamf(A, ax + 3, ay + 3, pw - 6, ph - 6, 20); A.fill();
+        A.strokeStyle = greyA(176, 0.6); A.lineWidth = 2; chamf(A, ax + 1, ay + 1, pw - 2, ph - 2, 21); A.stroke();
+        for (const [bx, by] of [[ax + 26, ay + 26], [ax + pw - 26, ay + 26], [ax + 26, ay + ph - 26], [ax + pw - 26, ay + ph - 26]]) hexBolt(H, A, Rg, bx, by, 8.5);
+        I.fillStyle = grey(255); fakeText(I, R, ax + pw * 0.3, ay + ph * 0.42, pw * 0.4, 1, 10);
+        I.fillRect(ax + pw * 0.3, ay + ph * 0.6, pw * 0.16, 4);
+      } else if (kind === 'ribbed') {
+        // stiffening ribs pressed into the plate
+        for (let k = 0; k < 5; k++) {
+          const ry = y + h * 0.2 + k * h * 0.15;
+          const g1 = H.createLinearGradient(0, ry - 9, 0, ry + 9);
+          g1.addColorStop(0, grey(150)); g1.addColorStop(0.35, grey(205)); g1.addColorStop(0.7, grey(170)); g1.addColorStop(1, grey(150));
+          H.fillStyle = g1; rr(H, x + 44, ry - 9, w - 88, 18, 9); H.fill();
+          A.fillStyle = greyA(150, 0.5); rr(A, x + 44, ry - 9, w - 88, 7, 4); A.fill();
+          A.fillStyle = greyA(90, 0.5); rr(A, x + 44, ry + 4, w - 88, 5, 3); A.fill();
+        }
+      } else if (kind === 'hatch') {
+        // recessed access hatch with two flush latches and a stencil
+        const hw = w * 0.5, hh = h * 0.6, hx = cx - hw / 2, hy = cy - hh / 2;
+        H.fillStyle = grey(60); rr(H, hx - 5, hy - 5, hw + 10, hh + 10, 10); H.fill();
+        bevelled(H, 4, 110, 142, (b) => rr(H, hx + b, hy + b, hw - 2 * b, hh - 2 * b, Math.max(2, 8 - b)));
+        A.fillStyle = grey(70); rr(A, hx - 5, hy - 5, hw + 10, 5, 3); A.fill();
+        for (const ly of [hy + hh * 0.25, hy + hh * 0.75]) {
+          H.fillStyle = grey(80); rr(H, hx + hw - 40, ly - 14, 22, 28, 5); H.fill();
+          H.fillStyle = grey(180); rr(H, hx + hw - 36, ly - 4, 14, 8, 3); H.fill();
+        }
+        I.fillStyle = grey(255); fakeText(I, R, hx + 18, hy + 20, hw * 0.55, 2, 9);
+        I.lineWidth = 2.5; I.strokeStyle = grey(255); I.strokeRect(hx + 14, hy + 14, hw * 0.6, 40);
+      } else if (kind === 'vent') {
+        // deep louvre slots in a raised surround
+        const vw = w * 0.56, vh = h * 0.42, vx = cx - vw / 2, vy = cy - vh / 2;
+        bevelled(H, 4, 150, 178, (b) => rr(H, vx - 14 + b, vy - 14 + b, vw + 28 - 2 * b, vh + 28 - 2 * b, 12));
+        for (let k = 0; k < 7; k++) {
+          const sy = vy + k * vh / 7;
+          H.fillStyle = grey(20); rr(H, vx, sy + 4, vw, vh / 7 - 9, 4); H.fill();
+          A.fillStyle = grey(36); rr(A, vx, sy + 4, vw, vh / 7 - 9, 4); A.fill();
+          Rg.fillStyle = grey(220); rr(Rg, vx, sy + 4, vw, vh / 7 - 9, 4); Rg.fill();
+        }
+        for (const [bx, by] of [[vx - 4, vy - 4], [vx + vw + 4, vy - 4], [vx - 4, vy + vh + 4], [vx + vw + 4, vy + vh + 4]]) hexBolt(H, A, Rg, bx, by, 5);
+      } else {
+        // plain plate: frame number stencil + a short hazard tick in one corner
+        I.fillStyle = grey(255);
+        // (block stencils, not glyphs: the triplanar projection mirrors some walls)
+        if (R() < 0.6) { fakeText(I, R, x + 30, y + h - 60, 120, 1, 22); I.fillRect(x + 30, y + h - 30, 60, 5); }
+        if (R() < 0.5) for (let c = 0; c < 4; c++) { I.beginPath(); const bx = x + w - 120 + c * 20; I.moveTo(bx, y + 30); I.lineTo(bx + 9, y + 30); I.lineTo(bx + 20, y + 44); I.lineTo(bx + 11, y + 44); I.closePath(); I.fill(); }
+      }
+    });
+  }
+  // grime collecting under the lower edges of plates, scuffs
+  for (let k = 0; k < 120; k++) {
+    const x = R() * S, y = R() * S, a = (R() - 0.5) * 0.5, l = 10 + R() * 50;
+    wrapped((dx, dy) => {
+      A.strokeStyle = greyA(R() > 0.6 ? 170 : 88, 0.3); A.lineWidth = 0.8 + R() * 1.6;
       A.beginPath(); A.moveTo(x + dx, y + dy); A.lineTo(x + dx + Math.cos(a) * l, y + dy + Math.sin(a) * l); A.stroke();
-      Rg.strokeStyle = greyA(80, 0.4); Rg.lineWidth = 1;
+      Rg.strokeStyle = greyA(84, 0.35); Rg.lineWidth = 1;
       Rg.beginPath(); Rg.moveTo(x + dx, y + dy); Rg.lineTo(x + dx + Math.cos(a) * l, y + dy + Math.sin(a) * l); Rg.stroke();
     });
   }
-  noise(A, R, 7); noise(Rg, R, 14); noise(H, R, 3);
+  noise(A, R, 6); noise(Rg, R, 14); noise(H, R, 3);
   return pack(H, A, Rg, I);
 }
 
 function makePad() {
-  const R = rng(2203);
+  // padded lining: horizontal channel quilting (rolled tubes between stitched seams), a vertical
+  // compression seam every 0.4 m, fine woven leatherette grain
+  const R = rng(2209);
   const H = layer(), A = layer(), Rg = layer(), I = layer();
   I.fillStyle = grey(0); I.fillRect(0, 0, S, S);
-  Rg.fillStyle = grey(200); Rg.fillRect(0, 0, S, S);
-  // woven fabric
-  for (let y = 0; y < S; y += 3) { A.fillStyle = greyA(R() > 0.5 ? 140 : 116, 0.5); A.fillRect(0, y, S, 1.5); }
-  for (let x = 0; x < S; x += 3) { A.fillStyle = greyA(R() > 0.5 ? 138 : 118, 0.4); A.fillRect(x, 0, 1.5, S); }
-  // quilting: puffy diamonds with stitched seams (4 x 4 per tile)
-  const n = 4, c = S / n;
-  H.fillStyle = grey(100); H.fillRect(0, 0, S, S);
-  for (let i = -1; i <= n; i++) for (let j = -1; j <= n; j++) {
-    const cx = i * c + (j % 2 ? c / 2 : 0), cy = j * c / 2;
-    const gr = H.createRadialGradient(cx, cy, 4, cx, cy, c * 0.55);
-    gr.addColorStop(0, grey(200)); gr.addColorStop(0.7, grey(150)); gr.addColorStop(1, grey(100));
-    H.fillStyle = gr;
-    H.beginPath(); H.moveTo(cx, cy - c / 2); H.lineTo(cx + c / 2, cy); H.lineTo(cx, cy + c / 2); H.lineTo(cx - c / 2, cy); H.closePath(); H.fill();
-  }
-  // stitches along the diamond lines
-  H.strokeStyle = grey(60); H.lineWidth = 3; A.strokeStyle = greyA(90, 0.8); A.lineWidth = 2; A.setLineDash([7, 5]);
-  for (let k = -n; k <= 2 * n; k++) {
-    for (const g of [H, A]) {
-      g.beginPath(); g.moveTo(k * c, 0); g.lineTo(k * c + S, S); g.stroke();
-      g.beginPath(); g.moveTo(k * c, 0); g.lineTo(k * c - S, S); g.stroke();
+  Rg.fillStyle = grey(176); Rg.fillRect(0, 0, S, S);
+  A.fillStyle = grey(128); A.fillRect(0, 0, S, S);
+  const n = 8, c = S / n;
+  for (let j = 0; j < n; j++) {
+    const y = j * c;
+    const gr = H.createLinearGradient(0, y, 0, y + c);
+    gr.addColorStop(0, grey(60)); gr.addColorStop(0.18, grey(150)); gr.addColorStop(0.5, grey(205)); gr.addColorStop(0.82, grey(150)); gr.addColorStop(1, grey(60));
+    H.fillStyle = gr; H.fillRect(0, y, S, c);
+    // the roll catches light along its crown, the seam valleys are darker and duller
+    const ga = A.createLinearGradient(0, y, 0, y + c);
+    ga.addColorStop(0, grey(86)); ga.addColorStop(0.3, grey(128)); ga.addColorStop(0.5, grey(142)); ga.addColorStop(0.7, grey(124)); ga.addColorStop(1, grey(86));
+    A.fillStyle = ga; A.fillRect(0, y, S, c);
+    const gro = Rg.createLinearGradient(0, y, 0, y + c);
+    gro.addColorStop(0, grey(210)); gro.addColorStop(0.5, grey(150)); gro.addColorStop(1, grey(210));
+    Rg.fillStyle = gro; Rg.fillRect(0, y, S, c);
+    // stitching along both seams
+    for (const yy of [y + 3, y + c - 3]) {
+      H.strokeStyle = grey(40); H.lineWidth = 2; H.setLineDash([6, 4]); H.beginPath(); H.moveTo(0, yy); H.lineTo(S, yy); H.stroke();
+      A.strokeStyle = greyA(170, 0.6); A.lineWidth = 1.4; A.setLineDash([6, 4]); A.beginPath(); A.moveTo(0, yy); A.lineTo(S, yy); A.stroke();
     }
   }
-  A.setLineDash([]);
-  // button tufts at the crossings
-  for (let i = 0; i <= n; i++) for (let j = 0; j <= 2 * n; j++) {
-    const cx = i * c + (j % 2 ? c / 2 : 0), cy = j * c / 2;
-    H.fillStyle = grey(40); H.beginPath(); H.arc(cx, cy, 7, 0, Math.PI * 2); H.fill();
-    A.fillStyle = grey(70); A.beginPath(); A.arc(cx, cy, 6, 0, Math.PI * 2); A.fill();
+  H.setLineDash([]); A.setLineDash([]);
+  // vertical compression seams (every 0.4 m) pinching the rolls
+  for (const x of [0, S / 2]) {
+    const gx = H.createLinearGradient(x - 14, 0, x + 14, 0);
+    gx.addColorStop(0, greyA(0, 0)); gx.addColorStop(0.5, greyA(40, 0.75)); gx.addColorStop(1, greyA(0, 0));
+    wrapped((dx) => { H.fillStyle = gx; H.save(); H.translate(dx, 0); H.fillRect(x - 14, 0, 28, S); H.restore(); });
+    for (const g of [H, A]) { g.strokeStyle = g === H ? grey(36) : greyA(160, 0.5); g.lineWidth = 1.6; g.setLineDash([5, 4]); g.beginPath(); g.moveTo(x + 2, 0); g.lineTo(x + 2, S); g.stroke(); g.setLineDash([]); }
   }
-  noise(A, R, 10); noise(H, R, 4);
+  // leatherette grain
+  for (let k = 0; k < 9000; k++) { const x = R() * S, y = R() * S; A.fillStyle = greyA(R() > 0.5 ? 150 : 104, 0.25); A.fillRect(x, y, 1.5, 1.5); }
+  noise(A, R, 6); noise(H, R, 3); noise(Rg, R, 10);
   return pack(H, A, Rg, I);
 }
 
