@@ -37,8 +37,8 @@ for (const [i, s] of steps.entries()) {
   if (s.eval) {
     try { const r = await page.evaluate(s.eval); if (r !== undefined) logs.push(`[step ${i}] ` + JSON.stringify(r)); } catch (e) { logs.push(`[step ${i} error] ` + e.message); }
   }
-  if (s.shot) await page.screenshot({ path: path.join(outDir, s.shot) });
   if (logs.length) { console.log(logs.join('\n')); logs.length = 0; }
+  if (s.shot) await page.screenshot({ path: path.join(outDir, s.shot), timeout: 120000 });
 }
 console.log('total', ((Date.now() - t0) / 1000).toFixed(1), 's');
 await browser.close();

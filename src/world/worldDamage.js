@@ -5,6 +5,7 @@
 // still alive; a wreck stays a wreck. Nearby strikes are seen and heard, and the ship warns.
 import * as THREE from 'three';
 import { LAYER_FAR, LAYER_MID, LAYER_NEAR } from '../core/layers.js';
+import { petalGeometry, linerGeometry, outlineF, shardGeometry } from '../ship/tornMetal.js';
 
 const H = 3600;
 const STATUS_ORDER = ['ok', 'damaged', 'critical', 'failed', 'destroyed'];
@@ -26,11 +27,37 @@ function flashTexture() {
   return FLASH_TEX;
 }
 
+let SOOT_TEX = null;
+/** soot that fades out irregularly toward its edge (mapped on a flattened sphere: dense at the
+ * poles = the middle of the patch, gone at the equator = its rim) */
+function sootTexture() {
+  if (SOOT_TEX) return SOOT_TEX;
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 128;
+  const g = c.getContext('2d');
+  const img = g.createImageData(128, 128);
+  for (let y = 0; y < 128; y++) for (let x = 0; x < 128; x++) {
+    const v = y / 127, u = x / 127;
+    const edge = 0.62 + 0.25 * Math.sin(u * 37.7 + Math.sin(u * 91) * 2) * Math.sin(u * 13.1 + 1.7);
+    const d = Math.abs(v - 0.5) * 2;                 // 0 at the rim, 1 in the middle
+    const a = Math.max(0, Math.min(1, (d - (1 - edge)) / 0.35)) * (0.75 + 0.25 * Math.sin(u * 211 + v * 57));
+    const k = (y * 128 + x) * 4;
+    img.data[k] = img.data[k + 1] = img.data[k + 2] = Math.round(a * 255); img.data[k + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  SOOT_TEX = new THREE.CanvasTexture(c);
+  SOOT_TEX.colorSpace = THREE.NoColorSpace;
+  return SOOT_TEX;
+}
+
 export class WorldDamage {
   constructor(game) {
     this.g = game;
     this.mats = {
-      scorch: new THREE.MeshBasicMaterial({ color: 0x0b0806, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+      scorch: new THREE.MeshBasicMaterial({ color: 0x0b0806, alphaMap: sootTexture(), transparent: true, opacity: 0.92, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 }),
+      petal: new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.5, roughness: 0.55, side: THREE.DoubleSide }),
+      liner: new THREE.MeshStandardMaterial({ vertexColors: true, metalness: 0.55, roughness: 0.55, side: THREE.DoubleSide }),
+      beam: new THREE.MeshStandardMaterial({ color: 0x55585e, metalness: 0.7, roughness: 0.45 }),
       hole: new THREE.MeshBasicMaterial({ color: 0x000000, side: THREE.DoubleSide }),
       rim: new THREE.MeshStandardMaterial({ color: 0x2b2522, roughness: 0.8, metalness: 0.5, side: THREE.DoubleSide }),
       vent: new THREE.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
@@ -109,25 +136,46 @@ export class WorldDamage {
     const dir = new THREE.Vector3().randomDirection();
     if (P && P.length) {
       const pr = P[Math.floor(Math.random() * P.length)];
-      if (pr.type === 'sphere') return { p: pr.c.clone().addScaledVector(dir, pr.r), n: dir };
-      if (pr.type === 'capsule' || pr.type === 'cyl') {
+      let hp = null;
+      if (pr.type === 'sphere') hp = { p: pr.c.clone().addScaledVector(dir, pr.r), n: dir };
+      else if (pr.type === 'capsule' || pr.type === 'cyl') {
         const a = pr.a.clone().lerp(pr.b, Math.random());
         const ax = pr.b.clone().sub(pr.a).normalize();
         const n = dir.projectOnPlane(ax).normalize();
-        return { p: a.addScaledVector(n, pr.r), n };
-      }
-      if (pr.type === 'box') {
+        hp = { p: a.addScaledVector(n, pr.r), n };
+      } else if (pr.type === 'box') {
         const k = Math.floor(Math.random() * 3), s = Math.random() < 0.5 ? -1 : 1;
         const n = new THREE.Vector3(); n.setComponent(k, s);
         const p = pr.c.clone();
         for (let i = 0; i < 3; i++) p.setComponent(i, p.getComponent(i) + (i === k ? s * pr.h.getComponent(i) : (Math.random() - 0.5) * 2 * pr.h.getComponent(i) * 0.8));
-        return { p, n };
+        hp = { p, n };
       }
+      if (hp) return this.onSurface(t, hp);
     }
     // relays / the dock: spine along z with the module cluster in the middle
     const sz = t.size || 1;
     const n = dir.projectOnPlane(new THREE.Vector3(0, 0, 1)).normalize();
     return { p: new THREE.Vector3(0, 0, (Math.random() - 0.5) * 30 * sz).addScaledVector(n, 3.4 * sz), n };
+  }
+
+  /** move a proxy hit point onto the station's real plating (ray along -n into the model) */
+  onSurface(t, hp) {
+    try {
+      const model = t.model;
+      model.updateMatrixWorld(true);
+      const skip = model.userData.dmgGroup;
+      const meshes = [];
+      model.traverse((o) => { if (o.isMesh && !o.isInstancedMesh && o.geometry && o !== skip && !(skip && skip.getObjectById(o.id))) meshes.push(o); });
+      const o = model.localToWorld(hp.p.clone().addScaledVector(hp.n, 40));
+      const d = hp.n.clone().transformDirection(model.matrixWorld).negate();
+      const rc = new THREE.Raycaster(o, d, 0, 80);
+      const hit = rc.intersectObjects(meshes, false)[0];
+      if (!hit || !hit.face) return hp;
+      const p = model.worldToLocal(hit.point.clone());
+      const n = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).transformDirection(model.matrixWorld.clone().invert());
+      if (n.dot(hp.n) < 0) n.negate();
+      return { p, n: n.normalize() };
+    } catch (e) { return hp; }
   }
 
   destroy(t) {
@@ -216,8 +264,19 @@ export class WorldDamage {
     flash.scale.setScalar(8 + sev * 120);
     grp.add(flash);
     this.anim.push({ o: flash, kind: 'flash', t: 0, life: 1.6 + sev * 2, s0: flash.scale.x });
+    // torn-off plating, insulation foil and frame scraps blown out of the hole
+    if (!this.shards) {
+      this.shards = Array.from({ length: 8 }, (_, i) => shardGeometry(i * 7.31 + 1.3));
+      this.foil = new THREE.MeshStandardMaterial({ color: 0xd8a640, metalness: 0.85, roughness: 0.35, side: THREE.DoubleSide });
+    }
     for (let k = 0; k < 10 + sev * 40; k++) {
-      const m = new THREE.Mesh(new THREE.BoxGeometry(rand(0.2, 1.4), rand(0.1, 0.6), rand(0.2, 1.6)), g.stations.M.hullDark || this.mats.rim);
+      const kind = Math.random();
+      const sz = rand(0.3, 1.8) * (0.6 + sev);
+      const m = kind < 0.6 ? new THREE.Mesh(this.shards[k % this.shards.length], this.mats.petal)
+        : kind < 0.85 ? new THREE.Mesh(this.shards[(k + 3) % this.shards.length], this.foil)
+        : new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, rand(0.6, 2.2)), this.mats.beam);
+      if (kind < 0.85) m.scale.set(sz, sz, sz);
+      m.quaternion.random();
       m.position.copy(hit.p);
       grp.add(m);
       const v = hit.n.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.8)).normalize().multiplyScalar(rand(4, 25) * (0.5 + sev));
@@ -258,18 +317,35 @@ export class WorldDamage {
       sc.scale.set(h.r * 1.8, 0.04, h.r * 1.8);
       S.add(sc);
       if (h.sev >= 0.08) {
-        const hole = new THREE.Mesh(new THREE.CircleGeometry(h.r * 0.45, 14), M.hole);
-        hole.position.copy(h.p).addScaledVector(h.n, 0.12);
-        hole.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), h.n);
+        // a real tear: a jagged black opening, the plating peeled back round it in torn,
+        // crumpled, scorched petals, insulation foil bursting out of the gap, and in bigger
+        // holes the bent frame members across it
+        const seed = h.seed ?? (h.seed = Math.random() * 100);
+        const R = h.r * 0.42;
+        const pts = [];
+        for (let k = 0; k < 64; k++) { const a = k / 64 * Math.PI * 2; const r = R * outlineF(a, seed); pts.push(new THREE.Vector2(Math.cos(a) * r, Math.sin(a) * r)); }
+        // (the outline frame of tornMetal: u = n x up)
+        const u = new THREE.Vector3().crossVectors(h.n, Math.abs(h.n.y) < 0.9 ? up : new THREE.Vector3(1, 0, 0)).normalize();
+        const v = new THREE.Vector3().crossVectors(h.n, u);
+        const hole = new THREE.Mesh(new THREE.ShapeGeometry(new THREE.Shape(pts)), M.hole);
+        hole.matrix.makeBasis(u, v, h.n).setPosition(h.p.clone().addScaledVector(h.n, 0.04));
+        hole.matrixAutoUpdate = false;
         S.add(hole);
-        // torn petals around the hole
-        for (let k = 0; k < 9; k++) {
-          const a = k / 9 * Math.PI * 2;
-          const pet = new THREE.Mesh(new THREE.ConeGeometry(h.r * 0.16, h.r * 0.5, 3), M.rim);
-          const tang = new THREE.Vector3(Math.cos(a), Math.sin(a), 0).applyQuaternion(hole.quaternion);
-          pet.position.copy(hole.position).addScaledVector(tang, h.r * 0.48).addScaledVector(h.n, h.r * 0.08);
-          pet.quaternion.setFromUnitVectors(up, tang.clone().addScaledVector(h.n, 0.9).normalize());
-          S.add(pet);
+        // (seeded: the dressing is rebuilt whenever anything changes and must come out the same)
+        let rs = Math.floor(seed * 1e4) % 233280;
+        const rnd = () => { rs = (rs * 9301 + 49297) % 233280; return rs / 233280; };
+        const blown = rnd() < 0.65;   // the air inside blew the plating out
+        S.add(new THREE.Mesh(petalGeometry({ c: h.p.clone().addScaledVector(h.n, 0.05), n: h.n, R, seed, travel: blown ? h.n : h.n.clone().negate(), paint: 'station', bend: blown ? 1.5 + rnd() * 0.8 : 0.9, lenK: 0.95 }), M.petal));
+        S.add(new THREE.Mesh(linerGeometry({ c: h.p.clone().addScaledVector(h.n, 0.03), n: h.n.clone().negate(), R: R * 0.98, seed, gap: R * 0.22, innerK: 0.78 }), M.liner));
+        if (h.sev >= 0.25) {
+          for (let k = 0; k < 2 + Math.floor(h.sev * 3); k++) {
+            const a = rnd() * Math.PI * 2, a2 = a + Math.PI + (rnd() - 0.5) * 0.8;
+            const e0 = h.p.clone().addScaledVector(u, Math.cos(a) * R * 0.95).addScaledVector(v, Math.sin(a) * R * 0.95);
+            const e1 = h.p.clone().addScaledVector(u, Math.cos(a2) * R * 0.95).addScaledVector(v, Math.sin(a2) * R * 0.95);
+            const mid = e0.clone().lerp(e1, 0.3 + rnd() * 0.4).addScaledVector(h.n, R * (0.1 + rnd() * 0.35));
+            const tg = new THREE.TubeGeometry(new THREE.CatmullRomCurve3([e0, mid, e1]), 12, R * 0.035, 5, false);
+            S.add(new THREE.Mesh(tg, M.beam));
+          }
         }
         if (!D.destroyed && (fresh(h) || D.status === 'critical')) {
           const cone = new THREE.Mesh(new THREE.ConeGeometry(h.r * 1.4, h.r * 7, 16, 1, true), M.vent);
@@ -280,10 +356,16 @@ export class WorldDamage {
         }
       }
       if (!D.destroyed && h.sev >= 0.25 && (fresh(h) || D.status !== 'ok')) {
-        const fire = new THREE.Mesh(new THREE.SphereGeometry(h.r * 0.35, 12, 8), M.fire);
-        fire.position.copy(h.p).addScaledVector(h.n, h.r * 0.2);
-        S.add(fire);
-        this.anim.push({ o: fire, kind: 'fire', t: Math.random() * 10, life: Infinity, static: true });
+        // something burning inside the module: a flickering orange glow deep in the hole (in
+        // vacuum there are no flames outside — only what still has air and power burns within)
+        const R = h.r * 0.42;
+        const u = new THREE.Vector3().crossVectors(h.n, Math.abs(h.n.y) < 0.9 ? up : new THREE.Vector3(1, 0, 0)).normalize();
+        const v = new THREE.Vector3().crossVectors(h.n, u);
+        const glow = new THREE.Mesh(new THREE.PlaneGeometry(R * 1.3, R * 1.3), new THREE.MeshBasicMaterial({ map: flashTexture(), color: new THREE.Color(1.5, 0.45, 0.1), transparent: true, opacity: 0.5, blending: THREE.AdditiveBlending, depthWrite: false }));
+        glow.matrix.makeBasis(u, v, h.n).setPosition(h.p.clone().addScaledVector(h.n, 0.06));
+        glow.matrixAutoUpdate = false;
+        S.add(glow);
+        this.anim.push({ o: glow, kind: 'fire', t: Math.random() * 10, life: Infinity, static: true });
       }
     }
     // a wreck: the structure is gone, a debris field drifts where it was
@@ -384,7 +466,7 @@ export class WorldDamage {
         o.position.addScaledVector(v, dt);
         o.rotation.x += a.w.x * dt; o.rotation.y += a.w.y * dt; o.rotation.z += a.w.z * dt;
       } else if (a.kind === 'fire') {
-        o.scale.setScalar(0.8 + 0.35 * Math.sin(tt * 13 + a.t) + 0.2 * Math.sin(tt * 31));
+        o.material.opacity = Math.max(0.08, 0.36 + 0.18 * Math.sin(tt * 13 + a.t * 3) + 0.12 * Math.sin(tt * 31 + a.t) + 0.08 * Math.sin(tt * 4.3));
       } else if (a.kind === 'vent') {
         o.scale.set(1, 0.8 + 0.25 * Math.sin(tt * 9 + a.t), 1);
       }

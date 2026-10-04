@@ -4,8 +4,12 @@ import * as THREE from 'three';
 import { noiseTex } from '../core/noiseTex.js';
 
 export const MAX_WIN = 16;
+const blackTex = new THREE.DataTexture(new Uint8Array([0, 0, 0, 255]), 1, 1);
+blackTex.needsUpdate = true;
 export const glassUniforms = {
   uWinDmg: { value: Array.from({ length: MAX_WIN }, () => new THREE.Vector4(0, 0, 0, 0)) }, // u,v,severity,seed
+  uWinTile: { value: Array.from({ length: MAX_WIN }, () => new THREE.Vector4(0, 0, 0, 1)) }, // crack atlas rect + pane half size
+  tCracks: { value: blackTex },
   uWinGone: { value: Array.from({ length: MAX_WIN }, () => 0) },
   uFrost: { value: 0 },
   uHeatGlass: { value: 0 },
@@ -34,6 +38,8 @@ uniform samplerCube envMap;
 uniform float uEnvIntensity;
 uniform highp sampler3D tNoise3D;
 uniform vec4 uWinDmg[${MAX_WIN}];
+uniform vec4 uWinTile[${MAX_WIN}];
+uniform sampler2D tCracks;
 uniform float uWinGone[${MAX_WIN}];
 uniform float uFrost;
 uniform float uHeatGlass;
@@ -68,8 +74,14 @@ void main(){
   int wi = int(vWin + 0.5);
   float gone = 0.0;
   vec4 D = vec4(0.0);
-  for (int i = 0; i < ${MAX_WIN}; i++){ if (i == wi){ gone = uWinGone[i]; D = uWinDmg[i]; } }
-  if (gone > 0.5) discard;
+  vec4 T = vec4(0.0);
+  for (int i = 0; i < ${MAX_WIN}; i++){ if (i == wi){ gone = uWinGone[i]; D = uWinDmg[i]; T = uWinTile[i]; } }
+  // the pane's fracture network (atlas): R crack lines, G milky halo, B glass gone
+  vec3 ck = vec3(0.0);
+  if (D.z > 0.0 && T.z > 0.0) {
+    ck = texture2D(tCracks, T.xy + T.z * clamp(0.5 + vUvW / (2.0 * T.w), 0.002, 0.998)).rgb;
+    if (ck.b > 0.5) discard;              // the middle of a broken pane is gone, shards remain
+  } else if (gone > 0.5) discard;
   vec3 V = normalize(cameraPosition - vWorld);
   vec3 N = normalize(vN);
   // outer pane reflects space only from outside, inner pane reflects the cabin only from inside
@@ -82,6 +94,8 @@ void main(){
   float smudge = smoothstep(0.55, 0.9, nz.r) * 0.6 + smoothstep(0.7, 0.95, texture(tNoise3D, vec3(vUvW * 6.0, 0.3 + vWin * 0.07)).b) * 0.4;
   vec3 R = reflect(-V, N);
   R += (nz.gba - 0.5) * 0.01;
+  // fractured glass bends what it reflects: facets around the cracks tilt the reflection
+  R += vec3(dFdx(ck.r + ck.g), dFdy(ck.r + ck.g), 0.0) * 1.2;
   vec3 env = textureLod(envMap, R, 1.5).rgb * uEnvIntensity * sideOK;
   vec3 col = env * F * (1.0 - smudge * 0.3);
   float alpha = F * mix(0.1, 0.85, sideOK) + smudge * 0.05;
@@ -93,11 +107,12 @@ void main(){
     col += vec3(0.6, 0.65, 0.7) * fr * 0.08;
     alpha = max(alpha, fr * 0.65);
   }
-  // cracks
+  // cracks: the fracture faces scatter light (bright lines), the glass round them goes milky
   if (D.z > 0.0){
-    float c = crackField(vUvW, D);
-    col += vec3(0.9, 0.95, 1.0) * c * (0.12 + 0.6 * F) + env * c * 0.4;
-    alpha = max(alpha, c * 0.75);
+    float c = T.z > 0.0 ? smoothstep(0.2, 0.7, ck.r) : crackField(vUvW, D);
+    float halo = ck.g;
+    col += vec3(0.92, 0.96, 1.0) * c * (0.3 + 0.55 * F) + env * c * 0.55 + vec3(0.7, 0.75, 0.8) * halo * 0.16;
+    alpha = max(alpha, max(c * 0.9, halo * 0.35));
     // milky laminated layer when heavily damaged
     float milk = smoothstep(0.7, 1.4, D.z) * 0.35 * (0.5 + 0.5 * texture(tNoise3D, vec3(vUvW * 2.0, D.w)).r);
     col += vec3(0.5) * milk * 0.08;

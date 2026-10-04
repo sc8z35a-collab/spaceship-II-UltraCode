@@ -4,6 +4,7 @@
 import * as THREE from 'three';
 import { noiseTex } from '../core/noiseTex.js';
 import { detailTextures, DETAIL_TILE } from './detailTex.js';
+import { OUTLINE_GLSL } from './tornMetal.js';
 
 export const MAX_DENTS = 24;
 export const MAX_OPEN = 16;
@@ -17,6 +18,8 @@ export const shipUniforms = {
   uOpen: { value: Array.from({ length: MAX_OPEN }, () => new THREE.Matrix4()) },
   uOpenCount: { value: 0 },
   uBreach: { value: Array.from({ length: MAX_BREACH }, () => new THREE.Vector4(0, 0, 0, 0)) }, // xyz, w radius
+  uBreachN: { value: Array.from({ length: MAX_BREACH }, () => new THREE.Vector4(0, 1, 0, 0)) }, // surface normal, w seed
+  uBreachS: { value: Array.from({ length: MAX_BREACH }, () => new THREE.Vector4(0, 1.12, 0, 0)) }, // frost, inner scale, patched
   uHeat: { value: 0 },
   uHeatDir: { value: new THREE.Vector3(0, 0, -1) },
   uTime: { value: 0 },
@@ -54,6 +57,8 @@ const COMMON_FRAG_PARS = /* glsl */`
 uniform mat4 uOpen[${MAX_OPEN}];
 uniform int uOpenCount;
 uniform vec4 uBreach[${MAX_BREACH}];
+uniform vec4 uBreachN[${MAX_BREACH}];
+uniform vec4 uBreachS[${MAX_BREACH}];
 uniform float uHeat;
 uniform vec3 uHeatDir;
 uniform float uTime;
@@ -89,22 +94,48 @@ float canopyMask(vec3 p){
   if (abs(p.x + 0.62) < 0.04 || abs(p.x - 0.62) < 0.04 || abs(p.y - 1.78) < 0.04) return 0.0;
   return 1.0;
 }
-float breachMask(vec3 p, out float rim){
-  rim = 0.0;
+${OUTLINE_GLSL}
+// torn holes through the skin and the inner wall (the outline matches the torn-metal geometry);
+// rim: scorched / bare zone around the tear, cr: hairline paint cracks running on from the tear
+// slits, fr: frost where escaping air freezes on the inner wall
+float breachMask(vec3 p, out float rim, out float cr, out float fr){
+  rim = 0.0; cr = 0.0; fr = 0.0;
   float m = 0.0;
+  float pw = length(fwidth(p));      // pixel footprint (m), taken in uniform control flow
   for (int i = 0; i < ${MAX_BREACH}; i++){
     vec4 B = uBreach[i];
     if (B.w <= 0.0) continue;
-    float d = length(p - B.xyz);
-    float jag = B.w * (1.0 + 0.45 * sn(p * 1.1 + B.xyz) + 0.2 * sn(p * 3.9));
-    if (d < jag) m = 1.0;
-    rim = max(rim, 1.0 - smoothstep(jag, jag + 0.12 + B.w * 0.8, d));
+    vec4 Nn = uBreachN[i];
+    vec3 d = p - B.xyz;
+    float dn = dot(d, Nn.xyz);
+    if (dn > 0.25 || dn < -0.42) continue;
+    vec3 t1 = bTangent(Nn.xyz);
+    vec3 t2 = cross(Nn.xyz, t1);
+    vec2 q = vec2(dot(d, t1), dot(d, t2));
+    float r = length(q);
+    if (r > B.w * 5.0 + 0.35) continue;
+    float th = atan(q.y, q.x);
+    float inner = step(dn, -0.1);
+    float s = Nn.w + inner * 7.3;
+    float R = B.w * mix(1.0, uBreachS[i].y, inner);
+    float rr = R * breachOutline(th, s);
+    if (r < rr) m = 1.0;
+    rim = max(rim, 1.0 - smoothstep(rr, rr + 0.025 + R * 0.7, r));
+    // paint cracks: continue the tear slits outward as wandering hairlines
+    float P = bPetals(s);
+    float x = th * P / 6.2831853 + fract(s * 0.37);
+    float k = floor(x + 0.5);
+    float e = (x - k) * 6.2831853 / P * r + sn(p * 7.0 + B.xyz) * 0.018 + sn(p * 21.0) * 0.005;
+    float len = R * (0.9 + 2.2 * bHash(mod(k, P), s + 2.0)) + 0.04;
+    float w = max(0.0016, pw * 0.8);
+    cr = max(cr, smoothstep(w, 0.0, abs(e)) * step(rr, r) * (1.0 - smoothstep(rr, rr + len, r)));
+    fr = max(fr, uBreachS[i].x * inner * (1.0 - smoothstep(rr, rr + R * 1.6 + 0.1, r)));
   }
   return m;
 }
 // inner linings below the hull (corridor vault): the hole is the breach above projected straight down
-float breachMaskUp(vec3 p, out float rim){
-  rim = 0.0;
+float breachMaskUp(vec3 p, out float rim, out float cr, out float fr){
+  rim = 0.0; cr = 0.0; fr = 0.0;
   float m = 0.0;
   for (int i = 0; i < ${MAX_BREACH}; i++){
     vec4 B = uBreach[i];
@@ -186,10 +217,13 @@ const DEPTH_FRAG_PARS = /* glsl */`
 uniform mat4 uOpen[${MAX_OPEN}];
 uniform int uOpenCount;
 uniform vec4 uBreach[${MAX_BREACH}];
+uniform vec4 uBreachN[${MAX_BREACH}];
+uniform vec4 uBreachS[${MAX_BREACH}];
 uniform vec4 uCanopy;
 uniform highp sampler3D tNoise3D;
 varying vec3 vShipPos;
 float sn(vec3 p){ return texture(tNoise3D, p).g * 2.0 - 1.0; }
+${OUTLINE_GLSL}
 bool holeAt(vec3 p){
   for (int i = 0; i < ${MAX_OPEN}; i++){
     if (i >= uOpenCount) break;
@@ -205,7 +239,14 @@ bool holeAt(vec3 p){
   for (int i = 0; i < ${MAX_BREACH}; i++){
     vec4 B = uBreach[i];
     if (B.w <= 0.0) continue;
-    if (length(p - B.xyz) < B.w * (1.0 + 0.45 * sn(p * 1.1 + B.xyz) + 0.2 * sn(p * 3.9))) return true;
+    vec4 Nn = uBreachN[i];
+    vec3 d = p - B.xyz;
+    float dn = dot(d, Nn.xyz);
+    if (dn > 0.25 || dn < -0.42) continue;
+    vec3 t1 = bTangent(Nn.xyz);
+    vec2 q = vec2(dot(d, t1), dot(d, cross(Nn.xyz, t1)));
+    float inner = step(dn, -0.1);
+    if (length(q) < B.w * mix(1.0, uBreachS[i].y, inner) * breachOutline(atan(q.y, q.x), Nn.w + inner * 7.3)) return true;
   }
   return false;
 }
@@ -284,8 +325,8 @@ export function patchShipMaterial(mat, opts = {}) {
         ${o.openings ? `
         if (openingMask(vShipPos) > 0.5) discard;
         if (canopyMask(vShipPos) > 0.5) discard;
-        float _rim; if (breachMask(vShipPos, _rim) > 0.5) discard;` : o.breaches ? `
-        float _rim; if (breachMaskUp(vShipPos, _rim) > 0.5) discard;` : 'float _rim = 0.0;'}
+        float _rim, _bcr, _bfr; if (breachMask(vShipPos, _rim, _bcr, _bfr) > 0.5) discard;` : o.breaches ? `
+        float _rim, _bcr, _bfr; if (breachMaskUp(vShipPos, _rim, _bcr, _bfr) > 0.5) discard;` : 'float _rim = 0.0, _bcr = 0.0, _bfr = 0.0;'}
       `)
       .replace('#include <color_fragment>', `#include <color_fragment>
         {
@@ -347,10 +388,24 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb *= 0.93 + 0.1 * tint;
           _bumpH = -seam * 0.0016 + g2 * 0.00035;` : ''}
           float sc = scorchAt(vShipPos);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.05, 0.045, 0.04), _rim * 0.9);
-          // stretched / scraped metal inside dents
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85 * (0.75 + 0.25 * sn(vShipPos * 3.1)));
+          // around a tear: soot fading out, scraped bare metal right at the torn edge, paint
+          // crazing running on from the slits, frost where the escaping air freezes
+          float _sootN = 0.65 + 0.35 * sn(vShipPos * 4.3 + 1.7);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.04, 0.035), clamp(_rim * 1.1 * _sootN, 0.0, 0.92));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.56, 0.56, 0.58), smoothstep(0.88, 0.99, _rim) * 0.85);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.015), _bcr * 0.9);
+          float _frN = smoothstep(0.35, 0.75, nz(vShipPos * 2.7).r + _bfr * 0.5);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), clamp(_bfr * _frN * 1.4, 0.0, 0.95));
+          // stretched / scraped metal inside dents, the paint crazed and flaking off the deepest
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
+          float _dz = smoothstep(0.012, 0.07, vDent);
+          if (_dz > 0.0) {
+            float _craze = smoothstep(0.05, 0.0, abs(sn(vShipPos * 5.5 + 3.1))) + smoothstep(0.035, 0.0, abs(sn(vShipPos * 13.0 + 7.7))) * 0.7;
+            float _flake = smoothstep(0.58, 0.66, nz(vShipPos * 3.3 + 0.4).r) * smoothstep(0.03, 0.12, vDent);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03), clamp(_craze, 0.0, 1.0) * _dz * 0.8);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.3, 0.25), _flake * 0.85);   // primer under flaked paint
+          }
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         ${o.panels > 0 || o.detail || o.belly ? `
@@ -372,6 +427,8 @@ export function patchShipMaterial(mat, opts = {}) {
           vec3 P = vShipPos * ${o.triScale.toFixed(3)};
           float rn = nz(P * 0.43 + 0.7).r * 2.0 - 1.0;
           roughnessFactor = clamp(roughnessFactor + rn * 0.18 * ${o.wear.toFixed(3)} + ${o.rough.toFixed(3)} + vDent * 0.8 + _detailRough, 0.04, 1.0);
+          roughnessFactor = mix(roughnessFactor, 0.3, smoothstep(0.88, 0.99, _rim) * 0.8);
+          roughnessFactor = mix(roughnessFactor, 0.95, clamp(_bfr * 1.3, 0.0, 1.0));
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
         }`)

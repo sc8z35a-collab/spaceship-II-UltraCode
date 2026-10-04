@@ -9,11 +9,14 @@ import { glassUniforms } from './glass.js';
 import { OPENINGS, HULL, sectionPoint, sectionNormal, tForPoint, inCanopy, DECK_Y } from './hullShape.js';
 import { PIPE_SYSTEMS } from './underfloor.js';
 import { setLayersDeep, LAYER_NEAR, LAYER_MID } from '../core/layers.js';
+import { petalGeometry, linerGeometry, cableCurves, patchPlate, holeFrame } from './tornMetal.js';
+import { CrackAtlas } from './glassCracks.js';
+import { crackPaths, crackGeometry, stressPoint } from './wallCracks.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 // what Kaito can still fix himself (anything bigger is beyond a repair kit)
-export const FIXABLE = { breach: 0.012, crack: 0.3, pipe: 0.15, equip: 0.12 };
+export const FIXABLE = { breach: 0.012, crack: 0.3, pipe: 0.15, equip: 0.12, fracture: 0.15 };
 const BREAKUP_ENERGY = 6e7;   // J: a single impact that tears the ship apart outright
 
 export const EQUIPMENT = {
@@ -32,27 +35,6 @@ export const EQUIPMENT = {
   lights: { name: '照明回路', pos: V(0, 2.4, -2), zone: 'corridor' },
 };
 
-function rimGeometry(radius, seed) {
-  // torn petals bent inward
-  const petals = 9 + Math.floor((seed % 7));
-  const pos = [];
-  for (let i = 0; i < petals; i++) {
-    const a0 = (i / petals) * Math.PI * 2, a1 = ((i + 1) / petals) * Math.PI * 2;
-    const am = (a0 + a1) / 2 + (Math.sin(seed + i * 3.1) * 0.2);
-    const l = radius * (0.35 + 0.35 * Math.abs(Math.sin(seed * 1.7 + i * 2.3)));
-    const r0 = radius * (0.92 + 0.15 * Math.sin(i * 1.3 + seed));
-    const p0 = [Math.cos(a0) * r0, Math.sin(a0) * r0, 0];
-    const p1 = [Math.cos(a1) * r0, Math.sin(a1) * r0, 0];
-    const tip = [Math.cos(am) * (r0 - l * 0.6), Math.sin(am) * (r0 - l * 0.6), -l * 0.9];
-    pos.push(...p0, ...p1, ...tip);
-    pos.push(...p1, ...p0, ...tip);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
-}
-
 export class Damage {
   constructor(game) {
     this.g = game;
@@ -63,6 +45,7 @@ export class Damage {
     this.issues = [];     // active problems for UI + repairs
     this.health = { servers: 1, comms: 1, sensors: 1, o2gen: 1, scrubber: 1, fans: 1, power: 1, reactor: 1, engine: 1, rcs: 1, lift: 1, coffee: 1, lights: 1, cameras: [1, 1, 1, 1, 1] };
     this.scorch = [];
+    this.fractures = [];  // fatigue cracks in the cabin wall
     this.nextId = 1;
     this.stress = 0;
     this.group = new THREE.Group();
@@ -122,6 +105,11 @@ export class Damage {
         if (sev > 0.04) this.pipeLeak(s, sev);
       }
     }
+    // the blow cracks the cabin wall round the impact (the bigger, the longer the cracks)
+    if (E > 2.5e5 && !opts.noFracture) {
+      const n = E > 2e6 ? 2 : 1;
+      for (let k = 0; k < n; k++) this.addFracture(pLocal, null, Math.min(0.6, 0.06 + E / 5e6), 0.4 + Math.min(1.2, E / 3e6));
+    }
     // loose items fly, ship kicks, shake
     const kick = inward.clone().multiplyScalar(Math.min(4, Math.sqrt(E) / 900));
     g.phys.kick(kick, Math.min(6, Math.sqrt(E) / 400), pLocal, Math.min(0.9, E / 2e6));
@@ -152,6 +140,38 @@ export class Damage {
   }
 
   dentCount(p, rad) { return this.dents.filter((d) => d.pos.distanceTo(p) < rad).length; }
+
+  /** a fatigue crack in the cabin wall from p0 (on/near the inner wall) */
+  addFracture(p0, dir, sev, len = null, seed = null, restoring = false) {
+    if (this.fractures.length >= 16) {
+      // the wall is already full of cracks: the nearest one runs on instead
+      const f = this.fractures.reduce((a, b) => (a.p0.distanceTo(p0) < b.p0.distanceTo(p0) ? a : b));
+      f.issue.sev = Math.min(1, f.issue.sev + sev * 0.5);
+      return f;
+    }
+    seed = seed ?? Math.random() * 1000;
+    len = len ?? 0.4 + Math.random() * 0.9;
+    const paths = crackPaths(p0, seed, { dir, len });
+    const a = paths[0][0];
+    const inRoom = a.p.clone().addScaledVector(a.n, -0.35);
+    const zone = this.g.lifeSupport.zoneAt(inRoom);
+    const f = { p0: p0.clone(), dir: dir ? dir.clone() : null, len, seed, paths, sev, zone, sealed: false, mesh: null, builtSev: -1 };
+    f.issue = this.addIssue({ kind: 'fracture', ref: f, zone, pos: inRoom, sev, repairable: sev < FIXABLE.fracture, name: '壁の亀裂' });
+    this.fractures.push(f);
+    this._fractureMesh(f);
+    if (!restoring) this.events.push({ type: 'fracture', zone, pos: a.p.clone() });
+    return f;
+  }
+
+  _fractureMesh(f) {
+    const T = this._tornMats();
+    if (f.mesh) { this.group.remove(f.mesh); f.mesh.geometry.dispose(); }
+    f.mesh = new THREE.Mesh(crackGeometry(f.paths, f.sev, f.seed, f.sealed), T.crack);
+    f.mesh.matrixAutoUpdate = false; f.mesh.updateMatrix();
+    setLayersDeep(f.mesh, LAYER_NEAR);
+    this.group.add(f.mesh);
+    f.builtSev = f.sev;
+  }
 
   zoneForHullPoint(p) {
     // project slightly inward and classify
@@ -188,7 +208,13 @@ export class Damage {
       this._updateBreachLeak(c);
       return c;
     }
-    const b = { id: this.nextId++, pos: pos.clone(), n: n.clone().normalize(), r: radius, zone, patched: false, sev: Math.min(1, radius / 0.08), seed: Math.random() * 100, meshes: [] };
+    const b = { id: this.nextId++, pos: pos.clone(), n: n.clone().normalize(), r: radius, zone, patched: false, sev: Math.min(1, radius / 0.08), seed: Math.random() * 100, meshes: [], frost: 0 };
+    // the hull's own normal there (the hole's frame) and the way the projectile went (the torn
+    // petals fold that way); the inner wall tears a little wider than the skin
+    const t = tForPoint(pos.z, pos.x, pos.y, 0);
+    b.sn = sectionNormal(pos.z, t, 0);
+    b.dir = b.n.clone().negate();
+    b.innerK = 1.05 + 0.25 * ((b.seed * 0.731) % 1);
     b.leak = this.g.lifeSupport.addLeak(zone, Math.PI * radius * radius, 'breach' + b.id);
     this._breachMeshes(b);
     this.breaches.push(b);
@@ -204,37 +230,85 @@ export class Damage {
     this.syncUniforms();
   }
 
+  _tornMats() {
+    if (this.tm) return this.tm;
+    const S = (o) => new THREE.MeshStandardMaterial(o);
+    this.tm = {
+      metal: S({ vertexColors: true, metalness: 0.5, roughness: 0.55, side: THREE.DoubleSide, envMapIntensity: 0.6 }),
+      liner: S({ vertexColors: true, metalness: 0.5, roughness: 0.62, side: THREE.DoubleSide }),
+      copper: S({ color: 0xd8874a, metalness: 0.95, roughness: 0.28, emissive: new THREE.Color(1.0, 0.45, 0.15), emissiveIntensity: 0 }),
+      cables: new Map(),
+      plate: S({ color: 0x8d949b, metalness: 0.75, roughness: 0.42, side: THREE.DoubleSide }),
+      bolt: S({ color: 0x5d6168, metalness: 0.85, roughness: 0.35 }),
+      sealant: S({ color: 0x9a9c98, metalness: 0.0, roughness: 0.9 }),
+      crack: S({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, metalness: 0.0, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
+    };
+    return this.tm;
+  }
+
+  /** torn plating, insulation, cables (and the patch once fixed) around a breach */
   _breachMeshes(b) {
-    const M = this.g.shipVis.M;
-    for (const m of b.meshes) this.group.remove(m);
+    const T = this._tornMats();
+    for (const m of b.meshes) { this.group.remove(m); if (m.userData.own) m.geometry.dispose(); }
     b.meshes = [];
-    for (const [inset, flip] of [[0, false], [HULL.inset, true]]) {
-      const t = tForPoint(b.pos.z, b.pos.x, b.pos.y, 0);
-      const p = sectionPoint(b.pos.z, t, inset);
-      const nrm = sectionNormal(b.pos.z, t, inset);
-      const g = rimGeometry(b.r * (flip ? 1.1 : 1.0), b.seed + (flip ? 3 : 0));
-      const mesh = new THREE.Mesh(g, flip ? M.wall : M.hullDark);
-      const q = new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), nrm);
-      mesh.position.copy(p);
-      mesh.quaternion.copy(q);
-      mesh.updateMatrix();
-      mesh.matrixAutoUpdate = false;
-      setLayersDeep(mesh, LAYER_NEAR, LAYER_MID);
-      this.group.add(mesh);
-      b.meshes.push(mesh);
+    b.cables = [];
+    const add = (geo, mat, own = true) => {
+      const m = new THREE.Mesh(geo, mat);
+      m.userData.own = own;
+      m.matrixAutoUpdate = false; m.updateMatrix();
+      setLayersDeep(m, LAYER_NEAR, LAYER_MID);
+      this.group.add(m); b.meshes.push(m);
+      return m;
+    };
+    const t = tForPoint(b.pos.z, b.pos.x, b.pos.y, 0);
+    const sn = b.sn || (b.sn = sectionNormal(b.pos.z, t, 0));
+    const pin = sectionPoint(b.pos.z, t, HULL.inset);
+    const gap = Math.max(0.06, b.pos.clone().sub(pin).dot(sn));
+    const cIn = b.pos.clone().addScaledVector(sn, -gap);
+    // petals fold the way the projectile went, never back out of the wall
+    const travel = (b.dir || sn.clone().negate()).clone();
+    if (travel.dot(sn) > -0.45) travel.addScaledVector(sn, -(travel.dot(sn) + 0.45));
+    travel.normalize();
+    const R = b.r, K = b.innerK || 1.12;
+    add(petalGeometry({ c: b.pos, n: sn, R, seed: b.seed, travel, paint: 'outer', bend: 1.55 }), T.metal);
+    add(linerGeometry({ c: b.pos, n: sn, R, seed: b.seed, gap, innerK: K }), T.liner);
+    add(petalGeometry({ c: cIn, n: sn, R: R * K, seed: b.seed + 7.3, travel, paint: 'inner', bend: 1.3, lenK: 0.95 }), T.metal);
+    // severed cables hanging into the room out of the larger holes
+    if (R > 0.03 && !b.patched) {
+      for (const cb of cableCurves({ c: cIn, n: sn, R: R * K, seed: b.seed, count: R > 0.12 ? 4 : 2 })) {
+        let mat = T.cables.get(cb.color);
+        if (!mat) { mat = new THREE.MeshStandardMaterial({ color: cb.color, roughness: 0.55, metalness: 0.05 }); T.cables.set(cb.color, mat); }
+        add(cb.geo, mat);
+        const tipG = new THREE.CylinderGeometry(cb.rad * 0.55, cb.rad * 0.55, 0.035, 6);
+        tipG.rotateX(Math.PI / 2);
+        tipG.lookAt(cb.dir);
+        tipG.translate(cb.tip.x + cb.dir.x * 0.015, cb.tip.y + cb.dir.y * 0.015, cb.tip.z + cb.dir.z * 0.015);
+        add(tipG, T.copper);
+        b.cables.push({ tip: cb.tip.clone().addScaledVector(cb.dir, 0.03), dir: cb.dir.clone() });
+      }
     }
     if (b.patched) {
-      const t = tForPoint(b.pos.z, b.pos.x, b.pos.y, 0);
-      const pIn = sectionPoint(b.pos.z, t, HULL.inset - 0.012);
-      const nIn = sectionNormal(b.pos.z, t, HULL.inset);
-      const patch = new THREE.Mesh(new THREE.CylinderGeometry(b.r * 1.6 + 0.04, b.r * 1.6 + 0.04, 0.01, 18), M.steel);
-      patch.quaternion.setFromUnitVectors(V(0, 1, 0), nIn);
-      patch.position.copy(pIn);
-      patch.updateMatrix(); patch.matrixAutoUpdate = false;
-      setLayersDeep(patch, LAYER_NEAR);
-      this.group.add(patch);
-      b.meshes.push(patch);
+      // a plate bolted over the hole on the inside, bent to the wall, sealant all round
+      const { u, v } = holeFrame(sn);
+      const surf = (x, y) => {
+        const q = cIn.clone().addScaledVector(u, x).addScaledVector(v, y);
+        const tq = tForPoint(q.z, q.x, q.y, HULL.inset);
+        return sectionPoint(q.z, tq, HULL.inset + 0.012);
+      };
+      const size = R * K * 1.45 + 0.05;
+      const pp = patchPlate(surf, sn.clone().negate(), size, b.seed);
+      add(pp.plate, T.plate);
+      add(pp.bead, T.sealant);
+      const boltG = new THREE.CylinderGeometry(0.011, 0.012, 0.012, 6);
+      for (const bp of pp.bolts) {
+        const g = boltG.clone();
+        g.rotateX(Math.PI / 2);
+        g.lookAt(sn.clone().negate());
+        g.translate(bp.x - sn.x * 0.006, bp.y - sn.y * 0.006, bp.z - sn.z * 0.006);
+        add(g, T.bolt);
+      }
     }
+    b.rBuilt = b.r;
   }
 
   crackWindow(i, p, sev) {
@@ -329,6 +403,18 @@ export class Damage {
       if (c && !c.broken && c.sev < FIXABLE.crack) { c.patched = true; issue.state = 'patched'; return 'patched'; }
       return 'cannot';
     }
+    if (issue.kind === 'fracture') {
+      const f = issue.ref;
+      if (f.sev < FIXABLE.fracture) {
+        f.sealed = true;
+        if (f.leak) { g.lifeSupport.removeLeak(f.leak); f.leak = null; }
+        if (f.hiss) { g.audio.stopLoop(f.hiss); f.hiss = null; }
+        this._fractureMesh(f);
+        issue.state = 'patched';
+        return 'patched';
+      }
+      return 'cannot';
+    }
     if (issue.kind === 'pipe') {
       const s = issue.ref;
       if (s.leak < FIXABLE.pipe) {
@@ -369,6 +455,8 @@ export class Damage {
     this.cracks.forEach((c, i) => { if (c && c.leak) this.g.lifeSupport.removeLeak(c.leak); glassUniforms.uWinGone.value[i] = 0; });
     this.cracks = OPENINGS.map(() => null);
     this.dents = []; this.scorch = [];
+    for (const f of this.fractures) { if (f.leak) this.g.lifeSupport.removeLeak(f.leak); if (f.hiss) this.g.audio.stopLoop(f.hiss); }
+    this.fractures = [];
     for (const s of this.g.layout.pipes) { s.leak = 0; s.patched = false; s.issue = null; if (s.emitter) { this.g.fx.removeEmitter(s.emitter); s.emitter = null; } }
     for (const k of Object.keys(this.health)) this.health[k] = k === 'cameras' ? [1, 1, 1, 1, 1] : 1;
     this.issues = [];
@@ -388,6 +476,7 @@ export class Damage {
     for (const d of this.dents) x += d.depth * d.r * 2.2;
     for (const b of this.breaches) x += b.r * (b.patched ? 0.8 : 2.4);
     for (const c of this.cracks) if (c && c.broken) x += 0.12;
+    for (const f of this.fractures) x += f.sev * (f.sealed ? 0.008 : 0.03);
     return Math.max(0, 1 - x);
   }
 
@@ -419,11 +508,18 @@ export class Damage {
       this.crackWindow(i, o.center.clone().addScaledVector(o.u, (Math.random() - 0.5) * o.halfW), 0.15 + 0.5 * k * Math.random());
       return 'crack';
     }
+    // a fatigue crack in the wall, from a window corner or along the frames (or near the trouble)
+    if (Math.random() < 0.5) {
+      const sp = near && Math.random() < 0.5 ? { p: near.clone(), dir: null } : stressPoint(OPENINGS);
+      this.addFracture(sp.p, sp.dir, 0.04 + 0.25 * k * Math.random());
+      return 'fracture';
+    }
     // buckled plating: an inward dent in the hull, sometimes split open
     const z = near ? Math.max(-11, Math.min(9, near.z + (Math.random() - 0.5) * 2)) : -11 + Math.random() * 20;
     const t = Math.random() * Math.PI * 2;
     const p = sectionPoint(z, t, 0), n = sectionNormal(z, t, 0);
     this.addDent(p, n.clone().negate(), 0.25 + 0.4 * k, 0.02 + 0.05 * k);
+    if (Math.random() < 0.4) this.addFracture(p, null, 0.05 + 0.2 * k, 0.3 + 0.5 * k);
     if (Math.random() < 0.25 * k) {
       const zone = this.zoneForHullPoint(p);
       if (zone) this.addBreach(p, n, 0.004 + 0.02 * k * Math.random(), zone);
@@ -448,6 +544,7 @@ export class Damage {
       else if (it.kind === 'pipe') grow = 0.00003;
       else if (it.kind === 'equip') grow = 0.00002;
       else if (it.kind === 'window') grow = 0;
+      else if (it.kind === 'fracture') grow = 0.000016;
       // larger damage worsens faster (fatigue): the growth accelerates with severity
       const d = grow * stressMul * patchK * (0.4 + it.sev * 1.6) * dt;
       if (d <= 0) continue;
@@ -457,10 +554,25 @@ export class Damage {
         b.r = Math.min(0.6, b.r * (1 + d * 0.9));
         this._updateBreachLeak(b);
         it.repairable = b.r < FIXABLE.breach && !b.patched;
-        if (Math.random() < dt * 0.02) this._breachMeshes(b);
+        if (b.r > (b.rBuilt || 0) * 1.04) this._breachMeshes(b);
       } else if (it.kind === 'crack') {
         const c = this.cracks[it.ref.i];
         if (c && !c.broken) { c.sev = Math.min(2.2, c.sev + d * 1.6); it.repairable = c.sev < FIXABLE.crack && !c.patched; if (c.sev >= 2.0) this._breakWindow(it.ref.i); this.syncUniforms(); }
+      } else if (it.kind === 'fracture') {
+        const f = it.ref;
+        f.sev = it.sev;
+        it.repairable = f.sev < FIXABLE.fracture && !f.sealed;
+        if (f.sev - f.builtSev > 0.02) {
+          this._fractureMesh(f);
+          // the crack running on: a sharp tick in the wall
+          if (g.audio.ready && !this.catchingUp) g.audio._burst(f.paths[0][0].p, { dur: 0.06, freq: 1800 + Math.random() * 1500, q: 2, gain: 0.07, type: 'white', filter: 'bandpass' });
+        }
+        // once it goes right through the skin, air seeps out of it
+        if (!f.sealed && f.sev > 0.45) {
+          const area = (f.sev - 0.45) * (f.sev - 0.45) * 2e-4;
+          if (!f.leak) f.leak = g.lifeSupport.addLeak(f.zone, area, 'fracture');
+          else f.leak.area = area;
+        }
       } else if (it.kind === 'pipe') {
         const s = it.ref;
         s.leak = Math.min(1, s.leak + d);
@@ -472,6 +584,18 @@ export class Damage {
       }
       if (!it.worseNotified && it.sev > 0.6 && it.state !== 'fixed') { it.worseNotified = true; this.events.push({ type: 'worse', issue: it }); }
     }
+    // frost where the escaping air freezes round a hole; sparks from severed live cables
+    const BS = shipUniforms.uBreachS.value, lsp = g.lifeSupport;
+    this.breaches.forEach((b, i) => {
+      const venting = !b.patched && lsp.pressure(b.zone) > 3;
+      b.frost = Math.max(0, Math.min(1, (b.frost || 0) + dt * (venting ? 0.06 : -0.0012)));
+      if (i < MAX_BREACH) BS[i].x = b.frost;
+      if (b.cables && b.cables.length && !b.patched && (g.systems.power ?? 1) > 0.3 && Math.random() < dt * 0.18) {
+        const c = b.cables[Math.floor(Math.random() * b.cables.length)];
+        if (g.fx) g.fx.burst('spark', c.tip, c.dir, 5 + Math.floor(Math.random() * 14), { speed: 1.3 });
+        if (g.audio.ready) g.audio._burst(c.tip, { dur: 0.09 + Math.random() * 0.1, freq: 3400, q: 0.7, gain: 0.05, type: 'white', filter: 'highpass' });
+      }
+    });
     // metal fatigue: open holes and a weakened frame keep working the structure; it spreads as new
     // cracks, leaks and buckled plates, and accelerates once the hull is badly weakened
     let open = 0;
@@ -529,12 +653,16 @@ export class Damage {
       if (d) { D[i].set(d.pos.x, d.pos.y, d.pos.z, d.r); DD[i].set(d.dir.x, d.dir.y, d.dir.z, d.depth); }
       else { D[i].set(0, 0, 0, 0); DD[i].set(0, 0, 0, 0); }
     }
-    const B = shipUniforms.uBreach.value;
+    const B = shipUniforms.uBreach.value, BN = shipUniforms.uBreachN.value, BS = shipUniforms.uBreachS.value;
     for (let i = 0; i < MAX_BREACH; i++) {
       const b = this.breaches[i];
-      if (b && !b.patched) B[i].set(b.pos.x, b.pos.y, b.pos.z, b.r);
-      else if (b && b.patched) B[i].set(b.pos.x, b.pos.y, b.pos.z, b.r); // hole stays, patch covers it inside
-      else B[i].set(0, 0, 0, 0);
+      // (a patched hole stays open in the wall: the plate covers it from the inside)
+      if (b) {
+        B[i].set(b.pos.x, b.pos.y, b.pos.z, b.r);
+        const sn = b.sn || b.n;
+        BN[i].set(sn.x, sn.y, sn.z, b.seed);
+        BS[i].set(b.frost || 0, b.innerK || 1.12, b.patched ? 1 : 0, 0);
+      } else B[i].set(0, 0, 0, 0);
     }
     const S = shipUniforms.uScorch.value;
     for (let i = 0; i < 8; i++) { const s = this.scorch[i]; if (s) S[i].set(s.pos.x, s.pos.y, s.pos.z, s.r); else S[i].set(0, 0, 0, 0); }
@@ -542,6 +670,22 @@ export class Damage {
     for (let i = 0; i < W.length; i++) {
       const c = this.cracks[i];
       if (c) W[i].set(c.u, c.v, c.sev, c.seed); else W[i].set(0, 0, 0, 0);
+      // the pane's own fracture network, repainted as its cracks creep on
+      if (c && !this.crackAtlas) {
+        this.crackAtlas = new CrackAtlas();
+        glassUniforms.tCracks.value = this.crackAtlas.tex;
+        glassUniforms.uWinTile.value = this.crackAtlas.uTile;
+      }
+      if (this.crackAtlas) {
+        const o = OPENINGS[i];
+        const grew = this.crackAtlas.update(i, c, o ? Math.max(o.halfW, o.halfH) + 0.03 : 1.4);
+        // a crack running on ticks
+        if (grew && this.g.audio.ready && !this.catchingUp) {
+          const p = o ? o.center : V(0, 1.6, -12.2);
+          this.g.audio._burst(p, { dur: 0.05, freq: 5200, q: 2.5, gain: 0.08, type: 'white', filter: 'bandpass' });
+          this.g.audio._burst(p, { dur: 0.12, freq: 2400, q: 1.2, gain: 0.05, type: 'white', filter: 'bandpass', attack: 0.02 });
+        }
+      }
     }
   }
 
@@ -549,6 +693,7 @@ export class Damage {
     return {
       dents: this.dents.map((d) => ({ p: d.pos.toArray(), d: d.dir.toArray(), r: d.r, depth: d.depth })),
       breaches: this.breaches.map((b) => ({ p: b.pos.toArray(), n: b.n.toArray(), r: b.r, zone: b.zone, patched: b.patched, seed: b.seed })),
+      fractures: this.fractures.map((f) => ({ p: f.p0.toArray(), d: f.dir ? f.dir.toArray() : null, len: f.len, seed: f.seed, sev: f.sev, sealed: f.sealed })),
       cracks: this.cracks.map((c) => c ? { u: c.u, v: c.v, sev: c.sev, seed: c.seed, patched: c.patched, broken: !!c.broken } : null),
       scorch: this.scorch.map((s) => ({ p: s.pos.toArray(), r: s.r })),
       health: this.health, coolant: this.coolant ?? 1, fatigue: this.fatigue || 0,
@@ -574,6 +719,10 @@ export class Damage {
       this.cracks[i].issue = this.addIssue({ kind: 'crack', ref: { i }, zone: OPENINGS[i] ? OPENINGS[i].room : 'cockpit', pos: OPENINGS[i] ? OPENINGS[i].center.clone() : V(0, 1.6, -12), sev: c.sev / 2, repairable: true, name: '窓のひび', state: c.patched ? 'patched' : 'active' });
       if (c.broken) this._breakWindow(i);
     });
+    for (const x of d.fractures || []) {
+      const f = this.addFracture(V(...x.p), x.d ? V(...x.d) : null, x.sev, x.len, x.seed, true);
+      if (x.sealed) { f.sealed = true; f.issue.state = 'patched'; this._fractureMesh(f); }
+    }
     for (const p of d.pipes || []) {
       const s = this.g.layout.pipes.find((x) => x.id === p.id);
       if (!s) continue;

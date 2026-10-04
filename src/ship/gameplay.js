@@ -438,7 +438,7 @@ export class Gameplay {
     if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); return; }
     if (it.state !== 'active') { g.asphalt.say('repair_patch', {}, { minGap: 15 }); return; }
     if (!it.repairable) { g.asphalt.say('repair_cannot', {}, { minGap: 20 }); return; }
-    const need = it.kind === 'pipe' ? 'clamps' : it.kind === 'breach' ? 'patches' : it.kind === 'crack' ? 'sealant' : 'parts';
+    const need = it.kind === 'pipe' ? 'clamps' : it.kind === 'breach' ? 'patches' : it.kind === 'crack' || it.kind === 'fracture' ? 'sealant' : 'parts';
     if (this.kit[need] <= 0) { g.asphalt.say('kit_empty', {}, { minGap: 15 }); return; }
     this.repairing = { it, t: 0, dur: it.kind === 'equip' ? 7 : 4.5, need, pos: it.pos.clone() };
   }
@@ -497,6 +497,10 @@ export class Gameplay {
       } else if (e.type === 'buckle') {
         this.raise(0.5);
         g.asphalt.say('buckle', {}, { minGap: 30 });
+      } else if (e.type === 'fracture') {
+        this.raise(0.35);
+        g.audio.creak(e.pos, 0.5);
+        g.asphalt.say('fracture', { zone: ZONES[e.zone] ? ZONES[e.zone].name : '船内' }, { minGap: 45 });
       } else if (e.type === 'worse') {
         this.raise(0.5);
         g.asphalt.say('worse', { what: e.issue.name }, { minGap: 30 });
@@ -690,7 +694,7 @@ export class Gameplay {
     const g = this.g;
     const what = g.damage.spawnFatigueDamage(null, Math.min(1, k));
     g.damage.fatigue = (g.damage.fatigue || 0) + 0.002 + 0.01 * k;
-    const names = { pipe: '配管', equip: '機器', crack: '窓', buckle: '外板' };
+    const names = { pipe: '配管', equip: '機器', crack: '窓', buckle: '外板', fracture: '壁' };
     this.raise(0.45);   // wakes a sleeping pilot too
     setTimeout(() => g.asphalt.say('ultra_damage', { what: names[what] || '船体' }, { minGap: 20 }), 1800);
   }
