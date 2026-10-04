@@ -514,6 +514,7 @@ export class Gameplay {
         g.phys.kick(V(0, 0, 0.6 + c.air), 0.6, null, 0.15 + 0.4 * c.air);
         if (Math.random() < 0.05 + 0.45 * c.air + 0.5 * c.wear) this.ultraDamage(0.4 + c.air + c.wear);
         if (c.air > 0.15) setTimeout(() => g.asphalt.say('ultra_air', {}, { force: true }), 2600);
+        else if (this.ultraCutInteg !== undefined) setTimeout(() => g.asphalt.say('ultra_risky', {}, { force: true }), 2600);
       } else if (e === 'ultra_off') g.asphalt.say('ultra_off', {}, { force: true });
       else if (e === 'ultra_stage') { g.shake = Math.max(g.shake, 0.35); if (g.audio.ready) g.audio._burst(null, { dur: 0.6, freq: 90, q: 0.7, gain: 0.35, type: 'brown', filter: 'lowpass', direct: true }); }
       else if (e === 'ultra_denied') { g.asphalt.say('ultra_denied', {}, { force: true }); g.audio.denied(V(0, 0.8, -10.6)); }
@@ -656,9 +657,21 @@ export class Gameplay {
     const g = this.g, f = g.flight;
     if (!(f.ultra || f.ultraDown) || f.landed) { this.ultraHum = 0; return; }
     const c = this.ultraConditions();
-    const vib = 0.05 + 0.3 * c.vf * c.vf + 0.9 * c.air + 0.35 * c.wear * c.vf;
+    // safety interlock: Asphalt throttles the drive back once the frame starts giving way (the
+    // pilot may light it again — then it is on them; she steps in again if it gets worse)
+    const integ = g.damage.integrityNow ?? g.damage.integrity();
+    if (integ > 0.72) this.ultraCutInteg = undefined;
+    if (f.ultra && integ < 0.6 && (this.ultraCutInteg === undefined || integ < this.ultraCutInteg - 0.12)) {
+      this.ultraCutInteg = integ;
+      g.systems.toggleUltra();
+      g.asphalt.say('ultra_safety', { pct: Math.round(integ * 100) }, { force: true });
+      return;
+    }
+    const vib = 0.05 + 0.18 * c.vf * c.vf + 0.9 * c.air + 0.35 * c.wear * c.vf;
     g.shake = Math.max(g.shake, vib);
-    const rate = 0.004 + 0.022 * c.vf * c.vf + 0.3 * c.air + 0.04 * c.wear;
+    // in clean vacuum a hard shudder every few minutes at full drive; in air or with a worn
+    // frame far more often
+    const rate = 0.0008 + 0.0026 * c.vf * c.vf + 0.3 * c.air + 0.006 * c.wear;
     if (Math.random() < rate * dt) {
       g.shake = Math.max(g.shake, 1.2 + 1.5 * c.air + c.wear);
       if (g.audio.ready) g.audio._burst(null, { dur: 1.2, freq: 70, q: 0.6, gain: 0.45, type: 'brown', filter: 'lowpass', direct: true });
@@ -666,15 +679,17 @@ export class Gameplay {
       g.phys.kick(V((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 0.3), 0.5, null, 0.08);
       g.systems.flicker = 0.25; setTimeout(() => { g.systems.flicker = 0; }, 500);
       g.asphalt.say('ultra_shudder', {}, { minGap: 90 });
-      if (Math.random() < 0.15 + 0.6 * c.air + 0.55 * c.wear + 0.1 * c.vf) this.ultraDamage(0.3 + c.air + c.wear * 0.8);
+      // and now and then something gives (every few hours of clean full-drive flight)
+      if (Math.random() < 0.008 + 0.6 * c.air + 0.25 * c.wear + 0.012 * c.vf) this.ultraDamage(0.3 + c.air + c.wear * 0.6);
     }
   }
 
   ultraDamage(k) {
     const g = this.g;
     const what = g.damage.spawnFatigueDamage(null, Math.min(1, k));
-    g.damage.fatigue = (g.damage.fatigue || 0) + 0.004 + 0.02 * k;
+    g.damage.fatigue = (g.damage.fatigue || 0) + 0.002 + 0.01 * k;
     const names = { pipe: '配管', equip: '機器', crack: '窓', buckle: '外板' };
+    this.raise(0.45);   // wakes a sleeping pilot too
     setTimeout(() => g.asphalt.say('ultra_damage', { what: names[what] || '船体' }, { minGap: 20 }), 1800);
   }
 

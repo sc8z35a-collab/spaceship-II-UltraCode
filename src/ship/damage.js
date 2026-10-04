@@ -438,15 +438,15 @@ export class Damage {
     const f = g.flight;
     if (this.broken) return;
     // stress multiplier: ULTRA vibration, heating, high g
-    const stressMul = 1 + (f.ultra ? 2.0 + 2.0 * Math.min(1, Math.max(0, f.setSpeed) / 900) : 0) + Math.min(4, f.heatFlux / 5e4) + Math.min(3, f.properAcc.length() / 10);
+    const stressMul = 1 + (f.ultra ? 0.6 + 0.9 * Math.min(1, Math.max(0, f.setSpeed) / 900) : 0) + Math.min(4, f.heatFlux / 5e4) + Math.min(3, f.properAcc.length() / 10);
     for (const it of this.issues) {
       if (it.state === 'fixed') continue;
       const patchK = it.state === 'patched' ? 0.15 : 1;
       let grow = 0;
       if (it.kind === 'breach') grow = 0.00003;
-      else if (it.kind === 'crack') grow = 0.00008;
-      else if (it.kind === 'pipe') grow = 0.00006;
-      else if (it.kind === 'equip') grow = 0.00003;
+      else if (it.kind === 'crack') grow = 0.000011;
+      else if (it.kind === 'pipe') grow = 0.00003;
+      else if (it.kind === 'equip') grow = 0.00002;
       else if (it.kind === 'window') grow = 0;
       // larger damage worsens faster (fatigue): the growth accelerates with severity
       const d = grow * stressMul * patchK * (0.4 + it.sev * 1.6) * dt;
@@ -460,7 +460,7 @@ export class Damage {
         if (Math.random() < dt * 0.02) this._breachMeshes(b);
       } else if (it.kind === 'crack') {
         const c = this.cracks[it.ref.i];
-        if (c && !c.broken) { c.sev = Math.min(2.2, c.sev + d * 2); it.repairable = c.sev < FIXABLE.crack && !c.patched; if (c.sev >= 2.0) this._breakWindow(it.ref.i); this.syncUniforms(); }
+        if (c && !c.broken) { c.sev = Math.min(2.2, c.sev + d * 1.6); it.repairable = c.sev < FIXABLE.crack && !c.patched; if (c.sev >= 2.0) this._breakWindow(it.ref.i); this.syncUniforms(); }
       } else if (it.kind === 'pipe') {
         const s = it.ref;
         s.leak = Math.min(1, s.leak + d);
@@ -478,9 +478,9 @@ export class Damage {
     for (const b of this.breaches) if (!b.patched) open += b.r;
     const integ = this.integrity();
     const weak = Math.max(0, 0.45 - integ);
-    const fRate = (open * 0.12 + weak * 0.05 + (f.ultra ? 0.004 : 0)) * stressMul / 3600;
+    const fRate = (open * 0.12 + weak * 0.05 + (f.ultra ? 0.0008 : 0)) * stressMul / 3600;
     this.fatigue = (this.fatigue || 0) + fRate * dt;
-    this.spreadT = (this.spreadT ?? 600) - dt * (open * 6 + weak * 4 + (integ < 0.9 ? 0.15 : 0)) * stressMul;
+    this.spreadT = (this.spreadT ?? 600) - dt * (open * 2.5 + weak * 4 + Math.max(0, 0.8 - integ) * 0.5) * stressMul;
     if (this.spreadT <= 0) {
       this.spreadT = 600 + Math.random() * 900;
       const src = this.breaches.length ? this.breaches[Math.floor(Math.random() * this.breaches.length)].pos : null;

@@ -21,7 +21,13 @@ export class Autopilot {
     this.target = s;
     this.state = 'cruise';
     this.g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3() };
-    this.g.asphalt && this.g.asphalt.say('autopilot_on', { name: s.name });
+    const A = this.g.asphalt;
+    const st = s.dmg ? s.dmg.status : 'ok';
+    if (A) {
+      if (st === 'destroyed') A.say('ap_wreck', { name: s.name }, { force: true });
+      else if (st === 'failed') A.say('ap_dark', { name: s.name }, { force: true });
+      else A.say('autopilot_on', { name: s.name });
+    }
     return true;
   }
 
@@ -52,23 +58,11 @@ export class Autopilot {
     const a = f.ultra ? 2.2 : 0.55;   // braking profile (the ULTRA drive can shed speed much faster)
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
     let v, moveDir;
-    if (s.tether && dist >= 40000) {
-      // stations on the space elevator turn with the Earth: fly the great circle at constant
-      // altitude in the Earth-turning frame (the orbital speed is shed on the way)
-      this.state = 'cruise';
-      const up = f.pos.clone().normalize();
-      const tdir = s.pos.clone().normalize();
-      const hdir = tdir.clone().addScaledVector(up, -tdir.dot(up));
-      if (hdir.lengthSq() < 1e-12) hdir.set(0, 0, 0); else hdir.normalize();
-      const arc = Math.acos(Math.max(-1, Math.min(1, up.dot(tdir)))) * f.pos.length();
-      const dr = s.pos.length() - f.pos.length();
-      v = Math.min(vmax, Math.sqrt(2 * a * Math.max(0, arc - 30000)) + 20);
-      const base = new THREE.Vector3(OMEGA_EARTH * f.pos.z, 0, -OMEGA_EARTH * f.pos.x);
-      const close = hdir.clone().multiplyScalar(v).addScaledVector(up, Math.max(-25, Math.min(25, dr * 0.01)));
-      f.autopilot.vRel.copy(base).add(close).sub(vRefHere);
-      moveDir = close.clone().normalize();
-      this.eta = arc / Math.max(v, 1);
-    } else if (dist < 40000) {
+    const rShip = f.pos.length(), rTgt = s.pos.length();
+    // the straight line to the target: does it pass through (or skim) the planet?
+    const tc = -f.pos.dot(rel) / Math.max(1, rel.lengthSq());
+    const blocked = tc > 0 && f.pos.clone().addScaledVector(rel, Math.min(1, tc)).length() < R_EARTH + 3.0e5;
+    if (dist < 40000) {
       // close in: match the target's real motion and close straight in
       v = Math.min(vmax, Math.sqrt(Math.max(0, 2 * a * (dist - standoff))));
       if (this.state === 'hold' && dist < standoff + 300) v = 0;            // keep station (hysteresis)
@@ -77,30 +71,76 @@ export class Autopilot {
       f.autopilot.vRel.copy(s.vel).addScaledVector(dir, v).sub(vRefHere);
       moveDir = dir;
       this.eta = v > 0.5 ? (dist - standoff) / Math.max(v, 1) : 0;
-    } else {
-      // far: travel through the orbital field (around the planet, never through it) —
-      // close the phase gap along the orbit first, climb / descend with what is left of the
-      // speed budget, and ride at the target's angular rate so the gap does not drift
+    } else if (s.tether && rShip < rTgt * 1.5 + 2.0e6) {
+      // stations on the space elevator turn with the Earth: fly the great circle in the
+      // Earth-turning frame (the orbital speed is shed on the way). The climb / descent to the
+      // station's height (Amaterasu sits at GEO) shares the speed budget: a straight line in
+      // (ground track, radius), so the path never dips below the lower of the two heights
       this.state = 'cruise';
-      const r = f.pos.length();
-      const er = f.pos.clone().divideScalar(r);
-      const eh = f.hRef.clone().addScaledVector(er, -f.hRef.dot(er)).normalize();
-      const et = new THREE.Vector3().crossVectors(eh, er).normalize();
-      const rT = s.pos.length();
-      const tp = s.pos.clone().divideScalar(rT);
-      const dphi = Math.atan2(tp.dot(et), tp.dot(er));
-      const n = Math.sqrt(MU_EARTH / (r * r * r)), nT = Math.sqrt(MU_EARTH / (rT * rT * rT));
-      const arc = r * dphi, dr = rT - r, dz = s.pos.dot(eh);
-      const vt = Math.sign(arc) * Math.min(vmax, Math.sqrt(2 * a * Math.abs(arc)));
-      const budget = Math.sqrt(Math.max(0, vmax * vmax - vt * vt));
-      const lenRZ = Math.hypot(dr, dz);
-      const vrz = lenRZ > 1 ? Math.min(budget, Math.sqrt(2 * a * lenRZ)) : 0;
-      const close = et.clone().multiplyScalar(vt);
-      if (lenRZ > 1) close.addScaledVector(er, dr / lenRZ * vrz).addScaledVector(eh, dz / lenRZ * vrz);
-      f.autopilot.vRel.copy(close).addScaledVector(et, r * (nT - n));
-      v = close.length();
-      moveDir = v > 1e-3 ? close.clone().divideScalar(v) : dir;
-      this.eta = (Math.abs(arc) + lenRZ) / Math.max(vmax, 1);
+      const up = f.pos.clone().divideScalar(rShip);
+      const tdir = s.pos.clone().divideScalar(rTgt);
+      const hdir = tdir.clone().addScaledVector(up, -tdir.dot(up));
+      if (hdir.lengthSq() < 1e-12) hdir.set(0, 0, 0); else hdir.normalize();
+      const arc = Math.acos(Math.max(-1, Math.min(1, up.dot(tdir)))) * rShip;
+      const dr = rTgt - rShip;
+      const len = Math.max(1, Math.hypot(arc, dr));
+      v = Math.min(vmax, Math.sqrt(2 * a * Math.max(0, len - standoff)) + 5);
+      const base = new THREE.Vector3(OMEGA_EARTH * f.pos.z, 0, -OMEGA_EARTH * f.pos.x);
+      const close = hdir.multiplyScalar(v * arc / len).addScaledVector(up, v * dr / len);
+      f.autopilot.vRel.copy(base).add(close).sub(vRefHere);
+      moveDir = close.clone().normalize();
+      this.eta = len / Math.max(v, 1);
+    } else if (!s.tether && rTgt > 3 * R_EARTH) {
+      // a high target (the dock out at the Moon's distance): fly straight at it while matching
+      // its motion. From low down, climb out first (in the local orbit), and keep climbing
+      // while the course we would fly — the target's motion plus the approach — would bring
+      // the planet close before we get there
+      this.state = 'cruise';
+      v = Math.min(vmax, Math.sqrt(2 * a * Math.max(0, dist - standoff)) + 5);
+      const u = s.vel.clone().addScaledVector(dir, v);
+      const tu = Math.min(dist / Math.max(v, 1), -f.pos.dot(u) / Math.max(1, u.lengthSq()));
+      const dips = tu > 0 && f.pos.clone().addScaledVector(u, tu).length() < R_EARTH + 1.5e6;
+      const climb = rShip < 2.5 * R_EARTH || dips || blocked;
+      moveDir = climb ? f.pos.clone().normalize() : dir;
+      if (climb) f.autopilot.vRel.copy(moveDir).multiplyScalar(v);
+      else f.autopilot.vRel.copy(u).sub(vRefHere);
+      this.eta = dist / Math.max(v, 1) + (climb ? 1800 : 0);
+    } else if (rShip > rTgt * 1.5 + 2.0e6) {
+      // far above a low target: descend first — down there the orbit is short and the phase
+      // gap is closed cheaply (an elevator station is then reached on the Earth-turning leg)
+      this.state = 'cruise';
+      moveDir = f.pos.clone().normalize().negate();
+      v = Math.min(vmax, Math.sqrt(2 * a * (rShip - rTgt)) + 5);
+      f.autopilot.vRel.copy(moveDir).multiplyScalar(v);
+      this.eta = (rShip - rTgt) / Math.max(v, 1) + 3 * 3600;
+    } else {
+      // comparable heights: travel around the planet (never through it) in the target's own
+      // orbital plane — the phase gap, the climb / descent and the way back into that plane
+      // share the speed budget (a straight line in (phase, radius, plane), never below the
+      // lower of the two radii), riding at the target's angular rate so the gap does not drift
+      // (the ride is capped: it is held against the local orbit)
+      this.state = 'cruise';
+      const hT = new THREE.Vector3().crossVectors(s.pos, s.vel).normalize();
+      const z = f.pos.dot(hT);
+      const pp = f.pos.clone().addScaledVector(hT, -z);
+      const rp = Math.max(1, pp.length());
+      const erp = pp.divideScalar(rp);
+      const et = new THREE.Vector3().crossVectors(hT, erp).normalize();
+      const er = f.pos.clone().divideScalar(rShip);
+      const tp = s.pos.clone().divideScalar(rTgt);
+      const dphi = Math.atan2(tp.dot(et), tp.dot(erp));
+      const nT = Math.sqrt(MU_EARTH / (rTgt * rTgt * rTgt));
+      const arc = rp * dphi, dr = rTgt - rShip, dz = -z;
+      const len = Math.max(1, Math.hypot(arc, dr, dz));
+      v = Math.min(vmax, Math.sqrt(2 * a * Math.max(0, len - standoff)) + 5);
+      const close = et.clone().multiplyScalar(v * arc / len).addScaledVector(er, v * dr / len).addScaledVector(hT, v * dz / len);
+      // inertial velocity that keeps the phase with the target, relative to the local field
+      const ride = et.clone().multiplyScalar(rp * nT).sub(vRefHere);
+      const rideMax = Math.max(2500, 3 * vmax);
+      if (ride.length() > rideMax) ride.setLength(rideMax);
+      f.autopilot.vRel.copy(close).add(ride);
+      moveDir = close.clone().divideScalar(Math.max(v, 1e-6));
+      this.eta = len / Math.max(v, 1);
     }
     f.autopilot.aff = null;
     // attitude: nose along the direction of travel (or hold when stationary)
