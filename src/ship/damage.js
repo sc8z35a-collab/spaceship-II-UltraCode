@@ -487,7 +487,7 @@ export class Damage {
       this.spawnFatigueDamage(src, Math.min(1, 0.3 + weak * 1.5));
     }
     this.integrityNow = integ;
-    if (integ <= 0 && !this.broken && g.gameplay) { this.broken = true; g.gameplay.breakup('structure'); return; }
+    if (integ <= 0 && !this.broken && !this.catchingUp && g.gameplay) { this.broken = true; g.gameplay.breakup('structure'); return; }
     // effects of pipe leaks on systems
     let coolantLoss = 0, waterLoss = 0, airLoss = 0, o2Loss = 0, n2Loss = 0, rcsLoss = 0;
     for (const s of g.layout.pipes) {

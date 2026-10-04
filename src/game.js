@@ -32,6 +32,7 @@ import { SaveSystem } from './ship/save.js';
 import { Gameplay } from './ship/gameplay.js';
 import { createLooseProps } from './ship/loose.js';
 import { Breakup } from './ship/breakup.js';
+import { WorldDamage } from './world/worldDamage.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -110,6 +111,7 @@ export class Game {
     await this.systems.init(P);
     this.loose = createLooseProps(this);
     this.breakup = new Breakup(this);
+    this.worldDamage = new WorldDamage(this);
     this.hud = new Hud(this);
     this.initWorldState();
     P(0.6);
@@ -249,6 +251,7 @@ export class Game {
     }
     this.systems.update(sdt, inp);
     this.breakup.update(Math.min(sdt, 0.1));
+    this.worldDamage.update(sdt);
     this.save.update(dt);
     this.hud.update(dt);
   }
@@ -329,6 +332,7 @@ export class Game {
     this.stations.update(this.time, f.pos, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
     this.elevator.update(this.time, f.pos, this.camWorld, this.space.sunDir, dt);
+    if (this.worldDamage) this.worldDamage.updateVisual(dt);
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
       const ls = this.lifeSupport;

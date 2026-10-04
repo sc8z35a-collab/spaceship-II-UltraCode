@@ -37,6 +37,7 @@ export class SaveSystem {
       dock: g.docking ? g.docking.serialize() : null,
       sys: g.systems.serializeState(),
       ast: { timer: g.asteroids.timer, micro: g.asteroids.microTimer },
+      world: g.worldDamage ? g.worldDamage.serialize() : null,
       dead: g.player.state === 'dead',
     };
     return d;
@@ -77,6 +78,7 @@ export class SaveSystem {
     if (p.seat) { const seat = g.layout.seats.find((s) => s.id === p.seat); if (seat) g.systems.sit(seat); }
     g.systems.restoreState(d.sys || {});
     if (d.ast) { g.asteroids.timer = d.ast.timer; g.asteroids.microTimer = d.ast.micro; }
+    if (d.world && g.worldDamage) g.worldDamage.restore(d.world);
     // ---- the world did not stop: simulate the elapsed real time
     const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - d.wall) / 1000));
     this.offline = this.catchUp(gap, d.dock ? null : d.ap);
@@ -143,10 +145,12 @@ export class SaveSystem {
     const hits = Math.min(3, Math.floor(gap / (14 * 3600) + Math.random() * (gap / (14 * 3600))));
     const when = Array.from({ length: hits }, () => Math.random() * gap).sort((a, b) => a - b);
     let el = 0;
+    g.damage.catchingUp = true;
     while (left > 0) {
       const h = Math.min(dt, left);
       ls._step(h);
       g.damage.update(h);
+      if (g.worldDamage) g.worldDamage.update(h);
       left -= h; el += h;
       while (when.length && when[0] <= el) {
         when.shift();
@@ -157,6 +161,9 @@ export class SaveSystem {
       for (const z of Object.values(ls.z)) if (z.leaks.length && z.p < 80) ls.lockdown = true;
     }
     if (ls.lockdown) for (const d of Object.values(g.doors)) d.setTarget(0, true);
+    g.damage.catchingUp = false;
+    // while nobody was watching the hull held on - just: it comes back on the brink, not in pieces
+    if (g.damage.integrity() <= 0.02) g.damage.fatigue = Math.max(0, (g.damage.fatigue || 0) - (0.03 - g.damage.integrity()));
     g.damage.events.length = 0;
     g.systems.alarm.active = g.damage.issues.some((i) => i.state === 'active');
     return report;

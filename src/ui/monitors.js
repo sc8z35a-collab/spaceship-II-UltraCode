@@ -9,6 +9,7 @@ import { EXT_CAMS } from '../ship/systems.js';
 import { placeName } from './places.js';
 import { RANGES } from '../core/layers.js';
 import { passRange } from '../core/engine.js';
+import { STATUS_JP } from '../world/worldDamage.js';
 
 const SCREEN_VERT = /* glsl */`
 varying vec2 vUv;
@@ -312,8 +313,10 @@ export class Monitors {
       const [x, y] = proj(s.pos);
       if (Math.hypot(x - cx, y - cy) > 140) continue;
       const sel = this.selDest === s.id;
-      K.circle(x, y, sel ? 4 : 3, { fill: s.kind === 'dock' ? COL.amber : COL.green, stroke: null });
-      K.text(s.en, x + 6, y - 4, { size: 8, color: sel ? COL.amber : COL.dim });
+      const sst = s.dmg ? s.dmg.status : 'ok';
+      const dot = sst === 'destroyed' || sst === 'failed' ? COL.dim : sst === 'critical' ? COL.red : sst === 'damaged' ? COL.amber : s.kind === 'dock' ? COL.amber : COL.green;
+      K.circle(x, y, sel ? 4 : 3, { fill: dot, stroke: null });
+      K.text(s.en + (sst === 'destroyed' ? ' ×' : ''), x + 6, y - 4, { size: 8, color: sel ? COL.amber : COL.dim });
     }
     // relays (dots)
     if (zoom === 0) for (let i = 0; i < st.relays.length; i += 7) { const [x, y] = proj(st.relays[i].pos); if (Math.hypot(x - cx, y - cy) < R0 + 15) K.circle(x, y, 0.6, { fill: 'rgba(160,200,255,0.4)', stroke: null }); }
@@ -328,6 +331,10 @@ export class Monitors {
       K.circle(x, y, 3, { fill: COL.red, stroke: null });
     }
     K.button(12, H - 26, 70, 20, ['近傍', '静止軌道', '月軌道'][zoom], () => { m.zoom = ((m.zoom || 0) + 1) % 3; }, { size: 10 });
+    {
+      const es = g.elevator.dmg ? g.elevator.dmg.status : 'ok';
+      K.text('宇宙エレベーター：' + STATUS_JP[es], 12, H - 34, { size: 9, color: es === 'ok' ? COL.dim : es === 'damaged' ? COL.amber : COL.red });
+    }
     // right column
     const X = 300;
     K.rect(X, 34, 202, 74, { fill: COL.bg2, r: 8 });
@@ -361,7 +368,17 @@ export class Monitors {
       const lbl = s.name.replace('（修理基地）', '');
       const dd = d < 1e5 ? (d / 1000).toFixed(0) + ' km' : (d / 1000 / 1000).toFixed(1) + ' 千km';
       K.rect(X, y, 202, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
-      K.text(lbl, X + 8, y + 14, { size: 10, color: s.kind === 'dock' ? COL.amber : COL.text });
+      const sst = s.dmg ? s.dmg.status : 'ok';
+      const sc = { ok: s.kind === 'dock' ? COL.amber : COL.text, damaged: COL.amber, critical: COL.red, failed: COL.dim, destroyed: COL.dim }[sst];
+      if (sst === 'ok') K.text(lbl, X + 8, y + 14, { size: 10, color: sc });
+      else {
+        // short name + status pill, so the distance still fits
+        const short = lbl.split(/[・ ]/)[0];
+        K.text(short, X + 8, y + 14, { size: 10, color: sc });
+        const px = X + 14 + short.length * 10;
+        K.rect(px, y + 4, 46, 13, { fill: sst === 'critical' ? 'rgba(255,77,61,0.25)' : sst === 'damaged' ? 'rgba(255,176,59,0.2)' : 'rgba(120,130,140,0.2)', stroke: sc, r: 3 });
+        K.text(STATUS_JP[sst], px + 23, y + 14, { size: 8, color: sc, align: 'center', weight: 700 });
+      }
       K.text(dd, X + 196, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
       K.buttons.push({ x: X, y, w: 202, h: 20, onTap: () => { this.selDest = s.id; } });
       y += 23;

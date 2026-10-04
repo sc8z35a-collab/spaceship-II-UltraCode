@@ -417,10 +417,20 @@ export class Stations {
       const r = R_EARTH + d.alt;
       return { ...d, r, n: Math.sqrt(MU_EARTH / (r * r * r)), phi0: d.phase * Math.PI / 180, pos: new THREE.Vector3(), vel: new THREE.Vector3(), model: null };
     });
+    // every station gets its own copies of the light materials, so a damaged one can go dark
+    const LIGHTS = ['windowLit', 'lobbyGlow', 'cyanGlow', 'garden', 'gardenLamp', 'flood', 'strobe', 'navR', 'navG'];
     for (const s of this.list) {
       s.model = s.kind === 'hub' ? hubModel(s, M) : stationModel(s, M);
       s.model.matrixAutoUpdate = false;
       s.model.visible = false;
+      s.lm = {};
+      s.model.traverse((o) => {
+        if (!o.isMesh) return;
+        for (const k of LIGHTS) if (o.material === this.SM[k]) {
+          if (!s.lm[k]) { s.lm[k] = this.SM[k].clone(); s.lm[k].userData.base = this.SM[k].emissiveIntensity; }
+          o.material = s.lm[k];
+        }
+      });
       setLayersDeep(s.model, LAYER_MID);
       this.scene.add(s.model);
     }
@@ -571,15 +581,20 @@ export class Stations {
         const shell = s.model.userData.lobbyShell;
         if (shell) shell.visible = this.shellHiddenFor !== s.id;
         const ring = s.model.userData.ring;
-        if (ring) { ring.rotation.z += dt * 0.12; ring.updateMatrix(); }
+        // a crippled station's habitat ring spins down
+        const ringTarget = !s.dmg || s.dmg.status === 'ok' || s.dmg.status === 'damaged' ? 1 : 0;
+        s.ringK = (s.ringK ?? 1) + (ringTarget - (s.ringK ?? 1)) * Math.min(1, dt * 0.05);
+        if (ring) { ring.rotation.z += dt * 0.12 * s.ringK; ring.updateMatrix(); }
         s.model.updateMatrixWorld(true);
         const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });
       }
     }
-    // beacons + strobes (double flash every 1.6 s)
+    // beacons + strobes (double flash every 1.6 s); a wrecked station shows none
     for (let i = 0; i < this.list.length; i++) {
-      const rel = this.list[i].pos.clone().sub(origin);
+      const st = this.list[i];
+      const gone = st.dmg && (st.dmg.status === 'destroyed' || st.dmg.status === 'failed');
+      const rel = gone ? new THREE.Vector3(1e15, 0, 0) : st.pos.clone().sub(origin);
       this.stPos.set([rel.x, rel.y, rel.z], i * 6);
       this.stPos.set([rel.x, rel.y + 3, rel.z], i * 6 + 3);
     }
@@ -590,7 +605,24 @@ export class Stations {
     // (kept moderate: at 40x the strobes of the station next door bloomed over the whole view and
     // the picture flickered every 1.6 s)
     const blink = (c) => Math.max(0, 1 - Math.abs(ph - c) / 0.025);
-    this.SM.strobe.emissiveIntensity = 4 * Math.max(blink(0.025), blink(0.185));
+    const strobe = 4 * Math.max(blink(0.025), blink(0.185));
+    this.SM.strobe.emissiveIntensity = strobe;
+    // per station: lights dim with damage, warning strobes turn red and fast when in danger
+    const tsec = t / 1000;
+    for (const st of this.list) {
+      if (!st.model.visible || !st.lm) continue;
+      const D = st.dmg, stt = D ? D.status : 'ok';
+      let lk = stt === 'ok' ? 1 : stt === 'damaged' ? 0.6 : stt === 'critical' ? 0.3 : 0;
+      if (stt === 'critical' && Math.sin(tsec * 23 + st.r) > 0.6) lk *= 0.2;   // failing circuits stutter
+      for (const [k, m] of Object.entries(st.lm)) if (k !== 'strobe') m.emissiveIntensity = m.userData.base * lk;
+      const sm = st.lm.strobe;
+      if (sm) {
+        const danger = stt === 'damaged' || stt === 'critical';
+        sm.emissive.setRGB(1, danger ? 0.08 : 1, danger ? 0.04 : 1);
+        const fast = ((tsec * 2.2) % 1) < 0.18 ? 6 : 0;
+        sm.emissiveIntensity = stt === 'failed' || stt === 'destroyed' ? 0 : danger ? fast : strobe;
+      }
+    }
     // relays
     let k = 0;
     const near = [];

@@ -78,9 +78,10 @@ export class Docking {
   /** hub station close enough to start a docking */
   candidate() {
     const g = this.g, ap = g.autopilot;
-    if (ap.state === 'hold' && ap.target && ap.target.kind === 'hub' && ap.dist < 3000) return ap.target;
+    const open = (s) => !s.dmg || (s.dmg.status !== 'failed' && s.dmg.status !== 'destroyed');
+    if (ap.state === 'hold' && ap.target && ap.target.kind === 'hub' && ap.dist < 3000 && open(ap.target)) return ap.target;
     let best = null;
-    for (const s of g.stations.list) if (s.kind === 'hub' && s.dist < 2000 && (!best || s.dist < best.dist)) best = s;
+    for (const s of g.stations.list) if (s.kind === 'hub' && open(s) && s.dist < 2000 && (!best || s.dist < best.dist)) best = s;
     return best;
   }
 
@@ -164,6 +165,16 @@ export class Docking {
     this.wp = [{ p: V(DOCK_AT.x - 8, DOCK_AT.y, DOCK_AT.z), v: 0.8, tol: 0.5 }, { p: V(DOCK_AT.x - 90, DOCK_AT.y, DOCK_AT.z), v: 8, tol: 3, last: true }];
     g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null };
     g.asphalt.say('st_undock', { name: this.station.name }, { force: true });
+  }
+
+  /** the station gives way (wrecked): let go at once, no checks, drift clear */
+  forceRelease() {
+    const g = this.g;
+    this.despawn();
+    if (g.hatch.target > 0.5) g.hatch.target = 0;
+    this.state = 'leaving';
+    this.wp = [{ p: V(DOCK_AT.x - 60, DOCK_AT.y, DOCK_AT.z), v: 6, tol: 3, last: true }];
+    g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null };
   }
 
   // ------------------------------------------------------------------ docked state

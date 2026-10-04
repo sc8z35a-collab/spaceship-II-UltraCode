@@ -170,8 +170,11 @@ export class SpaceElevator {
     const camEci = camWorld.clone().add(origin);
     // ribbon geometry relative to the floating origin
     const N = this.N, h = this.h, seg = this.seg;
+    const D = this.dmg, st = D ? D.status : 'ok';
+    const gap = D && D.destroyed ? [D.breakH * 0.985, D.breakH * 1.015] : null;   // severed ribbon
     for (let k = 0; k < N; k++) {
-      const r0 = R_EARTH + h[k], r1 = R_EARTH + h[k + 1];
+      let r0 = R_EARTH + h[k], r1 = R_EARTH + h[k + 1];
+      if (gap && h[k + 1] > gap[0] && h[k] < gap[1]) r1 = r0;
       seg[k * 6] = ax.x * r0 - origin.x; seg[k * 6 + 1] = ax.y * r0 - origin.y; seg[k * 6 + 2] = ax.z * r0 - origin.z;
       seg[k * 6 + 3] = ax.x * r1 - origin.x; seg[k * 6 + 4] = ax.y * r1 - origin.y; seg[k * 6 + 5] = ax.z * r1 - origin.z;
     }
@@ -189,7 +192,7 @@ export class SpaceElevator {
       for (let k = 0; k <= N; k++) {
         const r = R_EARTH + h[k];
         const lit = !(sd * r < 0 && perp * r < R_EARTH);
-        const b = lit ? 1.6 * glint : 0.05;
+        const b = (lit ? 1.6 * glint : 0.05) * (gap && h[k] > gap[0] ? 0.3 : 1);
         const c0 = k < N ? k * 6 : -1, c1 = k > 0 ? (k - 1) * 6 + 3 : -1;
         for (const c of [c0, c1]) if (c >= 0) { col[c] = b * 0.92; col[c + 1] = b * 0.95; col[c + 2] = b; }
       }
@@ -198,7 +201,12 @@ export class SpaceElevator {
     const size = this.engine.renderer.getDrawingBufferSize(new THREE.Vector2());
     this.lineMat.resolution.set(size.x, size.y);
     // climbers move up to GEO and back down; beacons blink along the ribbon
-    const sec = t / 1000;
+    // the climbers run on their own clock: slower when the elevator is damaged, stopped when it fails
+    const sp = st === 'ok' ? 1 : st === 'damaged' ? 0.5 : st === 'critical' ? 0.12 : 0;
+    if (this.clock === undefined) this.clock = t;
+    this.clock += (t - (this.lastT ?? t)) * sp;
+    this.lastT = t;
+    const sec = this.clock / 1000;
     const H = ELEVATOR.geo;
     let nearest = null;
     for (let i = 0; i < this.climbers.length; i++) {
@@ -207,16 +215,19 @@ export class SpaceElevator {
       c.up = u < 0.5;
       c.h = H * (c.up ? 2 * u : 2 - 2 * u);
       const p = ax.clone().multiplyScalar(R_EARTH + c.h).sub(origin);
+      if (st === 'destroyed') p.set(1e15, 0, 0);
       this.ptPos.set([p.x, p.y, p.z], i * 3);
       const d = p.distanceTo(camWorld);
       if (!nearest || d < nearest.d) nearest = { d, p, c };
     }
     for (let j = 0; j < this.beaconH.length; j++) {
       const p = ax.clone().multiplyScalar(R_EARTH + this.beaconH[j]).sub(origin);
+      if (st === 'failed' || (gap && this.beaconH[j] > gap[0])) p.set(1e15, 0, 0);
       this.ptPos.set([p.x, p.y, p.z], (this.climbers.length + j) * 3);
     }
     this.points.geometry.attributes.position.needsUpdate = true;
-    this.ptMat.uniforms.uTime.value = sec % 10000;
+    // warning: beacons blink fast while the elevator is in trouble
+    this.ptMat.uniforms.uTime.value = (t / 1000 * (st === 'damaged' || st === 'critical' ? 4 : 1)) % 10000;
     this.ptMat.uniforms.uScale.value = this.engine.renderer.getPixelRatio();
     // 3D models when close
     const basis = (o, pos) => {
@@ -237,9 +248,9 @@ export class SpaceElevator {
     };
     place(this.anchor, ax.clone().multiplyScalar(R_EARTH).sub(origin), 120, 3.5e5);
     place(this.counter, ax.clone().multiplyScalar(R_EARTH + ELEVATOR.top).sub(origin), 260, 6e5);
-    if (nearest) {
+    if (nearest && st !== 'destroyed') {
       place(this.climber, nearest.p, 8, 4e4);
-      if (this.climber.visible) for (const r of this.climber.userData.rollers) r.m.rotation.x += dt * (nearest.c.up ? 1 : -1) * r.s * 100;
-    }
+      if (this.climber.visible) for (const r of this.climber.userData.rollers) r.m.rotation.x += dt * (nearest.c.up ? 1 : -1) * r.s * 100 * sp;
+    } else this.climber.visible = false;
   }
 }
