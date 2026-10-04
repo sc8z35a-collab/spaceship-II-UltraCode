@@ -5,6 +5,7 @@ import { AtmosphereLUTs, cpuTransmittance } from './atmosphere.js';
 import { createTerrainMaterial } from './earth/terrainMaterial.js';
 import { EarthTerrain } from './earth/earthTerrain.js';
 import { EarthTiles } from './earth/earthTiles.js';
+import { HiresImagery } from './earth/hiresImagery.js';
 import { createClouds, CLOUD_ALT } from './earth/clouds.js';
 import { createSkyShell } from './earth/skyShell.js';
 import { createStars, createMilkyWay, createSun } from './sky.js';
@@ -36,7 +37,8 @@ export class Space {
     scene.add(this.earthGroup);
     this.tiles = new EarthTiles();
     this.tiles.renderer = engine.renderer;
-    this.terrainMat = createTerrainMaterial(earthAssets, this.atmo, this.shared, this.tiles);
+    this.hires = new HiresImagery(engine.renderer);
+    this.terrainMat = createTerrainMaterial(earthAssets, this.atmo, this.shared, this.tiles, this.hires);
     this.terrain = new EarthTerrain(earthAssets, this.terrainMat, this.earthGroup);
 
     this.clouds = createClouds(earthAssets, this.atmo, this.shared);
@@ -156,6 +158,7 @@ export class Space {
       this.camLat = Math.asin(ce.y / rr);
       this.camLon = Math.atan2(-ce.z, ce.x);
       this.tiles.update(this.camLat, this.camLon, dt, camAlt);
+      this.hires.update(this.camLat, this.camLon, camAlt, dt);
     }
 
     // clouds / sky shell positioned at the Earth centre (shaders do exact geometry)

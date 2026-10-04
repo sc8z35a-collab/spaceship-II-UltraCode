@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { NOISE_GLSL } from '../../shaders/noise.glsl.js';
 import { ATMO_GLSL } from '../atmosphere.js';
 import { TILE_GLSL } from './earthTiles.js';
+import { HIRES_GLSL } from './hiresImagery.js';
 
 export const EARTH_COMMON_GLSL = /* glsl */`
 uniform sampler2D tColor;
@@ -62,10 +63,11 @@ void main(){
 }
 `;
 
-const FRAG = NOISE_GLSL + ATMO_GLSL + EARTH_COMMON_GLSL + TILE_GLSL + /* glsl */`
+const FRAG = NOISE_GLSL + ATMO_GLSL + EARTH_COMMON_GLSL + TILE_GLSL + HIRES_GLSL + /* glsl */`
 uniform mat3 uEcefToWorld;
 uniform float uDetailAmt;
 uniform float uDebug;
+uniform float uHaze;
 uniform vec4 uMoonLight;
 varying vec3 vWorld;
 varying vec3 vNormalW;
@@ -93,8 +95,17 @@ void main(){
     vec3 g0 = max(mix(vec3(l0), albedo, 1.3), 0.0);
     g0 = pow(g0, vec3(1.08)) * 1.12;
     albedo = mix(albedo, g0, landK);
+  }
+  // real imagery streamed around the camera (Sentinel-2 cloudless, down to ~10 m per pixel)
+  float hiW;
+  vec3 hiC = hiresColor(d, albedo, hiW);
+  hiC = pow(max(hiC, 0.0), vec3(1.05)) * 0.96;
+  hiC = mix(vec3(dot(hiC, vec3(0.299, 0.587, 0.114))), hiC, 0.86);
+  albedo = mix(albedo, hiC, hiW);
+  float synth = 1.0 - hiW * 0.85;   // procedural texture only where the real imagery is missing
+  {
     // kilometre-scale texture from orbit: fields, forest, relief shading break up the soft tiles
-    float midF = smoothstep(2200000.0, 160000.0, vViewDist) * landK;
+    float midF = smoothstep(2200000.0, 160000.0, vViewDist) * landK * synth;
     if (midF > 0.001){
       float m1 = pfbm(vDetail, 1.0 / 14000.0, 3);
       float m2 = pfbm(vDetail, 1.0 / 2600.0, 2);
@@ -104,14 +115,14 @@ void main(){
     }
   }
   float near = smoothstep(9000.0, 1200.0, vViewDist);
-  float water = mix(col.a, vHW.y, near);
+  float water = mix(col.a, vHW.y, max(near, hiW));
   water = smoothstep(0.35, 0.65, water);
   vec3 n = normalize(vNormalW);
   vec3 up = normalize(uEcefToWorld * d);
   float hgt = vHW.x;
 
   // ---- procedural ground detail (close range) ----
-  float detailF = smoothstep(60000.0, 4000.0, vViewDist) * uDetailAmt;
+  float detailF = smoothstep(60000.0, 4000.0, vViewDist) * uDetailAmt * synth;
   if (detailF > 0.001 && water < 0.99){
     float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
     float n1 = pfbm(vDetail, 1.0 / 2048.0, 4);
@@ -205,13 +216,21 @@ void main(){
   // ---- aerial perspective ----
   vec3 ins, tr;
   aerialPerspective(roKm, pKm, ins, tr);
-  vec3 outc = radiance * tr + ins * 0.88;
+  // a clear day: the air between the camera and the ground below is cleaner than the standard
+  // model's haze, which washed the land out to a flat blue from a few kilometres up
+  float camAltKm = length(roKm) - Rg;
+  float hk = mix(0.3, 0.85, smoothstep(10.0, 250.0, camAltKm)) * uHaze;
+  tr = pow(tr, vec3(hk));
+  // low down the haze is mostly aerosol: greyer and whiter than the pure Rayleigh blue
+  float lowK = 1.0 - smoothstep(20.0, 120.0, camAltKm);
+  ins = mix(ins, vec3(dot(ins, vec3(0.3333))) * vec3(0.93, 1.0, 1.1), 0.4 * lowK);
+  vec3 outc = radiance * tr + ins * (0.88 * hk);
   if (uDebug > 0.5) outc = uDebug < 1.5 ? vec3(dat.g) : (uDebug < 2.5 ? vec3(night) : vec3(lights));
   gl_FragColor = vec4(outc, 1.0);
 }
 `;
 
-export function createTerrainMaterial(assets, atmo, shared, tiles) {
+export function createTerrainMaterial(assets, atmo, shared, tiles, hires) {
   const m = new THREE.ShaderMaterial({
     uniforms: {
       tColor: { value: assets.color },
@@ -227,7 +246,9 @@ export function createTerrainMaterial(assets, atmo, shared, tiles) {
       uTime: shared.uTime,
       uDetailAmt: { value: 1.0 },
       uDebug: { value: 0 },
+      uHaze: { value: 1 },
       ...tiles.uniforms,
+      ...hires.uniforms,
       uMoonLight: shared.uMoonLight,
       uMorph: { value: new THREE.Vector2(1e9, 2e9) },
       uDetailOffset: { value: new THREE.Vector3() },

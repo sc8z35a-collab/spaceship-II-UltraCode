@@ -1,16 +1,48 @@
 // Web worker: generates cube-sphere terrain patches with float64 precision.
 import { TerrainFn, faceToDir, nodeSize, EARTH_R, GRID_N, boundaryLoop } from './terrainFn.js';
+import { HiElev, zoomForLevel } from './hiresElevation.js';
 
 let fn = null;
+let hi = null;
+let hiOn = true;
 
-self.onmessage = (e) => {
+/** lat/lon box (radians) of a patch, padded a little so edge samples find their neighbours */
+function nodeBox(face, level, nx, ny) {
+  const span = 2 / Math.pow(2, level);
+  const u0 = -1 + nx * span, v0 = -1 + ny * span;
+  const t = [0, 0, 0];
+  faceToDir(face, u0 + span / 2, v0 + span / 2, t);
+  const lonC = Math.atan2(-t[2], t[0]);
+  let la0 = 9, la1 = -9, dl0 = 9, dl1 = -9;
+  for (let j = 0; j <= 2; j++) for (let i = 0; i <= 2; i++) {
+    faceToDir(face, u0 + span * i / 2, v0 + span * j / 2, t);
+    const lat = Math.asin(Math.max(-1, Math.min(1, t[1])));
+    let dl = Math.atan2(-t[2], t[0]) - lonC;
+    if (dl > Math.PI) dl -= 2 * Math.PI; else if (dl < -Math.PI) dl += 2 * Math.PI;
+    la0 = Math.min(la0, lat); la1 = Math.max(la1, lat); dl0 = Math.min(dl0, dl); dl1 = Math.max(dl1, dl);
+  }
+  const pl = (la1 - la0) * 0.06 + 2e-5, pn = (dl1 - dl0) * 0.06 + 2e-5;
+  return [la0 - pl, la1 + pl, lonC + dl0 - pn, lonC + dl1 + pn];
+}
+
+self.onmessage = async (e) => {
   const m = e.data;
   if (m.type === 'init') {
     fn = new TerrainFn(m.elev, m.water);
+    hi = new HiElev();
+    fn.hi = hi;
     self.postMessage({ type: 'ready' });
     return;
   }
+  if (m.type === 'hires') { hiOn = !!m.on; return; }
   if (m.type === 'build') {
+    // real elevation for this patch first (falls back to the global data when it cannot load)
+    const z = hiOn ? zoomForLevel(m.level) : -1;
+    if (z >= 0) {
+      const [a, b, c, d] = nodeBox(m.face, m.level, m.x, m.y);
+      try { await hi.ensure(z, a, b, c, d); } catch (err) { /* offline */ }
+    }
+    fn.hiZoom = z;
     const out = build(m.face, m.level, m.x, m.y);
     out.type = 'built';
     out.key = m.key;

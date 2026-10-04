@@ -8,9 +8,14 @@ const [,, stepsFile, outDir = '.', W = '960', H = '440', query = 'autostart=new&
 const BASE = process.env.BASE_URL || 'http://localhost:5173/';
 const steps = (await import(path.resolve(stepsFile))).default;
 fs.mkdirSync(outDir, { recursive: true });
+// outbound requests (map tiles) go through the session proxy; Chromium is told to trust the
+// proxy's CA key (the same CA every other tool here trusts), verification itself stays on
+const proxy = process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined;
+const spki = process.env.PROXY_CA_SPKI ? ['--ignore-certificate-errors-spki-list=' + process.env.PROXY_CA_SPKI] : [];
 const browser = await chromium.launch({
+  proxy,
   executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
-  args: ['--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'],
+  args: [...spki, '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'],
 });
 const page = await browser.newPage({ viewport: { width: +W, height: +H }, deviceScaleFactor: 1 });
 const logs = [];

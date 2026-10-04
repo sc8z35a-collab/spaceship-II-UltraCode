@@ -18,6 +18,10 @@ uniform float uSunAngRad;
 void main(){
   vec3 ro = cameraPosition * 0.001 - uEarthCenterKm;
   vec3 rd = normalize(vWorld - cameraPosition);
+  // rays that end on the ground get their air light from the terrain's own aerial perspective
+  // (drawing it here as well veiled the land in a double haze from orbit)
+  vec2 tg = raySphere(ro, rd, Rg);
+  if (tg.x > 0.0) discard;
   vec4 s = skyRadiance(ro, rd, 1e9);
   // sun disc seen through the atmosphere (space sun is drawn separately)
   vec3 col = s.rgb;

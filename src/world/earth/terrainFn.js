@@ -13,6 +13,8 @@ export class TerrainFn {
     this.n1 = new Simplex3(1337);
     this.n2 = new Simplex3(4242);
     this.n3 = new Simplex3(9001);
+    this.hi = null;      // HiElev (streamed real elevation), optional
+    this.hiZoom = -1;    // zoom to sample it at (-1: global data only)
   }
 
   _elevAt(ix, iy) {
@@ -60,10 +62,22 @@ export class TerrainFn {
     const lon = Math.atan2(-z, x);
     const fx = (lon / (2 * Math.PI) + 0.5) * DATA_W - 0.5;
     const fy = (0.5 - lat / Math.PI) * DATA_H - 0.5;
-    const h0 = this.elevation(fx, fy);
-    let w = this.waterFrac(fx, fy);
     // positions in metres for procedural noise (float64 precision)
     const px = x * EARTH_R, py = y * EARTH_R, pz = z * EARTH_R;
+    if (this.hi && this.hiZoom >= 0) {
+      // real terrain where the streamed elevation is loaded: sea at or below sea level, only a
+      // few metres of procedural texture below the data resolution
+      const hd = this.hi.sample(lat, lon, this.hiZoom);
+      if (hd === hd) {
+        if (hd <= 0.0) { if (out) out[0] = 1; return 0; }
+        let h = Math.max(hd, 0.8);
+        if (detail > 2) h += this.n3.fbm(px / 90, py / 90, pz / 90, 3) * 2.5 + this.n2.noise(px / 25, py / 25, pz / 25) * 0.8;
+        if (out) out[0] = 0;
+        return Math.max(h, 0.5);
+      }
+    }
+    const h0 = this.elevation(fx, fy);
+    let w = this.waterFrac(fx, fy);
     // fractal coastline
     if (w > 0.02 && w < 0.98 && detail > 0) {
       const c = this.n1.noise(px / 9000, py / 9000, pz / 9000) * 0.28

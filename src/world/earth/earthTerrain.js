@@ -3,6 +3,7 @@
 import * as THREE from 'three';
 import { GRID_N, boundaryLoop, faceToDir, nodeSize, EARTH_R, TerrainFn } from './terrainFn.js';
 import { assignLayers } from '../../core/layers.js';
+import { HiElev, HI_MAX_ZOOM } from './hiresElevation.js';
 
 const K_SPLIT = 4.2;
 const MAX_LEVEL = 17;
@@ -63,6 +64,10 @@ export class EarthTerrain {
     this.material = material;
     this.group = group;
     this.fn = new TerrainFn(assets.elevArr, assets.waterArr);
+    // the main thread samples the same streamed elevation for ground contact under the ship
+    this.fn.hi = new HiElev(40);
+    this.fn.hiZoom = HI_MAX_ZOOM;
+    this._hiT = 0;
     this.index = buildIndex(GRID_N);
     this.nodes = new Map();
     this.roots = [];
@@ -175,6 +180,15 @@ export class EarthTerrain {
   update(camEcef, earthGroupMatrixWorld, camWorld) {
     this.frame++;
     this._camEcef.copy(camEcef);
+    // keep the real elevation under the camera loaded (ground contact) while low
+    if (this.frame - this._hiT > 30 && this.fn.hiZoom >= 0) {
+      const r = camEcef.length();
+      if (r - EARTH_R < 40000) {
+        this._hiT = this.frame;
+        const lat = Math.asin(camEcef.y / r), lon = Math.atan2(-camEcef.z, camEcef.x), d = 0.0013;
+        this.fn.hi.ensure(HI_MAX_ZOOM, lat - d, lat + d, lon - d / Math.max(0.2, Math.cos(lat)), lon + d / Math.max(0.2, Math.cos(lat)));
+      }
+    }
     // periodic-noise detail origin snapped to a coarse grid
     this.detailOrigin.set(
       Math.round(camEcef.x / DETAIL_SNAP) * DETAIL_SNAP,
@@ -257,6 +271,12 @@ export class EarthTerrain {
     }
     n.state = 0; // a pending worker result for this node is ignored
     this.nodes.delete(n.key);
+  }
+
+  /** streamed real elevation on / off (offline play, data saving) */
+  setHiRes(on) {
+    this.fn.hiZoom = on ? HI_MAX_ZOOM : -1;
+    for (const w of this.workers) w.postMessage({ type: 'hires', on });
   }
 
   /** surface height (m) under an Earth-fixed unit direction */
