@@ -31,6 +31,7 @@ import { Particles } from './fx/particles.js';
 import { SaveSystem } from './ship/save.js';
 import { Gameplay } from './ship/gameplay.js';
 import { createLooseProps } from './ship/loose.js';
+import { Breakup } from './ship/breakup.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -108,6 +109,7 @@ export class Game {
     this.systems.add({ init: () => this.monitors.init(), update: (dt) => this.monitors.update(dt) });
     await this.systems.init(P);
     this.loose = createLooseProps(this);
+    this.breakup = new Breakup(this);
     this.hud = new Hud(this);
     this.initWorldState();
     P(0.6);
@@ -246,6 +248,7 @@ export class Game {
       if (!hit) this.systems.tapNothing(tap);
     }
     this.systems.update(sdt, inp);
+    this.breakup.update(Math.min(sdt, 0.1));
     this.save.update(dt);
     this.hud.update(dt);
   }
@@ -283,10 +286,12 @@ export class Game {
     // camera
     const pl = this.player;
     let eyeLocal, viewQ;
-    if (this.debugCam) {
-      // test hook: free camera in ship space { pos, look }
-      eyeLocal = this.debugCam.pos;
-      viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(this.debugCam.pos, this.debugCam.look, new THREE.Vector3(0, 1, 0)));
+    const wreck = this.breakup && this.breakup.camera();
+    if (this.debugCam || wreck) {
+      // test hook: free camera in ship space { pos, look } (also the view of a breaking ship)
+      const c = this.debugCam || wreck;
+      eyeLocal = c.pos;
+      viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
     } else if (this.mode === 'camera' && this.systems) {
       const c = this.systems.externalCamera(this.extCam);
       eyeLocal = c.pos; viewQ = c.quat;

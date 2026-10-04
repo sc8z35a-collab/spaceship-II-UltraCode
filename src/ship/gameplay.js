@@ -10,7 +10,7 @@ import { ENG_HATCH, LIFT } from './interior.js';
 import { RoundedBoxGeometry } from './geom.js';
 import { LAYER_NEAR, LAYER_MID, setLayersDeep } from '../core/layers.js';
 import { R_EARTH } from '../core/astro.js';
-import { HULL_BOTTOM } from './flight.js';
+import { HULL_BOTTOM, ULTRA_MAX } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -494,6 +494,9 @@ export class Gameplay {
         this.raise(0.5);
         g.asphalt.say('equip', { what: EQUIPMENT[e.k].name }, { minGap: 15 });
         if (e.k === 'comms') setTimeout(() => g.asphalt.say('comms_lost', {}, { minGap: 60 }), 3000);
+      } else if (e.type === 'buckle') {
+        this.raise(0.5);
+        g.asphalt.say('buckle', {}, { minGap: 30 });
       } else if (e.type === 'worse') {
         this.raise(0.5);
         g.asphalt.say('worse', { what: e.issue.name }, { minGap: 30 });
@@ -504,7 +507,13 @@ export class Gameplay {
       if (e === 'ultra_on') {
         g.asphalt.say('ultra_on', {}, { force: true });
         if (g.audio.ready) g.audio._burst(null, { dur: 2.5, freq: 120, q: 0.6, gain: 0.5, type: 'brown', filter: 'lowpass', sweep: 3, direct: true });
-        g.shake = Math.max(g.shake, 0.6);
+        // the drive kicks in hard: a jolt through the whole frame, and on a tired or damaged ship
+        // (or in the air) it can tear something loose
+        const c = this.ultraConditions();
+        g.shake = Math.max(g.shake, 1.0 + 1.6 * c.air + 0.8 * c.wear);
+        g.phys.kick(V(0, 0, 0.6 + c.air), 0.6, null, 0.15 + 0.4 * c.air);
+        if (Math.random() < 0.05 + 0.45 * c.air + 0.5 * c.wear) this.ultraDamage(0.4 + c.air + c.wear);
+        if (c.air > 0.15) setTimeout(() => g.asphalt.say('ultra_air', {}, { force: true }), 2600);
       } else if (e === 'ultra_off') g.asphalt.say('ultra_off', {}, { force: true });
       else if (e === 'ultra_stage') { g.shake = Math.max(g.shake, 0.35); if (g.audio.ready) g.audio._burst(null, { dur: 0.6, freq: 90, q: 0.7, gain: 0.35, type: 'brown', filter: 'lowpass', direct: true }); }
       else if (e === 'ultra_denied') { g.asphalt.say('ultra_denied', {}, { force: true }); g.audio.denied(V(0, 0.8, -10.6)); }
@@ -631,9 +640,93 @@ export class Gameplay {
     if (pl.health <= 0 && pl.state !== 'dead') this.die();
   }
 
+  // ================================================================== ULTRA stress
+  ultraConditions() {
+    const g = this.g, f = g.flight;
+    const integ = g.damage.integrityNow ?? g.damage.integrity();
+    return {
+      vf: Math.min(1, Math.max(0, f.setSpeed) / ULTRA_MAX),
+      air: Math.min(1, f.dynPressure / 1.5e4 + (f.alt < 100000 ? 0.15 : 0)),
+      wear: Math.min(1, (1 - integ) * 1.4 + (1 - f.engineHealth) * 0.6),
+    };
+  }
+
+  /** while the ULTRA drive runs the ship hums, shudders now and then, and something may give */
+  ultraStress(dt) {
+    const g = this.g, f = g.flight;
+    if (!(f.ultra || f.ultraDown) || f.landed) { this.ultraHum = 0; return; }
+    const c = this.ultraConditions();
+    const vib = 0.05 + 0.3 * c.vf * c.vf + 0.9 * c.air + 0.35 * c.wear * c.vf;
+    g.shake = Math.max(g.shake, vib);
+    const rate = 0.004 + 0.022 * c.vf * c.vf + 0.3 * c.air + 0.04 * c.wear;
+    if (Math.random() < rate * dt) {
+      g.shake = Math.max(g.shake, 1.2 + 1.5 * c.air + c.wear);
+      if (g.audio.ready) g.audio._burst(null, { dur: 1.2, freq: 70, q: 0.6, gain: 0.45, type: 'brown', filter: 'lowpass', direct: true });
+      g.audio.creak(V((Math.random() - 0.5) * 3, Math.random() * 2, -8 + Math.random() * 14), 0.6);
+      g.phys.kick(V((Math.random() - 0.5) * 0.4, (Math.random() - 0.5) * 0.4, 0.3), 0.5, null, 0.08);
+      g.systems.flicker = 0.25; setTimeout(() => { g.systems.flicker = 0; }, 500);
+      g.asphalt.say('ultra_shudder', {}, { minGap: 90 });
+      if (Math.random() < 0.15 + 0.6 * c.air + 0.55 * c.wear + 0.1 * c.vf) this.ultraDamage(0.3 + c.air + c.wear * 0.8);
+    }
+  }
+
+  ultraDamage(k) {
+    const g = this.g;
+    const what = g.damage.spawnFatigueDamage(null, Math.min(1, k));
+    g.damage.fatigue = (g.damage.fatigue || 0) + 0.004 + 0.02 * k;
+    const names = { pipe: '配管', equip: '機器', crack: '窓', buckle: '外板' };
+    setTimeout(() => g.asphalt.say('ultra_damage', { what: names[what] || '船体' }, { minGap: 20 }), 1800);
+  }
+
+  // ================================================================== danger level / red lamps
+  /** 0 ok, 1 caution, 2 danger, 3 critical: red lamps stay lit while > 0, the siren sounds for a
+   * while each time it gets worse */
+  updateDanger(dt) {
+    const g = this.g, dmg = g.damage, ls = g.lifeSupport;
+    const integ = dmg.integrityNow ?? dmg.integrity();
+    let lvl = 0;
+    const openHole = dmg.breaches.some((b) => !b.patched) || dmg.cracks.some((c) => c && c.broken);
+    if (integ < 0.8 || openHole || dmg.issues.some((i) => i.state === 'active' && i.sev > 0.5)) lvl = 1;
+    if (integ < 0.5 || (dmg.reactorTemp || 0) > 820 || ls.pressure(ls.zoneOfPlayer) < 70) lvl = 2;
+    if (integ < 0.22) lvl = 3;
+    // the station we are docked to (or right next to) in trouble
+    const st = g.docking && g.docking.station;
+    if (st && st.dmg && st.dmg.status !== 'ok' && g.docking.state !== 'free') lvl = Math.max(lvl, st.dmg.status === 'damaged' ? 1 : 2);
+    const prev = this.dangerLvl || 0;
+    if (lvl > prev) {
+      this.raise(0.45 + 0.2 * lvl);
+      const key = ['', 'danger1', 'danger2', 'danger3'][lvl];
+      setTimeout(() => g.asphalt.say(key, { pct: Math.round(integ * 100) }, { force: lvl >= 2, minGap: 60 }), 1200);
+    }
+    this.dangerLvl = lvl;
+    g.systems.danger = lvl;
+    // a badly weakened frame groans
+    if (integ < 0.4 && Math.random() < dt * (0.45 - integ) * 0.6) g.audio.creak(V((Math.random() - 0.5) * 3, Math.random() * 2.2, -9 + Math.random() * 16), 0.4 + Math.random() * 0.4);
+  }
+
+  // ================================================================== break-up
+  breakup(reason) {
+    const g = this.g;
+    if (this.brokenUp) return;
+    this.brokenUp = true;
+    g.damage.broken = true;
+    if (this.sleeping) { this.sleeping = false; g.timeScale = 1; }
+    if (g.focus) g.focus = null;
+    g.autopilot.disengage(true);
+    g.flight.ultra = false; g.flight.ultraDown = null;
+    g.player.state = 'dead';
+    g.mode = 'dead';
+    g.input.enabled = false;
+    g.breakup.start(reason);
+    g.asphalt.say('breakup', {}, { force: true });
+    g.audio.alarm(true);
+    setTimeout(() => { g.audio.alarm(false); this.die(); }, 9500);
+  }
+
   die() {
     const g = this.g;
-    if (g.player.state === 'dead') return;
+    if (this.gameOver) return;
+    this.gameOver = true;
     g.player.state = 'dead';
     g.mode = 'dead';
     g.input.enabled = false;
@@ -727,16 +820,8 @@ export class Gameplay {
     const lethal = water ? 90 : 60;
     if (speed > lethal) {
       // the ship breaks up on impact
-      g.shake = 3;
-      g.engine.grade.set('uFlash', 1.2);
-      g.audio.impact(V(0, -2, -4), 1);
       if (water) g.audio.splash(1.5);
-      for (let i = 0; i < 8; i++) {
-        const z = -11 + Math.random() * 18;
-        g.damage.impact(sectionPoint(z, -Math.PI / 2 + (Math.random() - 0.5) * 2.4, 0), V(0, 1, 0), 3e6);
-      }
-      g.player.health = 0;
-      setTimeout(() => this.die(), 300);
+      this.breakup('crash');
       return;
     }
     const sev = speed / lethal;
@@ -826,7 +911,7 @@ export class Gameplay {
       const z = -12 + Math.random() * 10;
       g.damage.impact(sectionPoint(z, Math.random() * Math.PI * 2, 0), travel.clone().negate(), 2.5e5);
     }
-    if (f.hullTemp > 2700 && g.player.state !== 'dead') { g.player.health = 0; this.die(); }
+    if (f.hullTemp > 2700 && g.player.state !== 'dead') this.breakup('heat');
     // wind in the atmosphere
     if (f.alt < 70000 && !f.landed) {
       const gain = Math.min(0.32, f.dynPressure / 15000);
@@ -997,6 +1082,8 @@ export class Gameplay {
     this.updateComms(dt);
     this.updateSleep();
     this.updateLoose(dt);
+    this.ultraStress(dt);
+    this.updateDanger(dt);
     const ls = g.lifeSupport;
     // door safety interlocks: no opening against a pressure difference
     for (const d of Object.values(g.doors)) {

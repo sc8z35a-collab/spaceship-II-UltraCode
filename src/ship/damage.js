@@ -1,6 +1,8 @@
 // Damage model: hull dents (exterior and interior walls deform), hull breaches with torn metal
-// and air leaks, cracked windows, pipe leaks, equipment faults. Damage worsens over time;
-// only small damage can be fixed on board — the rest waits for the repair dock.
+// and air leaks, cracked windows, pipe leaks, equipment faults. Damage worsens over time and
+// spreads (metal fatigue); only the very smallest damage can be fixed on board — everything else
+// stays and gets worse until the repair dock. A structural integrity figure sums it all up: when
+// it runs out (or one impact is simply too big) the hull breaks apart.
 import * as THREE from 'three';
 import { shipUniforms, MAX_DENTS, MAX_BREACH } from './materials.js';
 import { glassUniforms } from './glass.js';
@@ -9,6 +11,10 @@ import { PIPE_SYSTEMS } from './underfloor.js';
 import { setLayersDeep, LAYER_NEAR, LAYER_MID } from '../core/layers.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// what Kaito can still fix himself (anything bigger is beyond a repair kit)
+export const FIXABLE = { breach: 0.012, crack: 0.3, pipe: 0.15, equip: 0.12 };
+const BREAKUP_ENERGY = 6e7;   // J: a single impact that tears the ship apart outright
 
 export const EQUIPMENT = {
   servers: { name: 'サーバー', pos: V(-1.5, 1.0, 6.5), zone: 'eng' },
@@ -139,6 +145,9 @@ export class Damage {
     g.engine.grade.set('uFlash', Math.min(0.6, E / 3e6));
     this.events.push({ type: 'impact', E, breach: !!breach, zone, pos: pLocal.clone() });
     this.stress += E / 1e6;
+    this.fatigue = (this.fatigue || 0) + E / 4e8;
+    // far too much energy for the frame: the ship comes apart right away
+    if (E > BREAKUP_ENERGY && !this.broken && g.gameplay && !opts.noBreakup) { this.broken = true; setTimeout(() => g.gameplay.breakup('impact'), 60); }
     return { breach, zone };
   }
 
@@ -183,7 +192,7 @@ export class Damage {
     b.leak = this.g.lifeSupport.addLeak(zone, Math.PI * radius * radius, 'breach' + b.id);
     this._breachMeshes(b);
     this.breaches.push(b);
-    this.addIssue({ kind: 'breach', ref: b, zone, pos: b.pos.clone().addScaledVector(b.n, -0.3), sev: b.sev, repairable: radius < 0.03, name: '船体の穴' });
+    this.addIssue({ kind: 'breach', ref: b, zone, pos: b.pos.clone().addScaledVector(b.n, -0.3), sev: b.sev, repairable: radius < FIXABLE.breach, name: '船体の穴' });
     this.syncUniforms();
     // continuous venting effect
     if (this.g.fx) b.vent = this.g.fx.emitter('mist', b.pos.clone().addScaledVector(b.n, -0.25), b.n.clone(), 40, { speed: 3, spread: 0.4 });
@@ -235,8 +244,8 @@ export class Damage {
     const c = this.cracks[i] || { u, v, sev: 0, seed: Math.random() * 10, patched: false, glass: true };
     c.sev = Math.min(2.2, c.sev + sev);
     this.cracks[i] = c;
-    if (!c.issue) c.issue = this.addIssue({ kind: 'crack', ref: { i }, zone: o ? o.room : 'cockpit', pos: o ? o.center.clone().addScaledVector(o.normal, -0.35) : V(0, 1.6, -12), sev: c.sev / 2, repairable: true, name: '窓のひび' });
-    else c.issue.sev = c.sev / 2;
+    if (!c.issue) c.issue = this.addIssue({ kind: 'crack', ref: { i }, zone: o ? o.room : 'cockpit', pos: o ? o.center.clone().addScaledVector(o.normal, -0.35) : V(0, 1.6, -12), sev: c.sev / 2, repairable: c.sev < FIXABLE.crack, name: '窓のひび' });
+    else { c.issue.sev = c.sev / 2; c.issue.repairable = c.sev < FIXABLE.crack && !c.patched; }
     if (c.sev >= 2.0 && !c.broken) this._breakWindow(i);
     this.syncUniforms();
   }
@@ -265,8 +274,8 @@ export class Damage {
     const eq = EQUIPMENT[k];
     const ex = this.issues.find((i) => i.kind === 'equip' && i.ref.k === k && i.state === 'active');
     const sev = 1 - this.health[k];
-    if (ex) { ex.sev = sev; ex.repairable = sev < 0.35; }
-    else this.addIssue({ kind: 'equip', ref: { k }, zone: eq.zone, pos: eq.pos.clone(), sev, repairable: sev < 0.35 && !eq.ext, name: eq.name + 'の故障', ext: eq.ext });
+    if (ex) { ex.sev = sev; ex.repairable = sev < FIXABLE.equip && !eq.ext; }
+    else this.addIssue({ kind: 'equip', ref: { k }, zone: eq.zone, pos: eq.pos.clone(), sev, repairable: sev < FIXABLE.equip && !eq.ext, name: eq.name + 'の故障', ext: eq.ext });
     if (this.g.fx && !eq.ext) this.g.fx.burst('spark', eq.pos, V(0, 1, 0), 25, { speed: 2 });
     this.events.push({ type: 'equip', k, sev });
     // cameras near impact
@@ -279,7 +288,7 @@ export class Damage {
     const S = PIPE_SYSTEMS[seg.sys];
     if (!seg.issue) {
       seg.where = seg.mid.clone();
-      seg.issue = this.addIssue({ kind: 'pipe', ref: seg, zone: seg.mid.y < -0.1 ? 'under' : this.g.lifeSupport.zoneAt(seg.mid), pos: seg.mid.clone(), sev: seg.leak, repairable: seg.leak < 0.4, name: S.name + 'の配管漏れ' });
+      seg.issue = this.addIssue({ kind: 'pipe', ref: seg, zone: seg.mid.y < -0.1 ? 'under' : this.g.lifeSupport.zoneAt(seg.mid), pos: seg.mid.clone(), sev: seg.leak, repairable: seg.leak < FIXABLE.pipe, name: S.name + 'の配管漏れ' });
       const dir = new THREE.Vector3((Math.random() - 0.5), (Math.random() - 0.5), (Math.random() - 0.5)).normalize();
       seg.dir = dir;
       if (this.g.fx) seg.emitter = this.g.fx.emitter(S.leak, seg.mid.clone().addScaledVector(dir, seg.r), dir, 10, { speed: S.leak === 'water' ? 0.4 : 2.5, spread: 0.35 });
@@ -287,7 +296,7 @@ export class Damage {
       seg.audio = 'leak' + seg.id;
     } else {
       seg.issue.sev = seg.leak;
-      seg.issue.repairable = seg.leak < 0.4 && !seg.patched;
+      seg.issue.repairable = seg.leak < FIXABLE.pipe && !seg.patched;
     }
     this.events.push({ type: 'pipe', sys: seg.sys, pos: seg.mid.clone() });
   }
@@ -305,7 +314,7 @@ export class Damage {
     if (issue.state !== 'active') return 'none';
     if (issue.kind === 'breach') {
       const b = issue.ref;
-      if (b.r < 0.03 && !b.patched) {
+      if (b.r < FIXABLE.breach && !b.patched) {
         b.patched = true;
         this._updateBreachLeak(b);
         this._breachMeshes(b);
@@ -317,12 +326,12 @@ export class Damage {
     }
     if (issue.kind === 'crack') {
       const c = this.cracks[issue.ref.i];
-      if (c && !c.broken) { c.patched = true; issue.state = 'patched'; return 'patched'; }
+      if (c && !c.broken && c.sev < FIXABLE.crack) { c.patched = true; issue.state = 'patched'; return 'patched'; }
       return 'cannot';
     }
     if (issue.kind === 'pipe') {
       const s = issue.ref;
-      if (s.leak < 0.4) {
+      if (s.leak < FIXABLE.pipe) {
         s.patched = true;
         s.leak = s.leak < 0.15 ? 0 : s.leak * 0.15;
         if (s.emitter) { g.fx.removeEmitter(s.emitter); s.emitter = null; }
@@ -342,8 +351,8 @@ export class Damage {
     if (issue.kind === 'equip') {
       const k = issue.ref.k;
       if (EQUIPMENT[k].ext) return 'cannot';
-      if (1 - this.health[k] < 0.35) {
-        this.health[k] = Math.min(1, this.health[k] + 0.3);
+      if (1 - this.health[k] < FIXABLE.equip) {
+        this.health[k] = Math.min(1, this.health[k] + 0.12);
         issue.state = this.health[k] > 0.97 ? 'fixed' : 'patched';
         issue.sev = 1 - this.health[k];
         return issue.state;
@@ -363,48 +372,122 @@ export class Damage {
     for (const s of this.g.layout.pipes) { s.leak = 0; s.patched = false; s.issue = null; if (s.emitter) { this.g.fx.removeEmitter(s.emitter); s.emitter = null; } }
     for (const k of Object.keys(this.health)) this.health[k] = k === 'cameras' ? [1, 1, 1, 1, 1] : 1;
     this.issues = [];
+    this.fatigue = 0;
+    this.broken = false;
     this.group.clear();
     this.syncUniforms();
+  }
+
+  // ------------------------------------------------------------------ structure
+  /**
+   * Structural integrity 0..1 of the pressure hull: dents, holes, missing windows and accumulated
+   * metal fatigue all eat into it. Below ~0.35 the hull is in danger; at 0 it comes apart.
+   */
+  integrity() {
+    let x = this.fatigue || 0;
+    for (const d of this.dents) x += d.depth * d.r * 2.2;
+    for (const b of this.breaches) x += b.r * (b.patched ? 0.8 : 2.4);
+    for (const c of this.cracks) if (c && c.broken) x += 0.12;
+    return Math.max(0, 1 - x);
+  }
+
+  /** stress events (ULTRA shudders, hard landings...): fatigue plus a chance of fresh damage */
+  stressEvent(amount, where = null) {
+    this.fatigue = (this.fatigue || 0) + amount * 0.02;
+    if (Math.random() < Math.min(0.9, amount)) this.spawnFatigueDamage(where, Math.min(1, 0.3 + amount));
+  }
+
+  /** new damage grown out of fatigue somewhere in the ship (cracks, leaks, failures, buckling) */
+  spawnFatigueDamage(near = null, k = 0.5) {
+    const g = this.g;
+    const roll = Math.random();
+    if (roll < 0.34 && g.layout.pipes.length) {
+      const list = near ? g.layout.pipes.filter((s) => s.mid.distanceTo(near) < 3) : g.layout.pipes;
+      const s = (list.length ? list : g.layout.pipes)[Math.floor(Math.random() * (list.length || g.layout.pipes.length))];
+      this.pipeLeak(s, 0.05 + 0.25 * k * Math.random());
+      return 'pipe';
+    }
+    if (roll < 0.58) {
+      const keys = Object.keys(EQUIPMENT).filter((q) => !EQUIPMENT[q].ext || Math.random() < 0.4);
+      const q = keys[Math.floor(Math.random() * keys.length)];
+      this.damageEquipment(q, 0.04 + 0.2 * k * Math.random(), EQUIPMENT[q].pos);
+      return 'equip';
+    }
+    if (roll < 0.76) {
+      const wins = OPENINGS.map((o, i) => [o, i]).filter(([o]) => o.kind === 'win');
+      const [o, i] = wins[Math.floor(Math.random() * wins.length)];
+      this.crackWindow(i, o.center.clone().addScaledVector(o.u, (Math.random() - 0.5) * o.halfW), 0.15 + 0.5 * k * Math.random());
+      return 'crack';
+    }
+    // buckled plating: an inward dent in the hull, sometimes split open
+    const z = near ? Math.max(-11, Math.min(9, near.z + (Math.random() - 0.5) * 2)) : -11 + Math.random() * 20;
+    const t = Math.random() * Math.PI * 2;
+    const p = sectionPoint(z, t, 0), n = sectionNormal(z, t, 0);
+    this.addDent(p, n.clone().negate(), 0.25 + 0.4 * k, 0.02 + 0.05 * k);
+    if (Math.random() < 0.25 * k) {
+      const zone = this.zoneForHullPoint(p);
+      if (zone) this.addBreach(p, n, 0.004 + 0.02 * k * Math.random(), zone);
+    }
+    this.events.push({ type: 'buckle', pos: p.clone() });
+    return 'buckle';
   }
 
   // ------------------------------------------------------------------ time evolution
   update(dt) {
     const g = this.g;
     const f = g.flight;
+    if (this.broken) return;
     // stress multiplier: ULTRA vibration, heating, high g
-    const stressMul = 1 + (f.ultra ? 2.5 : 0) + Math.min(4, f.heatFlux / 5e4) + Math.min(3, f.properAcc.length() / 10);
+    const stressMul = 1 + (f.ultra ? 2.0 + 2.0 * Math.min(1, Math.max(0, f.setSpeed) / 900) : 0) + Math.min(4, f.heatFlux / 5e4) + Math.min(3, f.properAcc.length() / 10);
     for (const it of this.issues) {
       if (it.state === 'fixed') continue;
       const patchK = it.state === 'patched' ? 0.15 : 1;
       let grow = 0;
-      if (it.kind === 'breach') grow = 0.00002;
-      else if (it.kind === 'crack') grow = 0.00006;
-      else if (it.kind === 'pipe') grow = 0.000045;
-      else if (it.kind === 'equip') grow = 0.00002;
-      // larger damage worsens faster (fatigue)
-      const d = grow * stressMul * patchK * (0.5 + it.sev) * dt;
+      if (it.kind === 'breach') grow = 0.00003;
+      else if (it.kind === 'crack') grow = 0.00008;
+      else if (it.kind === 'pipe') grow = 0.00006;
+      else if (it.kind === 'equip') grow = 0.00003;
+      else if (it.kind === 'window') grow = 0;
+      // larger damage worsens faster (fatigue): the growth accelerates with severity
+      const d = grow * stressMul * patchK * (0.4 + it.sev * 1.6) * dt;
       if (d <= 0) continue;
       it.sev = Math.min(1, it.sev + d);
       if (it.kind === 'breach') {
         const b = it.ref;
-        b.r = Math.min(0.6, b.r * (1 + d * 0.8));
+        b.r = Math.min(0.6, b.r * (1 + d * 0.9));
         this._updateBreachLeak(b);
-        it.repairable = b.r < 0.03 && !b.patched;
+        it.repairable = b.r < FIXABLE.breach && !b.patched;
         if (Math.random() < dt * 0.02) this._breachMeshes(b);
       } else if (it.kind === 'crack') {
         const c = this.cracks[it.ref.i];
-        if (c && !c.broken) { c.sev = Math.min(2.2, c.sev + d * 2); if (c.sev >= 2.0) this._breakWindow(it.ref.i); this.syncUniforms(); }
+        if (c && !c.broken) { c.sev = Math.min(2.2, c.sev + d * 2); it.repairable = c.sev < FIXABLE.crack && !c.patched; if (c.sev >= 2.0) this._breakWindow(it.ref.i); this.syncUniforms(); }
       } else if (it.kind === 'pipe') {
         const s = it.ref;
         s.leak = Math.min(1, s.leak + d);
-        it.repairable = s.leak < 0.4 && !s.patched;
+        it.repairable = s.leak < FIXABLE.pipe && !s.patched;
       } else if (it.kind === 'equip') {
         const k = it.ref.k;
         this.health[k] = Math.max(0, this.health[k] - d);
-        it.repairable = this.health[k] > 0.65 && !EQUIPMENT[k].ext;
+        it.repairable = 1 - this.health[k] < FIXABLE.equip && !EQUIPMENT[k].ext;
       }
       if (!it.worseNotified && it.sev > 0.6 && it.state !== 'fixed') { it.worseNotified = true; this.events.push({ type: 'worse', issue: it }); }
     }
+    // metal fatigue: open holes and a weakened frame keep working the structure; it spreads as new
+    // cracks, leaks and buckled plates, and accelerates once the hull is badly weakened
+    let open = 0;
+    for (const b of this.breaches) if (!b.patched) open += b.r;
+    const integ = this.integrity();
+    const weak = Math.max(0, 0.45 - integ);
+    const fRate = (open * 0.12 + weak * 0.05 + (f.ultra ? 0.004 : 0)) * stressMul / 3600;
+    this.fatigue = (this.fatigue || 0) + fRate * dt;
+    this.spreadT = (this.spreadT ?? 600) - dt * (open * 6 + weak * 4 + (integ < 0.9 ? 0.15 : 0)) * stressMul;
+    if (this.spreadT <= 0) {
+      this.spreadT = 600 + Math.random() * 900;
+      const src = this.breaches.length ? this.breaches[Math.floor(Math.random() * this.breaches.length)].pos : null;
+      this.spawnFatigueDamage(src, Math.min(1, 0.3 + weak * 1.5));
+    }
+    this.integrityNow = integ;
+    if (integ <= 0 && !this.broken && g.gameplay) { this.broken = true; g.gameplay.breakup('structure'); return; }
     // effects of pipe leaks on systems
     let coolantLoss = 0, waterLoss = 0, airLoss = 0, o2Loss = 0, n2Loss = 0, rcsLoss = 0;
     for (const s of g.layout.pipes) {
@@ -468,7 +551,7 @@ export class Damage {
       breaches: this.breaches.map((b) => ({ p: b.pos.toArray(), n: b.n.toArray(), r: b.r, zone: b.zone, patched: b.patched, seed: b.seed })),
       cracks: this.cracks.map((c) => c ? { u: c.u, v: c.v, sev: c.sev, seed: c.seed, patched: c.patched, broken: !!c.broken } : null),
       scorch: this.scorch.map((s) => ({ p: s.pos.toArray(), r: s.r })),
-      health: this.health, coolant: this.coolant ?? 1,
+      health: this.health, coolant: this.coolant ?? 1, fatigue: this.fatigue || 0,
       pipes: this.g.layout.pipes.filter((s) => s.leak > 0 || s.patched).map((s) => ({ id: s.id, leak: s.leak, patched: s.patched })),
       equipIssues: this.issues.filter((i) => i.kind === 'equip').map((i) => ({ k: i.ref.k, sev: i.sev, state: i.state })),
     };
@@ -479,6 +562,7 @@ export class Damage {
     this.scorch = (d.scorch || []).map((x) => ({ pos: V(...x.p), r: x.r }));
     Object.assign(this.health, d.health || {});
     this.coolant = d.coolant ?? 1;
+    this.fatigue = d.fatigue || 0;
     for (const b of d.breaches || []) {
       const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone);
       br.seed = b.seed;

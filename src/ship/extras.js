@@ -3,7 +3,7 @@
 // laundry, room name plates over the doors. Everything sits on a floor, a wall or a shelf.
 import * as THREE from 'three';
 import { rng } from './geom.js';
-import { halfWidthAt, Z_COCKPIT_BULK, Z_ENG_BULK, OPENINGS, HULL } from './hullShape.js';
+import { halfWidthAt, heightRangeAt, Z_COCKPIT_BULK, Z_ENG_BULK, OPENINGS, HULL } from './hullShape.js';
 import { openingOutline } from './exterior.js';
 import { INSET, DOORS } from './interior.js';
 import { mug, plantPot, bookRow, sticker, valveWheel, switchPanel, gauge } from './props.js';
@@ -255,9 +255,21 @@ function windowBezels(b) {
   }
 }
 
+/** red warning lamp on the ceiling (lit by the danger system) */
+function dangerLamp(b, x, z, y = null) {
+  const top = y ?? heightRangeAt(z, x, INSET)[1] - 0.025;
+  b.cyl(0.055, 0.06, 0.02, 'steel', [x, top, z], null, 16);
+  b.sphere(0.06, 'dangerLamp', [x, top - 0.022, z], 16, [1, 0.62, 1]);
+  b.torus(0.047, 0.004, 'metalDark', [x, top - 0.02, z], [Math.PI / 2, 0, 0], 16);
+}
+
 export function buildExtras(b, L) {
   const R = rng(9090);
   windowBezels(b);
+  // red warning lamps: one or two per compartment
+  for (const [x, z] of [[0.55, -9.0], [-1.6, -5.0], [-1.6, -7.4], [1.55, -6.0], [-1.6, -1.3], [-1.6, 3.0], [1.55, -1.6], [1.55, 3.8], [0.8, 7.6], [-0.9, 8.6]]) dangerLamp(b, x, z);
+  for (const z of [-6.2, -2.6, 2.4]) dangerLamp(b, 0.3, z, 2.475);
+  for (const z of [-4.0, 1.9, 5.8]) dangerLamp(b, 0.25, z, -0.2);
 
   // ---- cockpit: extinguisher + first aid on the aft bulkhead, a duffel by the jump seat, cables
   extinguisher(b, [-1.05, 0.42, Z_COCKPIT_BULK - 0.15], Math.PI);

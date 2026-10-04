@@ -347,7 +347,7 @@ export class Monitors {
       K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + 192, 76, { size: 16, color: COL.text, align: 'right', mono: true });
       K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
     }
-    K.bar(X + 10, 96, 182, 5, sp / 300, f.ultra ? COL.amber : COL.cyan);
+    K.bar(X + 10, 96, 182, 5, sp / (f.ultra || sp > 60 ? 900 : 60), f.ultra ? COL.amber : COL.cyan);
     // ULTRA button
     const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 ? 'disabled' : 'normal');
     K.button(X, 114, 202, 30, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });

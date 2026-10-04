@@ -318,6 +318,8 @@ export function buildExterior(M) {
   b.sphere(0.04, 'navRed', lights.navPort.toArray(), 10);
   b.sphere(0.04, 'navGreen', lights.navStar.toArray(), 10);
   b.sphere(0.045, 'navWhite', lights.strobe.toArray(), 10);
+  // red danger beacons on the spine and the belly (flash when the ship is in trouble)
+  for (const [z, t] of [[-3.4, Math.PI / 2], [6.0, Math.PI / 2], [-1.0, -Math.PI / 2]]) b.sphere(0.07, 'navDanger', sectionPoint(z, t, -0.02).toArray(), 12);
   for (const f of [lights.flood1, lights.flood2]) {
     b.box(0.24, 0.12, 0.18, 'hullDark', [f.x, f.y + 0.06, f.z], null, 0.03);
     b.box(0.2, 0.02, 0.14, 'lampCool', [f.x, f.y + 0.125, f.z], null, 0.005);

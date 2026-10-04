@@ -286,7 +286,7 @@ export class ShipSystems {
       const tx = pil ? inp.rx : 0, ty = pil ? inp.ry : 0;
       c.stick.rotation.x += ((-ty * 0.35) - c.stick.rotation.x) * Math.min(1, dt * 12);
       c.stick.rotation.z += ((-tx * 0.35) - c.stick.rotation.z) * Math.min(1, dt * 12);
-      const sp = g.flight.setSpeed / 300;
+      const sp = g.flight.setSpeed / (g.flight.ultra || g.flight.setSpeed > 60 ? 900 : 120);
       c.throttle.rotation.x += ((-0.6 + sp * 1.2 + (pil ? inp.moveY * 0.15 : 0)) - c.throttle.rotation.x) * Math.min(1, dt * 6);
     }
     if (c.ultra) {
@@ -357,6 +357,18 @@ export class ShipSystems {
       b.target.updateMatrixWorld();
     }
     if (this.g.shipVis.M.lampRed) this.g.shipVis.M.lampRed.emissiveIntensity = on ? 2 + 10 * pulse : 0.4;
+    // danger state: the red lamps stay lit (faster pulse the worse it is) and the cabin light turns
+    // reddish even after the siren has been silenced
+    const danger = this.danger || 0;
+    const dp = 0.5 + 0.5 * Math.sin(t * (danger >= 3 ? 9 : danger >= 2 ? 5 : 2.4));
+    const Mv = this.g.shipVis.M;
+    if (Mv.dangerLamp) Mv.dangerLamp.emissiveIntensity = danger > 0 ? (danger >= 2 ? 3 + 9 * dp : 1.2 + 2.5 * dp) * Math.max(0.3, power) : 0;
+    if (Mv.navDanger) Mv.navDanger.emissiveIntensity = danger > 0 && dp > 0.55 ? 5 : 0;
+    // emergency lighting: the cabin goes red (stronger and pulsing as it gets worse)
+    if (danger > 0 && !on) {
+      const k = [0, 0.32, 0.52, 0.68][danger] + 0.12 * dp * (danger - 1) / 2;
+      for (const slot of this.pool) if (slot.lamp && slot.lamp.room !== 'station') slot.light.color.lerp(ALARM_RED, k);
+    }
     // exterior visible in the MID pass when the camera is away from the ship
     const far = camDist > 40;
     for (const s of this.subs) if (s.updateVisual) s.updateVisual(dt, camDist);

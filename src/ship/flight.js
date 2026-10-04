@@ -8,7 +8,7 @@ import { MU_EARTH, R_EARTH, OMEGA_EARTH, airDensity, G0 } from '../core/astro.js
 const smooth = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
 
 export const NORMAL_MAX = 60;     // m/s cruise limit
-export const ULTRA_MAX = 300;     // m/s
+export const ULTRA_MAX = 900;     // m/s (three times the first drive)
 export const SHIP_MASS = 42000;
 export const HULL_BOTTOM = 2.25;  // m below ship origin (incl. skids)
 
@@ -119,7 +119,7 @@ export class Flight {
       const from = this.setSpeed;
       const to = this.preUltraSpeed;
       const steps = [];
-      const n = Math.max(1, Math.ceil((from - to) / 60));
+      const n = Math.max(1, Math.ceil((from - to) / 120));
       for (let i = 1; i <= n; i++) steps.push(from + (to - from) * (i / n));
       this.ultraDown = { steps, i: 0, hold: 0 };
       this.events.push('ultra_off');
@@ -170,16 +170,16 @@ export class Flight {
 
     // --- speed command
     if (inp && !this.autopilot) {
-      const rate = this.ultra ? 6 : 4;
+      const rate = this.ultra ? 16 : 4;
       this.setSpeed += inp.throttle * rate * dt * (Math.abs(this.setSpeed) < 5 ? 0.5 : 1);
       if (Math.abs(inp.throttle) > 0.25) this.ultraAuto = false;
     }
-    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(ULTRA_MAX, this.setSpeed + 6 * dt);
+    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(ULTRA_MAX, this.setSpeed + 14 * dt);
     if (this.ultraDown) {
       const u = this.ultraDown;
       const target = u.steps[u.i];
       // each stage: ramp at ~2.5 m/s^2 then hold briefly
-      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 9.0 * dt);
+      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 14.0 * dt);
       else { u.hold += dt; if (u.hold > 0.9) { u.i++; u.hold = 0; this.events.push('ultra_stage'); if (u.i >= u.steps.length) this.ultraDown = null; } }
     }
     this.speedLimit = this.ultra ? ULTRA_MAX : (this.ultraDown ? Math.max(NORMAL_MAX, this.setSpeed) : NORMAL_MAX);
@@ -219,7 +219,7 @@ export class Flight {
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     const tau = Math.max(2.5, dt * 1.5);   // stays stable for coarse (catch-up) steps too
-    const comfort = (this.ultraDown ? 7.0 : this.ultra ? 2.6 : 1.3) * Math.max(0.3, this.engineHealth);
+    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : 1.3) * Math.max(0.3, this.engineHealth);
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
     // altitude (radial) errors are corrected first, the rest of the budget goes to the

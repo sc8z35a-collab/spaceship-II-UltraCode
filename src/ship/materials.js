@@ -473,6 +473,9 @@ export function createMaterials() {
   M.lampWarm = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.78, 0.52), emissiveIntensity: 3.0, roughness: 0.4 });
   M.lampCool = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.82, 0.9, 1.0), emissiveIntensity: 3.0, roughness: 0.4 });
   M.lampRed = new THREE.MeshStandardMaterial({ color: 0x110000, emissive: new THREE.Color(1.0, 0.08, 0.04), emissiveIntensity: 0.4, roughness: 0.4 });
+  // red warning lamps in every room / on the hull: dark until the ship is in danger
+  M.dangerLamp = new THREE.MeshStandardMaterial({ color: 0x2a0303, emissive: new THREE.Color(1.0, 0.06, 0.03), emissiveIntensity: 0, roughness: 0.35 });
+  M.navDanger = new THREE.MeshStandardMaterial({ color: 0x200000, emissive: new THREE.Color(1.0, 0.05, 0.02), emissiveIntensity: 0 });
   M.ledGreen = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.2, 1.0, 0.35), emissiveIntensity: 4.0 });
   M.ledAmber = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.6, 0.1), emissiveIntensity: 4.0 });
   M.ledBlue = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.25, 0.55, 1.0), emissiveIntensity: 4.0 });

@@ -2,6 +2,7 @@
 // decelerates for arrival and then holds station; the repair dock can be docked with.
 import * as THREE from 'three';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH } from '../core/astro.js';
+import { ULTRA_MAX, NORMAL_MAX } from './flight.js';
 
 export class Autopilot {
   constructor(game) {
@@ -46,9 +47,9 @@ export class Autopilot {
     const dist = rel.length();
     this.dist = dist;
     const dir = rel.clone().divideScalar(Math.max(dist, 1e-6));
-    const vmax = Math.min(f.ultra ? 300 : 60, f.speedLimit);
+    const vmax = Math.min(f.ultra ? ULTRA_MAX : NORMAL_MAX, f.speedLimit);
     const standoff = s.kind === 'dock' ? 120 : 320;
-    const a = 0.55;
+    const a = f.ultra ? 2.2 : 0.55;   // braking profile (the ULTRA drive can shed speed much faster)
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
     let v, moveDir;
     if (s.tether && dist >= 40000) {
