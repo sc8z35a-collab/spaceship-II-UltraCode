@@ -688,7 +688,11 @@ export function buildLobby(renderer, def) {
   // ---- colliders for the module walls (coarse cylinder) and end walls
   {
     const ring = (z) => { const pts = []; for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2; pts.push(V(xc + Math.cos(a) * (RR - 0.02), yc + Math.sin(a) * (RR - 0.02), z)); } return pts; };
-    const g = loft([ring(z0), ring(z1)], { ring: true, caps: false });
+    // half-metre sections: with one long section every triangle's centre sat metres away from the
+    // tunnel, nothing was cut out and an invisible wall closed the docking portal
+    const rings = [];
+    for (let k = 0; k <= 40; k++) rings.push(ring(z0 + (z1 - z0) * (k / 40)));
+    const g = loft(rings, { ring: true, caps: false });
     // leave the docking tunnel open (remove the wall quads in front of it)
     const cut = new THREE.BufferGeometry();
     const gp = g.index ? g.toNonIndexed() : g;

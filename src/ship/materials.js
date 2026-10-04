@@ -419,6 +419,9 @@ export function createMaterials() {
   const M = {};
   // ---- exterior ----
   M.hull = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true });
+  // the outer hatch leaf sits inside the hull's hatch opening, which the hull material cuts away:
+  // it needs the same look without the opening cut (it rendered invisible when closed)
+  M.hatchLeaf = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: false, openings: false, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006 });
   M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true, ao: false });
   M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true, ao: false });
   M.metal = patchShipMaterial(std(0xa8adb3, 0.32, 0.9), { wear: 0.6, grime: 0.3 });

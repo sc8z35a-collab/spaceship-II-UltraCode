@@ -150,7 +150,7 @@ export class OuterHatch {
     const shape = roundedRectShape(o.halfH * 2 + 0.06, o.halfW * 2 + 0.06, o.radius + 0.02);
     const g = new THREE.ExtrudeGeometry(shape, { depth: 0.12, bevelEnabled: true, bevelThickness: 0.015, bevelSize: 0.015, bevelSegments: 2, curveSegments: 12 });
     g.translate(o.halfH + 0.02, 0, -0.16);
-    this.door = new THREE.Mesh(g, M.hull);
+    this.door = new THREE.Mesh(g, M.hatchLeaf);
     this.door.castShadow = true; this.door.receiveShadow = true;
     this.hinge.add(this.door);
     // inside face details: wheel + dogs
