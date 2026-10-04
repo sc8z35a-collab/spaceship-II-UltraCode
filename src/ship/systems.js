@@ -7,8 +7,9 @@ import { DECK_Y } from './hullShape.js';
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const ALARM_RED = new THREE.Color(1, 0.06, 0.03);
 
+// (orbit: a camera that swings round that point when the view is dragged; the others pan / tilt)
 export const EXT_CAMS = [
-  { name: 'chase', pos: V(0, 7.5, 27), look: V(0, 0.5, -4) },
+  { name: 'chase', pos: V(0, 7.5, 27), look: V(0, 0.5, -4), orbit: true },
   { name: 'nose', pos: V(0, -0.6, -13.7), look: V(0, -1.4, -40) },
   { name: 'belly', pos: V(0, -2.55, -3), look: V(0, -40, -8) },
   { name: 'radiator', pos: V(7.6, 0.9, 13.0), look: V(0, 0.4, -3) },
@@ -161,7 +162,7 @@ export class ShipSystems {
   externalCamera(i) {
     const c = EXT_CAMS[((i % EXT_CAMS.length) + EXT_CAMS.length) % EXT_CAMS.length];
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
-    return { pos: c.pos, quat: q, name: c.name };
+    return { pos: c.pos, quat: q, name: c.name, orbit: c.orbit ? c.look : null };
   }
 
   dropPressed() { this.emit('drop'); }

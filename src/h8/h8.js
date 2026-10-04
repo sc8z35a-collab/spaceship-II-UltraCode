@@ -35,10 +35,10 @@ const COUPLING_TIP = H8.couplingAt.clone().normalize().multiplyScalar(H8.R + 0.3
 
 /** H8's outside camera views for the external-camera mode (H8-local) */
 export const H8_EXT_CAMS = [
-  { name: 'h8chase', pos: V(0, 4.5, 16), look: V(0, 0, -2) },
+  { name: 'h8chase', pos: V(0, 4.5, 16), look: V(0, 0, -2), orbit: true },
   { name: 'h8cam2', pos: CAMERAS[1].dir.clone().multiplyScalar(H8.R + 0.75), look: CAMERAS[1].dir.clone().multiplyScalar(60) },
   { name: 'h8top', pos: V(0, H8.R + 1.2, 0), look: V(0, H8.R + 1.0, -40) },
-  { name: 'h8side', pos: V(11, 2.5, -4), look: V(0, -0.5, 0.5) },
+  { name: 'h8side', pos: V(11, 2.5, -4), look: V(0, -0.5, 0.5), orbit: true },
 ];
 
 export class H8Vessel {
@@ -1085,7 +1085,7 @@ export class H8Vessel {
     const c = H8_EXT_CAMS[((i % H8_EXT_CAMS.length) + H8_EXT_CAMS.length) % H8_EXT_CAMS.length];
     const pos = c.pos.clone().add(DOCK);
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, V(0, 1, 0)));
-    return { pos, quat: q, name: c.name };
+    return { pos, quat: q, name: c.name, orbit: c.orbit ? c.look.clone().add(DOCK) : null };
   }
 
   /** the frame the view and the lamps live in (world, relative to the render origin) */

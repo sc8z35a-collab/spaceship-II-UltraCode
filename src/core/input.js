@@ -8,6 +8,7 @@ export class Input {
     this.moveX = 0; this.moveY = 0;     // left stick (-1..1)
     this.rStickX = 0; this.rStickY = 0; // right stick (piloting)
     this.lookDX = 0; this.lookDY = 0;   // accumulated look delta (pixels)
+    this.pinch = 1;                     // accumulated zoom factor (two fingers / mouse wheel)
     this.up = 0;                        // float up/down (-1..1)
     this.taps = [];                     // [{x,y}] normalized device coords for this frame
     this.holds = [];                    // active long-press {x,y,t}
@@ -44,6 +45,7 @@ export class Input {
     window.addEventListener('keydown', (e) => { this.keys.add(e.code); });
     window.addEventListener('keyup', (e) => { this.keys.delete(e.code); });
     window.addEventListener('blur', () => { this.keys.clear(); this.touches.clear(); this._resetSticks(); });
+    el.addEventListener('wheel', (e) => { if (!this.enabled) return; e.preventDefault(); this.pinch *= Math.exp(e.deltaY * 0.0012); }, opt);
     // HUD buttons
     for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next']) {
       const b = document.getElementById(id);
@@ -92,7 +94,18 @@ export class Input {
       s.querySelector('.knob').style.transform = `translate(${sx * R}px,${sy * R}px)`;
       if (t.zone === 'L') { this.moveX = sx; this.moveY = -sy; } else { this.rStickX = sx; this.rStickY = -sy; }
     } else {
-      this.lookDX += dx; this.lookDY += dy;
+      // two fingers in the look area: pinch (zoom) instead of looking
+      const looks = [...this.touches.values()].filter((o) => o.zone === 'look');
+      if (looks.length >= 2) {
+        const [a, b] = looks;
+        const d = Math.hypot(a.x - b.x, a.y - b.y);
+        if (this._pinchD) this.pinch *= this._pinchD / Math.max(20, d);
+        this._pinchD = Math.max(20, d);
+        t.moved += 20;   // not a tap
+      } else {
+        this._pinchD = 0;
+        this.lookDX += dx; this.lookDY += dy;
+      }
     }
     const h = this.holds.find((h) => h.id === e.pointerId);
     if (h && t.moved > 14) h.active = false;
@@ -106,6 +119,7 @@ export class Input {
     if (!cancel && t.moved < 14 && dt < 350) {
       this.taps.push({ x: (t.x / window.innerWidth) * 2 - 1, y: -(t.y / window.innerHeight) * 2 + 1, px: t.x, py: t.y });
     }
+    this._pinchD = 0;
     if (t.zone === 'L') { this.moveX = this.moveY = 0; this.stickL.classList.remove('on'); }
     if (t.zone === 'R') { this.rStickX = this.rStickY = 0; this.stickR.classList.remove('on'); }
     this.holds = this.holds.filter((h) => h.id !== e.pointerId);
@@ -142,7 +156,7 @@ export class Input {
     const out = {
       moveX: clamp(mx, -1, 1), moveY: clamp(my, -1, 1),
       rx: clamp(rx, -1, 1), ry: clamp(ry, -1, 1),
-      lookDX: this.lookDX, lookDY: this.lookDY,
+      lookDX: this.lookDX, lookDY: this.lookDY, pinch: this.pinch,
       up,
       taps: this.taps.splice(0),
       pressed: {},
@@ -153,7 +167,7 @@ export class Input {
     if (k.has('KeyQ')) { out.pressed['b-exit'] = true; k.delete('KeyQ'); }
     if (k.has('KeyV')) { out.pressed['b-cam'] = true; k.delete('KeyV'); }
     if (k.has('KeyU')) { out.pressed.key_u = true; k.delete('KeyU'); }
-    this.lookDX = 0; this.lookDY = 0;
+    this.lookDX = 0; this.lookDY = 0; this.pinch = 1;
     return out;
   }
 }

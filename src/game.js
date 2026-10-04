@@ -50,6 +50,8 @@ export class Game {
     this.running = false;
     this.mode = 'walk';         // walk | pilot | seated | camera | dead
     this.extCam = 0;
+    // free look for the external cameras: drag to swing round (chase) or pan / tilt (mounted)
+    this.extLook = { yaw: 0, pitch: 0, sy: 0, sp: 0, cam: 0, lastTap: 0 };
     this.shake = 0;
     this.timeScale = 1;
     this.gLocal = new THREE.Vector3();
@@ -233,6 +235,18 @@ export class Game {
       if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
+      if (this.mode === 'camera' && !focused) {
+        // drag in the middle / top of the screen: look round with the external camera
+        const L = this.extLook;
+        L.zoom = Math.max(0.35, Math.min(4, (L.zoom || 1) * (inp.pinch || 1)));
+        L.yaw -= inp.lookDX * 0.0045;
+        L.pitch = Math.max(-1.45, Math.min(1.45, L.pitch - inp.lookDY * 0.0045));
+        // a double tap puts it back
+        for (const tap of inp.taps) {
+          const now = performance.now();
+          if (now - L.lastTap < 380) { L.yaw = 0; L.pitch = 0; L.zoom = 1; L.lastTap = 0; } else L.lastTap = now;
+        }
+      }
       if (inp.pressed['b-drop']) this.systems.dropPressed();
     }
     // ---- flight
@@ -319,6 +333,33 @@ export class Game {
     if (h.containsPF(pl.pos) && !h.inCockpit(pl.pos)) env.lowCeiling = false;
   }
 
+  /** the external camera with the player's free look applied (smoothed) */
+  lookExternal(c, dt) {
+    const L = this.extLook;
+    if (L.cam !== this.extCam) { L.cam = this.extCam; L.yaw = L.pitch = L.sy = L.sp = 0; L.zoom = L.sz = 1; }
+    const k = 1 - Math.exp(-dt * 12);
+    L.sy += (L.yaw - L.sy) * k; L.sp += (L.pitch - L.sp) * k;
+    L.sz = (L.sz || 1) + ((L.zoom || 1) - (L.sz || 1)) * k;
+    if (Math.abs(L.sy) < 1e-4 && Math.abs(L.sp) < 1e-4 && Math.abs(L.sz - 1) < 1e-3) return c;
+    const Y = new THREE.Vector3(0, 1, 0);
+    if (c.orbit) {
+      // swing round the point the camera watches (azimuth about the ship's up, elevation over it)
+      const off = c.pos.clone().sub(c.orbit);
+      const r = off.length() * L.sz;          // pinch / wheel: closer or further
+      const az = Math.atan2(off.x, off.z) + L.sy;
+      const el = Math.max(-1.45, Math.min(1.45, Math.asin(off.y / off.length()) - L.sp));   // drag up: look up
+      const pos = c.orbit.clone().add(new THREE.Vector3(Math.sin(az) * Math.cos(el), Math.sin(el), Math.cos(az) * Math.cos(el)).multiplyScalar(r));
+      const quat = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(pos, c.orbit, Y));
+      return { pos, quat };
+    }
+    // a mounted camera turns on its head: pan about the ship's up, tilt about its own right
+    const yawQ = new THREE.Quaternion().setFromAxisAngle(Y, L.sy);
+    const q = yawQ.multiply(c.quat.clone());
+    const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
+    const quat = new THREE.Quaternion().setFromAxisAngle(right, L.sp).multiply(q);
+    return { pos: c.pos, quat };
+  }
+
   updateRender(dt) {
     const f = this.flight;
     const root = this.shipVis.root;
@@ -347,7 +388,8 @@ export class Game {
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
     } else if (this.mode === 'camera' && this.systems) {
       const c = solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
-      eyeLocal = c.pos; viewQ = c.quat;
+      const v = this.lookExternal(c, dt);
+      eyeLocal = v.pos; viewQ = v.quat;
     } else if (!this.running && !this.params.has('view')) {
       // title: slow cinematic around the ship
       const a = (this.titleCamT || 0) * 2 + 0.6;
