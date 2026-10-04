@@ -125,23 +125,26 @@ export class Docking {
     const pose = this.stationPose(s, g.time);
     const cur = this.toLocal(pose, g.flight.pos);
     // swing around at a safe radius to the berth side, then in along the berth line
-    const R0 = Math.max(280, cur.length());
+    // (about four times quicker than it used to be: the drive works harder during the manoeuvre,
+    // with the inertial damper on so the cabin stays calm)
+    const Rs = cur.length(), R0 = 200;
     const from = cur.clone().normalize(), to = V(-1, 0, 0);
     const qa = new THREE.Quaternion().setFromUnitVectors(from, to);
     const steps = Math.max(1, Math.ceil(from.angleTo(to) / (25 * Math.PI / 180)));
     this.wp = [];
     for (let k = 1; k <= steps; k++) {
       const q = new THREE.Quaternion().slerp(qa, k / steps);
-      this.wp.push({ p: from.clone().applyQuaternion(q).multiplyScalar(R0), v: 25, tol: 10 });
+      // spiral in to the berth radius while swinging round
+      this.wp.push({ p: from.clone().applyQuaternion(q).multiplyScalar(Math.max(R0, Rs + (R0 - Rs) * (k / steps))), v: 90, tol: 22, pass: true });
     }
-    this.wp.push({ p: V(-R0, DOCK_AT.y, DOCK_AT.z), v: 20, tol: 6 });
-    this.wp.push({ p: V(DOCK_AT.x - 28, DOCK_AT.y, DOCK_AT.z), v: 10, tol: 1.5 });
-    this.wp.push({ p: V(DOCK_AT.x - 6, DOCK_AT.y, DOCK_AT.z), v: 1.5, tol: 0.4 });
-    this.wp.push({ p: DOCK_AT.clone(), v: 0.35, tol: 0.06, final: true });
+    this.wp.push({ p: V(-R0, DOCK_AT.y, DOCK_AT.z), v: 70, tol: 10 });
+    this.wp.push({ p: V(DOCK_AT.x - 22, DOCK_AT.y, DOCK_AT.z), v: 40, tol: 1.5 });
+    this.wp.push({ p: V(DOCK_AT.x - 6, DOCK_AT.y, DOCK_AT.z), v: 4, tol: 0.4 });
+    this.wp.push({ p: DOCK_AT.clone(), v: 1.2, tol: 0.06, final: true });
     // the autopilot hands over
     const ap = g.autopilot;
     ap.state = 'off'; ap.target = null;
-    g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null };
+    g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
     this.state = 'approach';
     this.tFinal = 0;
     g.asphalt.say('st_dock_start', { name: s.name }, { force: true });
@@ -162,8 +165,8 @@ export class Docking {
     if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return; }
     this.despawn();
     this.state = 'leaving';
-    this.wp = [{ p: V(DOCK_AT.x - 8, DOCK_AT.y, DOCK_AT.z), v: 0.8, tol: 0.5 }, { p: V(DOCK_AT.x - 90, DOCK_AT.y, DOCK_AT.z), v: 8, tol: 3, last: true }];
-    g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null };
+    this.wp = [{ p: V(DOCK_AT.x - 8, DOCK_AT.y, DOCK_AT.z), v: 3, tol: 0.5 }, { p: V(DOCK_AT.x - 90, DOCK_AT.y, DOCK_AT.z), v: 30, tol: 3, last: true }];
+    g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
     g.asphalt.say('st_undock', { name: this.station.name }, { force: true });
   }
 
@@ -261,7 +264,7 @@ export class Docking {
 
   steer(dt) {
     const g = this.g, f = g.flight, s = this.station;
-    if (!f.autopilot) f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null };
+    if (!f.autopilot) f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
     // the clock already moved on by dt; the ship's state still belongs to the start of the step
     // (an orbiting station travels ~770 m in 0.1 s)
     const pose = this.stationPose(s, g.time - dt * 1000);
@@ -270,8 +273,15 @@ export class Docking {
     const tgt = this.toEci(pose, w.p);
     const err = tgt.clone().sub(f.pos);
     const dist = err.length();
-    const a = w.final ? 0.04 : 0.3;
-    let v = Math.min(w.v, Math.sqrt(2 * a * Math.max(0, dist - w.tol * 0.5)), dist * (w.final ? 0.35 : 0.5));
+    const a = w.final ? 0.3 : 2.6;
+    // pass-through waypoints (the swing around the station) are flown through without stopping:
+    // brake only for the path left up to the next real stop
+    let left = dist;
+    if (w.pass) {
+      let prev = w.p;
+      for (let i = 1; i < this.wp.length; i++) { left += this.wp[i].p.distanceTo(prev); prev = this.wp[i].p; if (!this.wp[i].pass) break; }
+    }
+    let v = Math.min(w.v, Math.sqrt(2 * a * Math.max(0, left - w.tol * 0.5)), left * (w.final ? 0.8 : 1.0));
     const base = this.frameVel(s, pose, f.pos, new THREE.Vector3());
     const vDes = base.addScaledVector(err.divideScalar(Math.max(dist, 1e-6)), v);
     f.autopilot.vRel.copy(vDes).sub(f.refVelocity(f.pos, new THREE.Vector3()));
@@ -284,12 +294,12 @@ export class Docking {
     const ax = V(qErr.x, qErr.y, qErr.z);
     if (ax.lengthSq() > 1e-12) {
       ax.normalize().applyQuaternion(f.quat.clone().invert());
-      f.autopilot.wDes.copy(ax).multiplyScalar(Math.min(5 * Math.PI / 180, ang * 0.35));
+      f.autopilot.wDes.copy(ax).multiplyScalar(Math.min(15 * Math.PI / 180, ang * 0.7));
     } else f.autopilot.wDes.set(0, 0, 0);
     const relV = f.vel.clone().sub(this.frameVel(s, pose, f.pos, new THREE.Vector3())).length();
     if (w.final) {
       this.tFinal += dt;
-      if ((dist < w.tol && relV < 0.12 && ang < 0.03) || (dist < 0.6 && this.tFinal > 90)) {
+      if ((dist < w.tol && relV < 0.15 && ang < 0.05) || (dist < 0.6 && this.tFinal > 30)) {
         this.state = 'docked';
         this.wp = [];
         this.hold();

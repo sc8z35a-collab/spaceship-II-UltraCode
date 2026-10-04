@@ -151,7 +151,7 @@ export class Flight {
     // --- attitude control (relative to LVLH)
     const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180;
     const rcs = Math.max(0.15, this.rcsHealth);
-    const angAcc = 4.0 * Math.PI / 180 * rcs;
+    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs;
     const wDes = _v2.set(0, 0, 0);
     if (inp && !this.landed) wDes.set(inp.pitch * maxRate, -inp.yaw * maxRate, -inp.roll * maxRate);
     if (this.autopilot && this.autopilot.wDes) wDes.copy(this.autopilot.wDes);
@@ -188,7 +188,7 @@ export class Flight {
     this.ultraLevel += ((this.ultra ? 1 : 0) - this.ultraLevel) * Math.min(1, dt * 0.5);
     // the ULTRA drive's inertial damper is on for the whole ULTRA run including the staged
     // slow-down, and comes up before the burn does (ramp 1.5/s vs. the 6 m/s^2 speed ramp)
-    this.damp += (((this.ultra || this.ultraDown) ? 1 : 0) - this.damp) * Math.min(1, dt * 1.5);
+    this.damp += (((this.ultra || this.ultraDown || (this.autopilot && this.autopilot.fast)) ? 1 : 0) - this.damp) * Math.min(1, dt * 1.5);
 
     // --- desired velocity
     const vRef = this.refVelocity(pos, new THREE.Vector3());
@@ -218,8 +218,10 @@ export class Flight {
     const aMaxEngine = 15 * Math.max(0, this.engineHealth);
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
-    const tau = Math.max(2.5, dt * 1.5);   // stays stable for coarse (catch-up) steps too
-    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : 1.3) * Math.max(0.3, this.engineHealth);
+    // stays stable for coarse (catch-up) steps too; tighter during a docking manoeuvre
+    const tau = Math.max(this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
+    const fast = this.autopilot && this.autopilot.fast;   // station docking manoeuvre
+    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.engineHealth);
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
     // altitude (radial) errors are corrected first, the rest of the budget goes to the
