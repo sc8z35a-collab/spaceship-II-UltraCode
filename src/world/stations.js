@@ -7,6 +7,7 @@ import { Builder, rng } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR, setLayersDeep } from '../core/layers.js';
 import { elevatorAxis } from './elevator.js';
 import { LOBBY, lobbyShellExterior } from './stationLobby.js';
+import { PROM, promenadeShellExterior } from './stationPromenade.js';
 
 /** reference plane defined from the canonical start state (deterministic) */
 export function referenceFrame(startTime) {
@@ -298,8 +299,11 @@ function hubModel(def, M) {
   for (const [z0, z1] of [[-10.8, -6.2], [3.0, 7.0]]) for (let k = 0; k < 4; k++) { const th = (151 + 20 * (k + 0.5) / 4) * Math.PI / 180; shell.box(0.12, RO * 0.085, z1 - z0, 'lobbyGlow', shellPt(th, (z0 + z1) / 2 + 2), [0, 0, th], 0.02); }
   // docking collar where B-29's tunnel enters the lobby
   shell.torus(1.45, 0.16, 'hullOrange', [L.x - Math.sqrt(RO * RO - 1.03 * 1.03), L.y - 1.03, L.z + 0.95], [0, Math.PI / 2, 0], 32);
+  // the promenade wing behind the lobby (same frame as the lobby: ship-local + DOCK_AT)
+  const pe = promenadeShellExterior(shell, PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, DOCK_AT.z);
   const shellGroup = shell.build(M, { castShadow: false });
   P.push({ type: 'cyl', a: new THREE.Vector3(L.x, L.y, L.z - 12.6), b: new THREE.Vector3(L.x, L.y, L.z + 12.6), r: RO + 0.08 });
+  P.push({ type: 'cyl', a: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.za), b: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.zb + PROM.R), r: pe.Ro + 0.05 });
   b.cyl(1.6, 1.6, Math.abs(L.x) - RO - coreR + 1.5, 'hull', [(L.x + RO - coreR) / 2 - 0.75, L.y - 3.0, L.z], [0, 0, Math.PI / 2], 24);
   b.torus(1.7, 0.12, 'gold', [L.x + RO + 0.6, L.y - 3.0, L.z], [0, Math.PI / 2, 0], 24);
   cap([L.x + RO - 0.5, L.y - 3, L.z], [-coreR + 0.5, L.y - 3, L.z], 1.8);

@@ -190,6 +190,7 @@ export class Docking {
     g.shipVis.root.add(lobby.group);
     lobby.group.updateMatrixWorld(true);
     this.cols = g.phys.addColliders(lobby.colliders);
+    for (const d of lobby.doors || []) d.attach(g.phys);
     this.lamps = lobby.lamps;
     g.systems.lamps.push(...this.lamps);
     g.stations.dockedId = s.id;
@@ -201,6 +202,7 @@ export class Docking {
     g.shipVis.root.remove(this.lobby.group);
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
     this.cols = null;
+    for (const d of this.lobby.doors || []) d.detach(g.phys);
     g.systems.lamps = g.systems.lamps.filter((l) => !this.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && this.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     this.lamps = [];
@@ -353,6 +355,13 @@ export class Docking {
         }
       }
     }
+  }
+
+  /** per frame while docked: the station's automatic doors */
+  updateInterior(dt) {
+    if (this.state !== 'docked' || !this.lobby) return;
+    const g = this.g;
+    for (const d of this.lobby.doors || []) d.update(dt, g.player.state === 'dead' ? null : g.player.pos, g.audio);
   }
 
   /** is a ship-local point inside the docked station's walkable space */

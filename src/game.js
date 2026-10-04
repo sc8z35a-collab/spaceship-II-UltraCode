@@ -251,6 +251,7 @@ export class Game {
     }
     this.systems.update(sdt, inp);
     this.breakup.update(Math.min(sdt, 0.1));
+    this.docking.updateInterior(Math.min(sdt, 0.1));
     this.worldDamage.update(sdt);
     this.save.update(dt);
     this.hud.update(dt);

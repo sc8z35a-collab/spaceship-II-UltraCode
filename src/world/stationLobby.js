@@ -11,6 +11,8 @@ import { OPENINGS } from '../ship/hullShape.js';
 import { openingOutline } from '../ship/exterior.js';
 import { loft, roundPolygon } from '../ship/sweep.js';
 import { LAYER_NEAR } from '../core/layers.js';
+import { buildPromenade, PROM_DOOR } from './stationPromenade.js';
+import { StationDoor } from './stationDoors.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
@@ -410,8 +412,18 @@ export function buildLobby(renderer, def) {
   b.add(shellGrid(TH_FLOOR, thL, 150, z0, z1, 100, RR, skipUpper), 'cream');
   b.add(shellGrid(thL, TH_FLOOR + Math.PI * 2, 60, z0, z1, 100, RR, (th, z) => inWin(WIN_B, th, z)), 'well');
   // glass panes + gold frames for every window
+  // thick walls: every window is cut through 36 cm of hull, its four reveal faces lined in dark
+  // marble, the pane set at the outer skin
+  const WT = 0.36;
+  const quad = (A, B, C, D) => { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.Float32BufferAttribute([A, B, C, A, C, D, A, C, B, A, D, C].flatMap((v) => v.toArray()), 3)); g.computeVertexNormals(); return g; };
   for (const W of [WIN_R, WIN_SKY, WIN_L, WIN_B]) for (const [za, zb] of W.z) {
-    b.add(shellGrid(W.th[0], W.th[1], 24, za, zb, 8, RR + 0.03), 'glass');
+    const n = 16;
+    for (let i = 0; i < n; i++) {
+      const ta = W.th[0] + (W.th[1] - W.th[0]) * i / n, tb = W.th[0] + (W.th[1] - W.th[0]) * (i + 1) / n;
+      for (const z of [za, zb]) b.add(quad(shellP(ta, z, RR), shellP(tb, z, RR), shellP(tb, z, RR + WT), shellP(ta, z, RR + WT)), 'marbleDark');
+    }
+    for (const th of W.th) b.add(quad(shellP(th, za, RR), shellP(th, zb, RR), shellP(th, zb, RR + WT), shellP(th, za, RR + WT)), 'marbleDark');
+    b.add(shellGrid(W.th[0], W.th[1], 24, za, zb, 8, RR + WT - 0.03), 'glass');
     const ring = [];
     for (let i = 0; i <= 24; i++) ring.push(shellP(W.th[0] + (W.th[1] - W.th[0]) * (i / 24), za, RR - 0.03));
     for (let i = 0; i <= 24; i++) ring.push(shellP(W.th[1] - (W.th[1] - W.th[0]) * (i / 24), zb, RR - 0.03));
@@ -457,21 +469,42 @@ export function buildLobby(renderer, def) {
   };
   const FW = [xc, 4.2, 3.0];
   b.add(disk(z0, FW), 'cream');
-  b.add(disk(z1), 'cream');
-  b.add(new THREE.CircleGeometry(FW[2], 64), 'glass', [FW[0], FW[1], z0 - 0.04]);
+  {
+    // aft bulkhead with the portal to the promenade (the door frame fills the wall thickness)
+    const s = new THREE.Shape();
+    for (let i = 0; i <= 96; i++) { const a = (i / 96) * Math.PI * 2; const x = xc + Math.cos(a) * RR, y = yc + Math.sin(a) * RR; if (i === 0) s.moveTo(x, y); else s.lineTo(x, y); }
+    const hw = PROM_DOOR.w / 2 + 0.3, hh = PROM_DOOR.h + 0.3, x0 = PROM_DOOR.x - hw, x1 = PROM_DOOR.x + hw, y0 = floorY, y1 = floorY + hh;
+    const h = new THREE.Path();
+    h.moveTo(x0, y0); h.lineTo(x0, y1 - 0.2); h.quadraticCurveTo(x0, y1, x0 + 0.2, y1); h.lineTo(x1 - 0.2, y1); h.quadraticCurveTo(x1, y1, x1, y1 - 0.2); h.lineTo(x1, y0); h.closePath();
+    s.holes.push(h);
+    const g = new THREE.ShapeGeometry(s, 48);
+    g.translate(0, 0, z1);        // (the wall material is double sided)
+    b.add(g, 'cream');
+  }
+  b.add(new THREE.CircleGeometry(FW[2], 64), 'glass', [FW[0], FW[1], z0 - 0.42]);
+  {
+    const rv = new THREE.CylinderGeometry(FW[2], FW[2], 0.44, 64, 1, true);
+    rv.scale(-1, 1, 1);      // seen from inside the opening
+    b.add(rv, 'marbleDark', [FW[0], FW[1], z0 - 0.22], [Math.PI / 2, 0, 0]);
+  }
   b.torus(FW[2] + 0.02, 0.09, 'gold', [FW[0], FW[1], z0 + 0.06], [0, 0, 0], 96);
   b.torus(FW[2] + 0.22, 0.03, 'gold', [FW[0], FW[1], z0 + 0.04], [0, 0, 0], 96);
   for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; b.pipe([FW[0] + Math.cos(a) * 0.5, FW[1] + Math.sin(a) * 0.5, z0 + 0.04], [FW[0] + Math.cos(a) * FW[2], FW[1] + Math.sin(a) * FW[2], z0 + 0.04], 0.025, 'gold', 8); }
   b.torus(0.5, 0.04, 'gold', [FW[0], FW[1], z0 + 0.05], [0, 0, 0], 32);
   // wood panelling on the aft wall, sign over the reception
-  b.box(9.0, 1.15, 0.05, 'wood', [xc, floorY + 0.58, z1 - 0.03], null, 0.01);
-  b.box(6.2, 1.55, 0.06, 'black', [xc, 4.15, z1 - 0.05], null, 0.02);
-  b.add(new THREE.PlaneGeometry(6.0, 1.5), 'sign', [xc, 4.15, z1 - 0.085], [0, Math.PI, 0]);
-  b.box(6.4, 0.06, 0.12, 'gold', [xc, 3.36, z1 - 0.08], null, 0.01);
-  b.box(6.4, 0.06, 0.12, 'gold', [xc, 4.94, z1 - 0.08], null, 0.01);
-  lamp(xc, 3.0, z1 - 1.2, 0xffe2b0, 3.0, 8);
+  {
+    const pl = PROM_DOOR.x - PROM_DOOR.w / 2 - 0.36, pr = PROM_DOOR.x + PROM_DOOR.w / 2 + 0.36;
+    const L0 = xc - 4.5, L1 = xc + 4.5;
+    b.box(pl - L0, 1.15, 0.05, 'wood', [(L0 + pl) / 2, floorY + 0.58, z1 - 0.03], null, 0.01);
+    b.box(L1 - pr, 1.15, 0.05, 'wood', [(pr + L1) / 2, floorY + 0.58, z1 - 0.03], null, 0.01);
+  }
+  b.box(6.2, 1.55, 0.06, 'black', [xc + 0.6, 4.55, z1 - 0.05], null, 0.02);
+  b.add(new THREE.PlaneGeometry(6.0, 1.5), 'sign', [xc + 0.6, 4.55, z1 - 0.085], [0, Math.PI, 0]);
+  b.box(6.4, 0.06, 0.12, 'gold', [xc + 0.6, 3.76, z1 - 0.08], null, 0.01);
+  b.box(6.4, 0.06, 0.12, 'gold', [xc + 0.6, 5.34, z1 - 0.08], null, 0.01);
+  lamp(xc + 1.0, 3.0, z1 - 1.2, 0xffe2b0, 3.0, 8);
   // two tall doors in the aft wall (lit frames, closed): hotel wing and observatory
-  for (const s of [-1, 1]) {
+  for (const s of [-1]) {
     const dx = xc + s * 3.6;
     b.box(1.5, 2.5, 0.06, 'wood', [dx, floorY + 1.25, z1 - 0.06], null, 0.02);
     b.box(0.03, 2.3, 0.05, 'gold', [dx, floorY + 1.25, z1 - 0.1], null, 0.005);
@@ -645,7 +678,8 @@ export function buildLobby(renderer, def) {
 
   // ---- reception desk in front of the sign
   {
-    const zr = z1 - 1.3;
+    const zr = z1 - 1.5;
+    const xc = 7.6;   // beside the promenade portal (shadows the module centre on purpose)
     const pts = [];
     for (let i = 0; i <= 24; i++) { const a = Math.PI * (0.15 + 0.7 * i / 24); pts.push([Math.cos(a) * 1.9, Math.sin(a) * 0.9 - 0.4]); }
     const s = new THREE.Shape();
@@ -705,8 +739,15 @@ export function buildLobby(renderer, def) {
     cut.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
     b.colMesh(cut);
     b.colBox(RR * 2, RR * 2, 0.1, [xc, yc, z0 - 0.05]);
-    b.colBox(RR * 2, RR * 2, 0.1, [xc, yc, z1 + 0.05]);
+    {
+      const dw = PROM_DOOR.w / 2 + 0.05, dh = PROM_DOOR.h + 0.05, px = PROM_DOOR.x;
+      b.colBox(px - dw - (xc - RR), RR * 2, 0.12, [(px - dw + xc - RR) / 2, yc, z1 + 0.05]);
+      b.colBox(xc + RR - (px + dw), RR * 2, 0.12, [(px + dw + xc + RR) / 2, yc, z1 + 0.05]);
+      b.colBox(dw * 2, yc + RR - (floorY + dh), 0.12, [px, (floorY + dh + yc + RR) / 2, z1 + 0.05]);
+    }
   }
+  // ---- the promenade wing behind the portal
+  const prom = buildPromenade(b, M, lamp, R, def);
 
   const group = b.build(M, { castShadow: false, receiveShadow: false });
   group.traverse((o) => { o.layers.set(LAYER_NEAR); });
@@ -718,12 +759,17 @@ export function buildLobby(renderer, def) {
   globe.layers.set(LAYER_NEAR);
   group.add(globe);
 
+  // automatic doors (kinematic colliders are attached while docked)
+  const doors = [new StationDoor({ c: V(PROM_DOOR.x, floorY, PROM_DOOR.z), normal: 'z', w: PROM_DOOR.w, h: PROM_DOOR.h, depth: PROM_DOOR.depth, label: 'promenade' }, M)];
+  for (const d of doors) { d.group.traverse((o) => o.layers.set(LAYER_NEAR)); group.add(d.group); }
+
   const contains = (p) => {
     if (p.x > 2.9 && p.x < TUNNEL.xEnd + 0.3 && Math.abs(p.z - TUNNEL.zc) < TUNNEL.hv + 0.05 && p.y > floorY - 0.3 && p.y < TUNNEL.yc + TUNNEL.hu + 0.05) return true;
+    if (prom.contains(p)) return true;
     const dx = p.x - xc, dy = p.y - yc;
     return dx * dx + dy * dy < (RR - 0.05) * (RR - 0.05) && p.z > z0 && p.z < z1 && p.y > floorY - 0.4;
   };
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, materials: M };
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, doors, materials: M };
 }
 
 /** paint the globe with the Earth colour map once it is available */
