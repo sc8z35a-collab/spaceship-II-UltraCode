@@ -2,6 +2,7 @@
 import * as THREE from 'three';
 import { EffectComposer, EffectPass, Pass, BloomEffect, SMAAEffect, SMAAPreset, Effect, EffectAttribute, BlendFunction } from 'postprocessing';
 import { LAYER_FAR, LAYER_MID, LAYER_NEAR, RANGES } from './layers.js';
+import { QUALITY, loadQuality } from './quality.js';
 
 // shared uniform: ownership range [min,max) of the pass currently rendering (for blended shells)
 export const passRange = { value: new THREE.Vector2(0, 1e12) };
@@ -307,7 +308,9 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(60, 2, 0.03, 2e9);
     this.camera.matrixAutoUpdate = false;
     this.maxPR = Math.min(window.devicePixelRatio || 1, 2.25);
-    this.pr = Math.min(this.maxPR, 1.75);
+    loadQuality();
+    this.low = QUALITY.level === 'low';
+    this.pr = this.basePR();
     renderer.setPixelRatio(this.pr);
 
     this.composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
@@ -320,7 +323,8 @@ export class Engine {
     this.composer.addPass(new SanitizePass());
     this.composer.addPass(this.exposure);
     this.composer.addPass(new EffectPass(this.camera, this.bloom, this.grade));
-    this.smaa = new SMAAEffect({ preset: SMAAPreset.HIGH });
+    this.smaa = new SMAAEffect({ preset: this.low ? SMAAPreset.LOW : SMAAPreset.HIGH });
+    if (this.low) this.bloom.mipmapBlurPass.levels = 5;
     this.composer.addPass(new EffectPass(this.camera, this.smaa));
     this.frameTimes = [];
     this.lastAdjust = 0;
@@ -348,6 +352,24 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
+  /** starting pixel ratio: low quality draws about half the pixels (0.72^2) */
+  basePR() {
+    const hi = Math.min(this.maxPR, 1.75);
+    return this.low ? Math.max(0.7, Math.round(hi * 0.72 * 100) / 100) : hi;
+  }
+
+  /** switch between the full look and the half-cost one (resolution, anti-aliasing, bloom) */
+  setQuality(level) {
+    this.low = level === 'low';
+    this.pr = this.basePR();
+    this.resStart = undefined;
+    this.resDropped = false;
+    this.frameTimes.length = 0;
+    this.smaa.applyPreset(this.low ? SMAAPreset.LOW : SMAAPreset.HIGH);
+    this.bloom.mipmapBlurPass.levels = this.low ? 5 : 8;
+    this.resize();
+  }
+
   /** frame-time based dynamic resolution */
   adapt(dt, now) {
     if (!this.autoRes) return;
@@ -365,8 +387,10 @@ export class Engine {
     const sorted = [...this.frameTimes].sort((a, b) => a - b);
     const med = sorted[Math.floor(sorted.length / 2)];
     let pr = this.pr;
-    if (med > 1 / 40 && pr > 0.85) { pr = Math.max(0.85, pr - 0.2); this.resDropped = true; }
-    else if (!this.resDropped && med < 1 / 58 && pr < this.maxPR) pr = Math.min(this.maxPR, pr + 0.1);
+    // (low quality stays at its own, lower level: it only drops further when it has to)
+    const floor = this.low ? 0.6 : 0.85, cap = this.low ? this.basePR() : this.maxPR;
+    if (med > 1 / 40 && pr > floor) { pr = Math.max(floor, pr - 0.2); this.resDropped = true; }
+    else if (!this.resDropped && med < 1 / 58 && pr < cap) pr = Math.min(cap, pr + 0.1);
     if (Math.abs(pr - this.pr) > 0.01) {
       this.pr = pr;
       this.resize();

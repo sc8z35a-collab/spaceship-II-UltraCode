@@ -63,6 +63,7 @@ export class EarthTerrain {
   constructor(assets, material, group) {
     this.material = material;
     this.group = group;
+    this.kSplit = K_SPLIT;
     this.fn = new TerrainFn(assets.elevArr, assets.waterArr);
     // the main thread samples the same streamed elevation for ground contact under the ship
     this.fn.hi = new HiElev(40);
@@ -157,9 +158,15 @@ export class EarthTerrain {
     node.bradius = m.bradius;
     node.minH = m.minH; node.maxH = m.maxH;
     const L = node.level;
-    node.morph = L === 0 ? new THREE.Vector2(1e12, 2e12) : new THREE.Vector2(2 * K_SPLIT * node.size * 0.62, 2 * K_SPLIT * node.size * 0.92);
+    node.morph = L === 0 ? new THREE.Vector2(1e12, 2e12) : new THREE.Vector2(2 * this.kSplit * node.size * 0.62, 2 * this.kSplit * node.size * 0.92);
     node.state = 2;
     this.group.add(mesh);
+  }
+
+  /** quality: a smaller split factor keeps the patches coarser (fewer on screen) */
+  setDetail(k) {
+    this.kSplit = k;
+    for (const n of this.nodes.values()) if (n.state === 2 && n.level > 0) n.morph.set(2 * k * n.size * 0.62, 2 * k * n.size * 0.92);
   }
 
   _horizonCulled(node, cam) {
@@ -219,7 +226,7 @@ export class EarthTerrain {
     if (this._horizonCulled(node, cam)) return;
     const dist = Math.max(0, cam.distanceTo(node.bcenter) - node.bradius);
     node.prio = dist / node.size;
-    const wantSplit = node.level < MAX_LEVEL && dist < K_SPLIT * node.size;
+    const wantSplit = node.level < MAX_LEVEL && dist < this.kSplit * node.size;
     if (wantSplit) {
       if (!node.children) {
         const L = node.level + 1, x = node.x * 2, y = node.y * 2;

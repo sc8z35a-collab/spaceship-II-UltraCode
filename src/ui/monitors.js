@@ -9,6 +9,7 @@ import { EXT_CAMS } from '../ship/systems.js';
 import { placeName } from './places.js';
 import { RANGES } from '../core/layers.js';
 import { passRange } from '../core/engine.js';
+import { QUALITY, QUALITY_JP } from '../core/quality.js';
 import { STATUS_JP } from '../world/worldDamage.js';
 
 const SCREEN_VERT = /* glsl */`
@@ -140,6 +141,18 @@ export class Monitors {
     return m;
   }
 
+  /** quality: smaller, slower camera feeds and slower redraws of the screens nobody is reading */
+  setQuality(low) {
+    this.low = low;
+    const w = low ? 320 : 480, h = low ? 180 : 270;
+    if (this.feedRT && this.feedRT.width !== w) { this.feedRT.setSize(w, h); this.feedLDR.setSize(w, h); }
+    for (const m of this.list) {
+      const r = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[m.id] || 4;
+      m.baseRate = low ? Math.max(2, Math.round(r * 0.6)) : r;
+      if (m.rate < 15) m.rate = m.baseRate;
+    }
+  }
+
   /** while a monitor is looked at closely its canvas is rendered at a higher resolution and rate */
   setFocus(m, on) {
     const W = on ? Math.min(1600, Math.round(m.slot.res * 2.4)) : m.slot.res;
@@ -233,7 +246,7 @@ export class Monitors {
     // camera feed
     this.feedTimer -= dt;
     if (feedWanted && this.feedTimer <= 0 && g.mode !== 'camera') {
-      this.feedTimer = 1 / 8;
+      this.feedTimer = this.low ? 1 / 4 : 1 / 8;
       this.renderFeed();
     }
   }
@@ -525,7 +538,7 @@ export class Monitors {
     const X = 334;
     K.text('警報 / 異常', X, 46, { size: 10, color: COL.dim });
     let y = 52;
-    const act = g.damage.issues.filter((i) => i.state !== 'fixed').slice(-6).reverse();
+    const act = g.damage.issues.filter((i) => i.state !== 'fixed').slice(-5).reverse();
     if (!act.length) K.text('異常なし', X, 70, { size: 11, color: COL.green });
     for (const it of act) {
       K.rect(X, y, 170, 18, { fill: it.state === 'patched' ? 'rgba(255,179,71,0.1)' : 'rgba(255,77,61,0.12)', stroke: null, r: 4 });
@@ -533,6 +546,8 @@ export class Monitors {
       y += 21;
     }
     const al = g.systems.alarm;
+    // graphics quality (low: about half the processing)
+    K.button(X, H - 124, 170, 26, '画質  ' + QUALITY_JP[QUALITY.level] + (QUALITY.level === 'low' ? '（軽い）' : '（きれい）'), () => g.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'), { style: QUALITY.level === 'low' ? 'warn' : 'normal', size: 11 });
     K.button(X, H - 92, 170, 26, al.active && !al.silenced ? '警報 消音' : '警報 消音済', () => g.systems.silenceAlarm(), { style: al.active && !al.silenced ? 'danger' : 'disabled', size: 12 });
     K.button(X, H - 62, 82, 24, ls.lockdown ? '隔壁 解除' : '隔壁 閉鎖', () => g.systems.toggleLockdown(), { style: ls.lockdown ? 'warn' : 'normal', size: 10 });
     K.button(X + 88, H - 62, 82, 24, '照明 ' + { normal: '通常', dim: '暗め', night: '夜間', off: '消灯' }[g.systems.lightMode], () => g.systems.cycleLights(), { size: 10 });

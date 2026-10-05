@@ -34,6 +34,7 @@ import { createLooseProps } from './ship/loose.js';
 import { Breakup } from './ship/breakup.js';
 import { WorldDamage } from './world/worldDamage.js';
 import { H8Vessel } from './h8/h8.js';
+import { QUALITY, saveQuality } from './core/quality.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -131,6 +132,8 @@ export class Game {
       this.systems.add({ env: (env) => this.h8env(env) });
     }
     P(0.6);
+    // graphics quality chosen earlier in this browser (the engine already started at its resolution)
+    if (QUALITY.level === 'low') this.applyQuality('low');
     // warm-up: stream terrain, compile shaders, capture environment maps
     for (let i = 0; i < 30; i++) {
       this.updateRender(0.016);
@@ -358,6 +361,29 @@ export class Game {
     const right = new THREE.Vector3(1, 0, 0).applyQuaternion(q);
     const quat = new THREE.Quaternion().setFromAxisAngle(right, L.sp).multiply(q);
     return { pos: c.pos, quat };
+  }
+
+  /**
+   * Graphics quality, 'high' or 'low', applied at once and remembered in this browser. Low is about
+   * half the GPU work: ~0.72x pixel ratio, light anti-aliasing and bloom, 8 of the 16 cabin lights,
+   * a quarter-size sun shadow map and no earthshine shadow, coarser terrain, one-projection surface
+   * detail on the ship, stations drawn out to 160 km instead of 400 km, slower camera feeds and
+   * screen redraws, no light shafts. Shaders recompile once when it changes.
+   */
+  applyQuality(level) {
+    const low = saveQuality(level) === 'low';
+    this.engine.setQuality(QUALITY.level);
+    this.space.setQuality(low);
+    if (this.systems && this.systems.setLightPool) this.systems.setLightPool(low ? 8 : 16);
+    if (this.shafts) this.shafts.enabled = !low;
+    if (this.stations) this.stations.visRange = low ? 1.6e5 : 4.0e5;
+    if (this.monitors && this.monitors.setQuality) this.monitors.setQuality(low);
+    this.engine.scene.traverse((o) => {
+      if (!o.material) return;
+      for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m.userData && m.userData.shipPatched) m.needsUpdate = true;
+    });
+    this.engine.renderer.shadowMap.needsUpdate = true;
+    return QUALITY.level;
   }
 
   updateRender(dt) {

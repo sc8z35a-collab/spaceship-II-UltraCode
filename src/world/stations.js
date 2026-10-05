@@ -597,7 +597,7 @@ export class Stations {
       const rel = s.pos.clone().sub(origin);
       const d = rel.distanceTo(camWorld);
       s.dist = s.pos.distanceTo(origin);
-      const vis = d < 4.0e5;
+      const vis = d < (this.visRange || 4.0e5);
       s.model.visible = vis;
       if (vis) {
         // orient: long axis along velocity, up radial

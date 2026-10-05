@@ -119,6 +119,20 @@ export class Space {
     this.strokeT = 0;
   }
 
+  /** quality: a quarter-size sun shadow map, no earthshine shadows, coarser terrain */
+  setQuality(low) {
+    const size = low ? 2048 : 4096;
+    const sh = this.sunLight.shadow;
+    if (sh.mapSize.x !== size) {
+      // three resizes the map in place on its next shadow pass (a disposed map would leave the
+      // shadow samplers empty for a frame)
+      sh.mapSize.set(size, size);
+      sh.needsUpdate = true;
+    }
+    this.earthshine.castShadow = !low;
+    if (this.terrain && this.terrain.setDetail) this.terrain.setDetail(low ? 2.9 : 4.2);
+  }
+
   /**
    * origin: Vector3 ECI (float64) of the render origin
    * camWorld: Vector3 camera position in the render frame

@@ -3,6 +3,12 @@
 import * as THREE from 'three';
 import { mergeGeometries, mergeVertices } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { QUALITY } from '../core/quality.js';
+
+// low graphics quality (chosen before start-up): coarser tessellation everywhere the Builder is
+// used (rounded boxes keep a single chamfer, round shapes get about half the segments)
+const lowQ = () => QUALITY.level === 'low';
+const half = (n, min) => (lowQ() ? Math.max(min, Math.ceil(n * 0.5)) : n);
 
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
@@ -77,6 +83,7 @@ export class Builder {
   box(w, h, d, key, pos = [0, 0, 0], rot, r = 0.02, seg = 2, col = false) {
     const m = Math.min(w, h, d);
     if (this.autoRound && m > 0.12) { r = Math.max(r, Math.min(0.075, m * 0.17)); seg = Math.max(seg, 3); }
+    if (lowQ()) seg = 1;
     const geo = r > 0.0005 ? new RoundedBoxGeometry(w, h, d, seg, Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)) : new THREE.BoxGeometry(w, h, d);
     this.add(geo, key, pos, rot);
     if (col) this.colBox(w, h, d, pos, rot);
@@ -84,18 +91,19 @@ export class Builder {
   }
 
   cyl(rt, rb, h, key, pos = [0, 0, 0], rot, seg = 16, open = false, col = false) {
-    this.add(new THREE.CylinderGeometry(rt, rb, h, seg, 1, open), key, pos, rot);
+    this.add(new THREE.CylinderGeometry(rt, rb, h, half(seg, 6), 1, open), key, pos, rot);
     if (col) this.colCyl(Math.max(rt, rb), h, pos, rot);
     return this;
   }
 
   sphere(r, key, pos = [0, 0, 0], seg = 16, scl) {
+    seg = half(seg, 8);
     this.add(new THREE.SphereGeometry(r, seg, Math.max(6, seg >> 1)), key, pos, [0, 0, 0], scl);
     return this;
   }
 
   torus(R, r, key, pos = [0, 0, 0], rot, seg = 24, arc = Math.PI * 2) {
-    this.add(new THREE.TorusGeometry(R, r, 8, seg, arc), key, pos, rot);
+    this.add(new THREE.TorusGeometry(R, r, lowQ() ? 5 : 8, half(seg, 8), arc), key, pos, rot);
     return this;
   }
 
@@ -104,7 +112,7 @@ export class Builder {
     const pts = points.map((p) => (p.isVector3 ? p.clone() : new THREE.Vector3(...p)));
     const curve = new THREE.CatmullRomCurve3(pts, closed, 'catmullrom', tension);
     const len = curve.getLength();
-    const g = new THREE.TubeGeometry(curve, seg || Math.max(4, Math.ceil(len / 0.08)), r, radial, closed);
+    const g = new THREE.TubeGeometry(curve, half(seg || Math.max(4, Math.ceil(len / 0.08)), 3), r, half(radial, 5), closed);
     this.add(g, key);
     if (col) {
       // capsule chain colliders
@@ -123,7 +131,7 @@ export class Builder {
     const B = b.isVector3 ? b : new THREE.Vector3(...b);
     const d = new THREE.Vector3().subVectors(B, A);
     const len = d.length();
-    const g = new THREE.CylinderGeometry(r, r, len, radial, 1, true);
+    const g = new THREE.CylinderGeometry(r, r, len, half(radial, 5), 1, true);
     const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), d.normalize());
     const m = new THREE.Matrix4().compose(A.clone().lerp(B, 0.5), q, _s);
     g.applyMatrix4(m);
@@ -134,7 +142,7 @@ export class Builder {
 
   lathe(profile, key, pos, rot, seg = 24) {
     const pts = profile.map(([r, y]) => new THREE.Vector2(r, y));
-    this.add(new THREE.LatheGeometry(pts, seg), key, pos, rot);
+    this.add(new THREE.LatheGeometry(pts, half(seg, 8)), key, pos, rot);
     return this;
   }
 

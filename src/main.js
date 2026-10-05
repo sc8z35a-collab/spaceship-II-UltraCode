@@ -2,6 +2,7 @@
 import { Engine } from './core/engine.js';
 import { loadEarthAssets } from './world/earth/earthAssets.js';
 import { Game } from './game.js';
+import { QUALITY, QUALITY_JP } from './core/quality.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -70,6 +71,14 @@ async function boot() {
   const hasSave = game.save.hasSave();
   $('btn-continue').classList.toggle('hidden', !hasSave);
   $('boot-btns').classList.remove('hidden');
+  // graphics quality: high (full look) or low (about half the processing)
+  const gfxLabel = () => {
+    $('gfx-label').textContent = '画質：' + QUALITY_JP[QUALITY.level];
+    $('gfx-note').textContent = QUALITY.level === 'low' ? '解像度と描画を下げて処理を約半分に（軽い・電池にやさしい）' : 'いちばんきれいな表示（重い）';
+  };
+  gfxLabel();
+  $('boot-gfx').classList.remove('hidden');
+  $('btn-gfx').addEventListener('click', () => { game.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'); gfxLabel(); });
   $('progress').classList.add('hidden');
   $('boot').classList.add('ready');   // the live 3D scene shows through behind the title
   game.startIdle();
@@ -80,6 +89,7 @@ async function boot() {
     if (game.asphalt) game.asphalt.unlock();
     enterFullscreen();
     $('boot').classList.add('fade');
+    $('boot-gfx').classList.add('hidden');
     setTimeout(() => $('boot').classList.add('hidden'), 1300);
     $('hud').classList.remove('hidden');
     game.begin(cont);

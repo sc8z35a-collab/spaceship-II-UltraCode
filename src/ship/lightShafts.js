@@ -100,6 +100,6 @@ export class LightShafts {
     // the beams are dust and moisture in the cabin air: they vanish if the cabin is depressurised
     u.uI.value = Math.min(1, lum) * 0.17 * Math.max(0, Math.min(1, air));
     u.uTime.value = t % 1000;
-    this.mesh.visible = lum > 0.01;
+    this.mesh.visible = lum > 0.01 && this.enabled !== false;
   }
 }

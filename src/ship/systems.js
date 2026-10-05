@@ -300,6 +300,20 @@ export class ShipSystems {
     if (c.silence) c.silence.mush.material.emissiveIntensity = this.alarm.active && !this.alarm.silenced ? 4 + 4 * Math.sin(performance.now() / 90) : 0;
   }
 
+  /** quality: how many of the cabin's real lights run (the rest stand dark and drop out of the
+   *  shaders); in low quality also only two of the alarm's rotating spots */
+  setLightPool(n) {
+    if (!this.allPool) this.allPool = this.pool;
+    this.allPool.forEach((s, i) => {
+      const on = i < n;
+      s.light.visible = on;
+      if (!on) { s.lamp = null; s.out = false; s.f = 0; s.light.intensity = 0; }
+    });
+    this.pool = this.allPool.slice(0, n);
+    this._selAt = null;
+    this.beacons.forEach((b, i) => { b.visible = n >= this.allPool.length || i < 2; });
+  }
+
   updateVisual(dt, camDist) {
     const g = this.g;
     // light pool around the viewer

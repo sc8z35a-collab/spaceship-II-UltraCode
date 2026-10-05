@@ -1,6 +1,7 @@
 // Ship materials: MeshStandardMaterial with injected procedural detail in ship space
 // (grime, wear, panel seams), hull dents (vertex displacement), openings/breaches (discard),
 // heat glow, plus glass and emissive helpers.
+import { QUALITY } from '../core/quality.js';
 import * as THREE from 'three';
 import { noiseTex } from '../core/noiseTex.js';
 import { detailTextures, DETAIL_TILE } from './detailTex.js';
@@ -275,10 +276,12 @@ export function patchShipMaterial(mat, opts = {}) {
   const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false }, opts);
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
-  mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type;
+  mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type + QUALITY.level;
   mat.onBeforeCompile = (sh) => {
     Object.assign(sh.uniforms, shipUniforms);
     if (o.dentable) sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
+    // low quality: surface detail from one projection instead of three
+    if (QUALITY.level === 'low') sh.defines = Object.assign(sh.defines || {}, { LOWQ: '' });
     if (o.detail) { sh.uniforms.tDetail = { value: detailTextures()[o.detail] }; sh.uniforms.uDetailScale = { value: 1 / DETAIL_TILE[o.detail] }; }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + COMMON_VERT_PARS + '\nvarying float vDent;')
@@ -344,8 +347,12 @@ export function patchShipMaterial(mat, opts = {}) {
           {
             // high-res surface detail, triplanar in ship space (seams, screws, vents, labels...)
             vec3 Pd = vShipPos * uDetailScale;
+            #ifdef LOWQ
+            vec4 D = N.x > N.y && N.x > N.z ? texture2D(tDetail, Pd.zy) : N.y > N.z ? texture2D(tDetail, Pd.xz) : texture2D(tDetail, Pd.xy);
+            #else
             vec3 bwd = N * N * N * N; bwd /= (bwd.x + bwd.y + bwd.z + 1e-5);
             vec4 D = texture2D(tDetail, Pd.zy) * bwd.x + texture2D(tDetail, Pd.xz) * bwd.y + texture2D(tDetail, Pd.xy) * bwd.z;
+            #endif
             _bumpH += (D.r - 0.5) * ${o.detailDepth.toFixed(4)};
             diffuseColor.rgb *= 0.5 + D.g;
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.08, 0.085, 0.09), (1.0 - D.a) * 0.6);
