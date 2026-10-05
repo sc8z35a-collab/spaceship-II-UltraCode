@@ -36,11 +36,13 @@ export class Kit {
     g.fillRect(0, 0, this.W, this.H);
   }
 
-  end(glitch = 0, t = 0) {
+  end(glitch = 0, t = 0, scan = true) {
     const g = this.g;
-    // scanlines
-    g.fillStyle = 'rgba(0,0,0,0.12)';
-    for (let y = 0; y < this.H; y += 3) g.fillRect(0, y, this.W, 1);
+    // scanlines (not on H8's screens: they are a newer kind, and fine lines shimmer when small)
+    if (scan) {
+      g.fillStyle = 'rgba(0,0,0,0.12)';
+      for (let y = 0; y < this.H; y += 3) g.fillRect(0, y, this.W, 1);
+    }
     if (glitch > 0) {
       for (let i = 0; i < 6 * glitch; i++) {
         const y = Math.random() * this.H, h = 2 + Math.random() * 18 * glitch;

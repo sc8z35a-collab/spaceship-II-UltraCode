@@ -86,7 +86,7 @@ export class Player {
   sit(seat) {
     this.seat = seat;
     this.state = 'seated';
-    this.yaw = 0; this.pitch = 0;
+    this.yaw = seat.swivel ? seat.yawSeat || 0 : 0; this.pitch = 0;
     this.vel.set(0, 0, 0);
     this.colStand.setEnabled(false);
   }
@@ -114,8 +114,18 @@ export class Player {
     const pLim = this.state === 'seated' ? 1.2 : 1.5;
     this.pitch = Math.max(-pLim, Math.min(pLim, this.pitch));
     if (this.state === 'seated') {
-      this.yaw = Math.max(-2.2, Math.min(2.2, this.yaw));
-      this.eyeLocal.copy(this.seat.eye);
+      const s = this.seat;
+      if (s.swivel) {
+        // a swivel seat turns all the way round: the body follows the head once it looks more
+        // than ~40 degrees off the seat's heading (the eye goes round the seat's column with it)
+        const d = this.yaw - s.yawSeat;
+        const dead = 0.7;
+        if (Math.abs(d) > dead) s.yawSeat += (d - Math.sign(d) * dead) * Math.min(1, dt * 5);
+        this.eyeLocal.copy(s.eye).sub(s.axis).applyAxisAngle(_Y, s.yawSeat).add(s.axis);
+      } else {
+        this.yaw = Math.max(-2.2, Math.min(2.2, this.yaw));
+        this.eyeLocal.copy(s.eye);
+      }
       this.viewQuat(this.lookQuat);
       return;
     }

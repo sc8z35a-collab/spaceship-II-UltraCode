@@ -31,9 +31,12 @@ void main(){
       c = mix(f, ui.rgb, ui.a);
     }
   }
-  // pixel grid + slight edge falloff
-  vec2 px = fract(vUv * vec2(640.0, 360.0));
-  c *= 1.0 - uGrid + uGrid * smoothstep(0.0, 0.25, min(px.x, px.y));
+  // pixel grid (faded out where its cells get smaller than a couple of screen pixels — a grid
+  // finer than the screen's own pixels shimmers as moire whenever the head moves) + edge falloff
+  vec2 gp = vUv * vec2(640.0, 360.0);
+  vec2 px = fract(gp);
+  float gk = uGrid * (1.0 - smoothstep(0.25, 0.5, max(fwidth(gp.x), fwidth(gp.y))));
+  c *= 1.0 - gk + gk * smoothstep(0.0, 0.25, min(px.x, px.y));
   vec2 d = vUv - 0.5; c *= 1.0 - dot(d, d) * 0.35;
   if (uGlitch > 0.0) c += (h(vUv * 300.0 + uTime) - 0.5) * 0.25 * uGlitch;
   float on = uPower;
@@ -70,10 +73,10 @@ export class Monitors {
     this.toneScene = new THREE.Scene();
     this.toneCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
     this.toneQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), new THREE.ShaderMaterial({
-      uniforms: { tIn: { value: this.feedRT.texture }, uExp: { value: 1.0 }, uNoise: { value: 0 }, uTime: { value: 0 } },
+      uniforms: { tIn: { value: this.feedRT.texture }, uExp: { value: 1.0 }, uNoise: { value: 0 }, uTime: { value: 0 }, uGrain: { value: 0.04 } },
       vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }',
       fragmentShader: /* glsl */`
-        uniform sampler2D tIn; uniform float uExp; uniform float uNoise; uniform float uTime; varying vec2 vUv;
+        uniform sampler2D tIn; uniform float uExp; uniform float uNoise; uniform float uTime; uniform float uGrain; varying vec2 vUv;
         vec3 aces(vec3 x){ return clamp((x*(2.51*x+0.03))/(x*(2.43*x+0.59)+0.14), 0.0, 1.0); }
         float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233)) + uTime) * 43758.5453); }
         void main(){
@@ -81,7 +84,7 @@ export class Monitors {
           c = aces(c);
           float g = dot(c, vec3(0.3, 0.59, 0.11));
           c = mix(c, vec3(g) * vec3(0.9, 1.0, 1.05), 0.15);
-          c += (h(vUv * 500.0) - 0.5) * (0.04 + uNoise);
+          c += (h(vUv * 500.0) - 0.5) * (uGrain + uNoise);
           if (uNoise > 0.5) c = vec3(h(vUv * 300.0 + uTime));
           gl_FragColor = vec4(c, 1.0);
         }`,
@@ -179,7 +182,7 @@ export class Monitors {
 
   press(m, hit) {
     if (!hit.uv) return;
-    if ((this.g.systems.power ?? 1) < 0.15) return;
+    if (m.slot.h8 ? !(this.g.h8 && this.g.h8.screenPower() > 0.1) : (this.g.systems.power ?? 1) < 0.15) return;
     const px = hit.uv.x * m.W, py = (1 - hit.uv.y) * m.H;
     const ok = m.kit.hit(px, py);
     this.g.audio.click(m.slot.pos, ok ? 0.25 : 0.12);
@@ -201,14 +204,24 @@ export class Monitors {
     this._pm.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     this._frustum.setFromProjectionMatrix(this._pm);
     this._sph = this._sph || new THREE.Sphere();
+    let feedD = 5;
     for (const m of this.list) {
       const d = m.slot.pos.distanceTo(eye);
       this._sph.center.setFromMatrixPosition(m.mesh.matrixWorld);
       this._sph.radius = Math.max(m.slot.w, m.slot.h);
       const inView = this._frustum.intersectsSphere(this._sph);
+      // the live camera picture goes to the nearest screen that shows one (every frame, not only
+      // when its own page is redrawn)
+      if (m.feed && d < feedD && (inView || d < 1.5)) { feedD = d; feedWanted = true; this.feedSrc = m.feedSrc || null; }
       m.mat.uniforms.uTime.value = time % 100;
-      m.mat.uniforms.uPower.value = power < 0.15 ? (Math.random() < 0.02 ? 0.3 : 0) : Math.min(1, 0.4 + power * 0.6);
-      m.mat.uniforms.uGlitch.value = servers < 0.6 ? (0.6 - servers) * 1.6 * (0.5 + 0.5 * Math.sin(time * 3)) : 0;
+      if (m.slot.h8) {
+        // H8's screens run on H8's power and computers (B-29's troubles do not reach them)
+        m.mat.uniforms.uPower.value = g.h8 ? g.h8.screenPower() : 1;
+        m.mat.uniforms.uGlitch.value = 0;
+      } else {
+        m.mat.uniforms.uPower.value = power < 0.15 ? (Math.random() < 0.02 ? 0.3 : 0) : Math.min(1, 0.4 + power * 0.6);
+        m.mat.uniforms.uGlitch.value = servers < 0.6 ? (0.6 - servers) * 1.6 * (0.5 + 0.5 * Math.sin(time * 3)) : 0;
+      }
       if ((d > 7 || !inView) && g.mode !== 'camera' && m.boot >= 1) continue;
       m.t += dt;
       if (m.t < 1 / m.rate) continue;
@@ -216,7 +229,6 @@ export class Monitors {
       m.boot = Math.min(1, m.boot + 0.12);
       this.draw(m);
       m.tex.needsUpdate = true;
-      if (m.feed && d < 5) { feedWanted = true; this.feedSrc = m.feedSrc || null; }
     }
     // camera feed
     this.feedTimer -= dt;
@@ -262,6 +274,8 @@ export class Monitors {
     const tq = this.toneQuad.material.uniforms;
     tq.uExp.value = 1.4;
     tq.uNoise.value = camHealth < 0.3 ? 1 : (1 - camHealth) * 0.3;
+    // H8's cameras are newer: almost no sensor grain (it shimmered on the small screens)
+    tq.uGrain.value = this.feedSrc ? 0.006 : 0.04;
     tq.uTime.value = performance.now() / 1000 % 100;
     r.setRenderTarget(this.feedLDR);
     r.render(this.toneScene, this.toneCam);
@@ -279,19 +293,27 @@ export class Monitors {
   draw(m) {
     const K = m.kit;
     K.begin();
-    const fn = this['draw_' + m.id];
+    // H8's screens can show any of H8's pages, or (docked) B-29's own: a row of tabs on top
+    const page = m.slot.h8 ? this.h8PageOf(m) : m.id;
+    const fn = this['draw_' + page];
     const H = 512 * m.H / m.W;
-    if (fn) fn.call(this, K, m, H); else this.draw_generic(K, m, H);
+    this._tabs = m.slot.h8 ? m : null;
+    try {
+      if (fn) fn.call(this, K, m, H); else this.draw_generic(K, m, H);
+    } finally { this._tabs = null; }
     if (m.boot < 1) {
       K.g.fillStyle = `rgba(0,0,0,${1 - m.boot})`;
       K.g.fillRect(0, 0, m.W, m.H);
     }
     const servers = this.g.damage ? this.g.damage.health.servers : 1;
-    K.end(servers < 0.6 ? (0.6 - servers) * 1.5 : 0, performance.now());
+    if (m.slot.h8) K.end(0, performance.now(), false);
+    else K.end(servers < 0.6 ? (0.6 - servers) * 1.5 : 0, performance.now());
   }
 
   header(K, title, H) {
     const g = this.g;
+    // on H8's screens the header row is the page tabs
+    if (this._tabs) { this.h8Tabs(K, this._tabs); return; }
     const d = formatDate(g.time);
     K.rect(0, 0, 512, 26, { fill: 'rgba(95,208,255,0.08)', stroke: null, r: 0 });
     K.line(0, 26, 512, 26, COL.line);
@@ -383,13 +405,18 @@ export class Monitors {
       K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
     }
     K.bar(X + 10, 96, 182, 5, sp / (f.ultra || sp > f.vNormal ? f.vUltra : f.vNormal), f.ultra ? COL.amber : COL.cyan);
-    if (f.mul > 1) K.text(`H8 推力 ×${f.mul}`, X + 192, 52, { size: 9, color: COL.amber, align: 'right', weight: 700 });
     // ULTRA button
-    const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 ? 'disabled' : 'normal');
-    K.button(X, 114, 202, 30, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });
+    const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 || f.dry ? 'disabled' : 'normal');
+    K.button(X, 112, 202, 26, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });
+    // propellant (and H8's push while it is docked)
+    const fu = f.fuel;
+    K.text('推進剤', X + 4, 153, { size: 9, color: COL.dim });
+    K.bar(X + 40, 147, 88, 6, fu, fu < 0.15 ? COL.red : COL.amber);
+    K.text(f.dry ? '空' : `${Math.round(fu * 100)}%`, X + 160, 153, { size: 9, color: fu < 0.15 ? COL.red : COL.text, align: 'right', mono: true });
+    if (f.mul > 1) K.text(`H8 ×${f.mul}`, X + 202, 153, { size: 9, color: COL.amber, align: 'right', weight: 700 });
     // destinations
-    K.text('目的地', X + 4, 160, { size: 10, color: COL.dim });
-    let y = 166;
+    K.text('目的地', X + 4, 168, { size: 10, color: COL.dim });
+    let y = 173;
     const ap = g.autopilot;
     // H8 (Kaito's sub-base) is a destination too while it is away from B-29
     if (g.h8 && g.h8.mode !== 'docked') {
@@ -534,6 +561,8 @@ export class Monitors {
     const music = g.audio.musicOn;
     K.button(14, 92, 230, 30, music ? '♪ 5Gラジオ  再生中' : '♪ 5Gラジオ', () => g.systems.toggleMusic(), { style: music ? 'on' : sig > 0.05 ? 'normal' : 'disabled', size: 12 });
     K.button(254, 92, 120, 30, g.asphalt.voiceOn ? 'AI音声  ON' : 'AI音声  OFF', () => { g.asphalt.voiceOn = !g.asphalt.voiceOn; }, { style: g.asphalt.voiceOn ? 'on' : 'normal', size: 11 });
+    // H8 over the link (within 1500 km)
+    if (g.h8 && this.drawH8Comms && !this._tabs) this.drawH8Comms(K, 384, 32, 120, 92);
     K.text('アスファルト ログ', 14, 142, { size: 10, color: COL.dim });
     let y = 160;
     for (const e of g.asphalt.log.slice(-5).reverse()) {

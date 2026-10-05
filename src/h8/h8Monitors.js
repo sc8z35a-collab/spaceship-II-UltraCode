@@ -1,6 +1,10 @@
-// H8's three cockpit displays (mixed into Monitors): SYS — reactor, storage, power feed, drive,
-// armour, cabin air; NAV — HACHI's destinations, docking, manual / autonomous, boost; CAM — the
-// four outside cameras one at a time. Plus the H8 strip on B-29's own navigation screen.
+// H8's three cockpit displays (mixed into Monitors). Each has a row of tabs on top and can show
+// any page: SYS — reactor, storage, propellant, power feed, drive, armour, cabin air; NAV —
+// HACHI's destinations, docking and undocking, manual / autonomous, boost; CAM — the four outside
+// cameras one at a time. Docked, the tabs also open B-29's own pages (navigation and autopilot,
+// systems and doors, life support, reactor, comms), so B-29 can be flown and run from H8's seat;
+// apart, the LINK page shows B-29 over the radio (within 1500 km) and calls it over.
+// Plus H8's corner on B-29's navigation screen and its box on B-29's comms screen.
 import * as THREE from 'three';
 import { COL } from '../ui/monitorKit.js';
 import { H8, CAMERAS } from './h8Spec.js';
@@ -8,16 +12,9 @@ import { fmtDist, altOf } from './h8Display.js';
 
 const AMBER = '#ffb347';
 
-function head(K, title, sub) {
-  K.rect(0, 0, 512, 26, { fill: 'rgba(255,170,60,0.09)', stroke: null, r: 0 });
-  K.line(0, 26, 512, 26, 'rgba(255,170,80,0.35)');
-  K.text(title, 12, 18, { size: 12, color: AMBER, weight: 700 });
-  if (sub) K.text(sub, 500, 18, { size: 11, color: COL.dim, align: 'right', mono: true });
-}
-
 function stateJP(h) {
   if (h.mode === 'docked') return 'B-29 と結合中';
-  if (h.mode === 'parked') return '停泊（休眠）';
+  if (h.mode === 'parked') return '停泊（待機）';
   const P = h.pilot;
   if (P.state === 'dock') return 'ドッキング進入';
   if (P.state === 'undock') return '離脱中';
@@ -28,44 +25,96 @@ function stateJP(h) {
   return h.crew ? '手動操縦' : '待機';
 }
 
+function b29StateJP(g) {
+  const ap = g.autopilot, f = g.flight;
+  if (g.docking && g.docking.state === 'docked') return 'ステーションに係留中';
+  if (ap.state === 'cruise' || ap.state === 'approach') return (ap.target ? ap.target.name.replace('（修理基地）', '').replace('（サブ拠点）', '') : '目的地') + ' へ自動航行';
+  if (ap.state === 'hold') return '到着・位置保持';
+  if (f.landed) return '地上に着陸中';
+  return '待機（姿勢保持）';
+}
+
+const TABS_H8 = [{ id: 'h8sys', label: 'H8 系統', h8: true }, { id: 'h8nav', label: 'H8 航法', h8: true }, { id: 'h8cam', label: 'カメラ', h8: true }];
+const TABS_B29 = [{ id: 'nav', label: 'B29 航法' }, { id: 'sys', label: 'B29 系統' }, { id: 'life', label: '生命維持' }, { id: 'reactor', label: '原子炉' }, { id: 'comms', label: '通信' }];
+
 export const H8_PAGES = {
+  // ------------------------------------------------------------------ tabs
+  h8TabList() {
+    const h = this.g.h8;
+    return h && h.mode === 'docked' ? TABS_H8.concat(TABS_B29) : TABS_H8.concat([{ id: 'h8link', label: 'B-29 リンク' }]);
+  },
+
+  /** the page an H8 screen shows (its own until a tab is picked; B-29's pages only while docked) */
+  h8PageOf(m) {
+    const tabs = this.h8TabList();
+    if (!m.page || !tabs.some((t) => t.id === m.page)) {
+      if (m.page && m.page !== m.id) this.setFeed(m, false);
+      m.page = m.id;
+    }
+    return m.page;
+  },
+
+  h8Tabs(K, m) {
+    const tabs = this.h8TabList();
+    const w = 512 / tabs.length;
+    const al = this.g.systems.alarm;
+    const blink = al.active && !al.silenced && Math.floor(performance.now() / 450) % 2;
+    K.rect(0, 0, 512, 26, { fill: 'rgba(6,12,20,0.96)', stroke: null, r: 0 });
+    tabs.forEach((t, i) => {
+      const on = m.page === t.id;
+      const col = t.h8 ? AMBER : COL.cyan;
+      const alarmTab = !t.h8 && t.id !== 'h8link' && blink;
+      K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? (t.h8 ? 'rgba(255,170,60,0.24)' : 'rgba(95,208,255,0.22)') : alarmTab ? 'rgba(255,77,61,0.3)' : 'rgba(255,255,255,0.03)', stroke: on ? col : 'rgba(150,190,230,0.2)', r: 5 });
+      K.text(t.label, i * w + w / 2, 17, { size: tabs.length > 6 ? 9 : 10.5, color: on ? '#fff' : col, align: 'center', weight: on ? 700 : 500 });
+      K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== t.id) { m.page = t.id; this.setFeed(m, false); } } });
+    });
+  },
+
   // ------------------------------------------------------------------ SYS
   draw_h8sys(K, m, H) {
     const g = this.g, h = g.h8;
     if (!h) return;
     const P = h.power;
-    head(K, 'H8  システム', `HACHI ${h.awake > 0.5 ? 'ONLINE' : 'STANDBY'}`);
-    let y = 44;
+    this.header(K, 'H8  システム', H);
+    let y = 34;
+    K.text(`HACHI ${h.awake > 0.5 ? 'ONLINE' : 'STANDBY'}   ${stateJP(h)}`, 12, y + 9, { size: 10, color: h.awake > 0.5 ? COL.green : COL.dim });
+    y += 16;
     const row = (label, v, txt, col, warn) => {
-      K.text(label, 12, y + 8, { size: 11, color: COL.dim });
-      K.bar(108, y, 270, 9, v, warn ? COL.red : col);
-      K.text(txt, 500, y + 9, { size: 11, color: warn ? COL.red : COL.text, align: 'right', mono: true });
-      y += 24;
+      K.text(label, 12, y + 8, { size: 10.5, color: COL.dim });
+      K.bar(108, y, 270, 8, v, warn ? COL.red : col);
+      K.text(txt, 500, y + 9, { size: 10.5, color: warn ? COL.red : COL.text, align: 'right', mono: true });
+      y += 20;
     };
+    const T = h.flight.tank;
     row('原子炉', P.reactor, `${Math.round(P.reactor * H8.reactorMW)} / ${H8.reactorMW} MW`, COL.green);
     row('超電導蓄電', P.smes / H8.smesMJ, `${(P.smes / 1000).toFixed(1)} GJ`, COL.cyan, P.smes < H8.smesMJ * 0.1);
+    row('推進剤', T.kg / T.cap, `${Math.round(T.kg).toLocaleString()} kg`, AMBER, T.kg < T.cap * 0.15);
     row('負荷', Math.min(1, P.loadMW / 360), `${Math.round(P.loadMW)} MW`, AMBER);
     row('ドライブ', Math.min(1, P.driveMW / H8.driveMW.boost), `${Math.round(P.driveMW)} MW`, COL.violet);
     row('外部装甲', h.armour.outer, `${Math.round(h.armour.outer * 100)} %`, COL.green, h.armour.outer < 0.35);
     row('内部装甲', h.armour.inner, `${Math.round(h.armour.inner * 100)} %`, COL.green, h.armour.inner < 0.5);
-    // feed
+    // feed and propellant lines
     const docked = h.mode === 'docked';
-    K.rect(10, y + 2, 492, 46, { fill: COL.bg2, r: 8 });
-    K.text('高速給電（B-29 → H8）', 22, y + 20, { size: 11, color: COL.dim });
-    K.text(P.feed ? `${Math.round(P.feedMW)} MW 受電中` : docked ? (h.umb > 0.02 && h.umb < 0.98 ? 'アンビリカル接続中…' : P.feedOn ? '待機' : '切断') : '未接続', 22, y + 40, { size: 14, color: P.feed ? COL.green : COL.text, weight: 600 });
-    K.button(300, y + 9, 92, 32, P.feedOn ? '給電 ON' : '給電 OFF', () => h.toggleFeed(), { style: P.feedOn ? 'on' : 'normal', size: 11 });
-    K.button(400, y + 9, 92, 32, P.boost ? 'ブースト ON' : 'ブースト OFF', () => h.toggleBoost(), { style: P.boost ? 'on' : 'normal', size: 11 });
-    y += 58;
+    K.rect(10, y + 2, 492, 44, { fill: COL.bg2, r: 8 });
+    K.text('B-29 との接続（電力・推進剤）', 20, y + 18, { size: 10, color: COL.dim });
+    const st = P.feed ? `${Math.round(P.feedMW)} MW 受電` : docked ? (h.umb > 0.02 && h.umb < 0.98 ? 'アンビリカル接続中…' : P.feedOn ? '待機' : '給電 切') : '未接続';
+    K.text(st + (h.xfer === 'toB29' ? '・推進剤を B-29 へ' : h.fueling ? '・推進剤 補給中' : ''), 20, y + 37, { size: 12, color: P.feed || h.fueling ? COL.green : COL.text, weight: 600 });
+    K.button(262, y + 8, 76, 32, P.feedOn ? '給電 ON' : '給電 OFF', () => h.toggleFeed(), { style: P.feedOn ? 'on' : 'normal', size: 10 });
+    K.button(342, y + 8, 76, 32, P.boost ? 'ブースト' : 'ブースト切', () => h.toggleBoost(), { style: P.boost ? 'on' : 'normal', size: 10 });
+    K.button(422, y + 8, 76, 32, h.xfer === 'toB29' ? '移送 停止' : '推進剤→B29', () => h.setXfer('toB29'), { style: !docked ? 'disabled' : h.xfer === 'toB29' ? 'warn' : 'normal', size: 9 });
+    y += 54;
     // cabin
     const z = g.lifeSupport.z.h8;
     if (z) {
       const p = z.n2 + z.o2 + z.co2;
-      K.text(`船内 ${p.toFixed(1)} kPa   O2 ${z.o2.toFixed(1)}   CO2 ${z.co2.toFixed(2)}`, 12, y + 10, { size: 11, color: p > 90 ? COL.text : COL.red, mono: true });
+      K.text(`船内 ${p.toFixed(1)} kPa   O2 ${z.o2.toFixed(1)}   CO2 ${z.co2.toFixed(2)}`, 12, y + 8, { size: 10.5, color: p > 90 ? COL.text : COL.red, mono: true });
     }
     const hopen = h.hatch ? h.hatch.open : 0;
-    K.text(`下部ハッチ ${h.neckOpen > 0.98 && hopen > 0.98 ? '開' : h.neckOpen > 0.01 || hopen > 0.01 ? '動作中' : '閉'}`, 330, y + 10, { size: 11, color: COL.dim });
-    if (docked) K.button(410, H - 32, 92, 26, h.neckTarget > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => h.portTapped(), { size: 10 });
-    K.text(`被弾 ${h.hits} 回`, 12, H - 14, { size: 10, color: COL.dim });
+    K.text(`下部ハッチ ${h.neckOpen > 0.98 && hopen > 0.98 ? '開' : h.neckOpen > 0.01 || hopen > 0.01 ? '動作中' : '閉'}`, 330, y + 8, { size: 10.5, color: COL.dim });
+    if (docked) K.button(410, H - 30, 92, 24, h.neckTarget > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => h.portTapped(), { size: 10 });
+    const cams = h.hull.cams.map((c, i) => (c < 0.5 ? CAMERAS[i].name.split(' ')[0] : null)).filter(Boolean);
+    const holed = h.hull.dents.some((d) => d.hole);
+    K.text(`被弾 ${h.hits} 回   へこみ ${h.hull.dents.length} か所${holed ? '（貫通あり）' : ''}${cams.length ? '   映像なし: ' + cams.join(' ') : ''}`, 12, H - 12, { size: 9.5, color: cams.length || holed ? COL.red : COL.dim });
   },
 
   // ------------------------------------------------------------------ NAV
@@ -73,49 +122,54 @@ export const H8_PAGES = {
     const g = this.g, h = g.h8;
     if (!h) return;
     const fl = h.mode === 'docked' ? g.flight : h.flight;
-    head(K, 'H8  ナビ / HACHI', stateJP(h));
+    this.header(K, 'H8  ナビ / HACHI', H);
     const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, new THREE.Vector3())).length();
-    K.rect(10, 34, 240, 64, { fill: COL.bg2, r: 8 });
-    K.text('速度', 20, 50, { size: 10, color: COL.dim });
-    K.text(vRel.toFixed(1), 20, 84, { size: 28, color: COL.text, weight: 300, mono: true });
-    K.text('m/s', 134, 84, { size: 11, color: COL.dim });
-    K.text('高度', 176, 50, { size: 10, color: COL.dim });
-    K.text((altOf(fl.pos) / 1000).toFixed(1), 240, 74, { size: 15, color: COL.text, align: 'right', mono: true });
-    K.text('km', 240, 90, { size: 9, color: COL.dim, align: 'right' });
+    K.rect(10, 32, 240, 62, { fill: COL.bg2, r: 8 });
+    K.text('速度', 20, 47, { size: 10, color: COL.dim });
+    K.text(vRel.toFixed(1), 20, 80, { size: 26, color: COL.text, weight: 300, mono: true });
+    K.text('m/s', 128, 80, { size: 11, color: COL.dim });
+    K.text('高度', 176, 47, { size: 10, color: COL.dim });
+    K.text((altOf(fl.pos) / 1000).toFixed(1), 240, 70, { size: 15, color: COL.text, align: 'right', mono: true });
+    K.text('km', 240, 86, { size: 9, color: COL.dim, align: 'right' });
     const mul = h.mode === 'docked' ? g.flight.mul : 6 * h.flight.mul;
-    K.text(`推力倍率 ×${mul}   最高 ${(fl.vUltra / 1000).toFixed(1)} km/s`, 20, 112, { size: 11, color: AMBER, mono: true });
+    K.text(`推力 ×${mul}   最高 ${(fl.vUltra / 1000).toFixed(1)} km/s   推進剤 ${Math.round(h.flight.fuel * 100)}%`, 14, 108, { size: 10, color: AMBER, mono: true });
     // B-29 relation
-    const d = h.flight.pos.distanceTo(g.flight.pos);
-    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合' : `B-29 まで ${fmtDist(d)}`, 20, 132, { size: 12, color: COL.text });
+    const L = h.linkState();
+    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合中' : `B-29 まで ${fmtDist(L.d)}  ${L.ok ? 'リンク良好' : '通信圏外'}`, 14, 126, { size: 11, color: L.ok ? COL.text : COL.red });
     // HACHI's state line
     const P = h.pilot;
-    if (P.goal || P.state === 'dock' || P.state === 'undock') K.text(`HACHI: ${stateJP(h)}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '  残り ' + fmtEta(P.eta) : ''}`, 20, 152, { size: 11, color: COL.cyan });
-    if (P.notes && P.notes.length) K.text('回避行動中', 20, 170, { size: 11, color: COL.red, weight: 700 });
+    if (P.goal || P.state === 'dock' || P.state === 'undock') K.text(`HACHI: ${stateJP(h)}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '  残り ' + fmtEta(P.eta) : ''}`, 14, 144, { size: 10.5, color: COL.cyan });
+    if (P.notes && P.notes.length) K.text('回避行動中', 14, 160, { size: 11, color: COL.red, weight: 700 });
     // HACHI's recent words
     const log = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-3).reverse();
     if (log.length) {
-      K.rect(10, 180, 240, H - 222, { fill: 'rgba(255,170,60,0.05)', stroke: 'rgba(255,170,80,0.18)', r: 6 });
-      K.text('HACHI ログ', 18, 194, { size: 9, color: COL.dim });
-      let ly = 210;
+      K.rect(10, 168, 240, H - 206, { fill: 'rgba(255,170,60,0.05)', stroke: 'rgba(255,170,80,0.18)', r: 6 });
+      K.text('HACHI ログ', 18, 181, { size: 9, color: COL.dim });
+      let ly = 196;
       for (const e of log) {
         const t = e.text.replace(/^HACHI: /, '');
         K.text(t.length > 22 ? t.slice(0, 21) + '…' : t, 18, ly, { size: 10, color: COL.text });
-        ly += 16;
-        if (ly > H - 46) break;
+        ly += 15;
+        if (ly > H - 44) break;
       }
     }
     // commands (right)
     const X = 262;
-    let y = 34;
-    const btn = (label, fn, style = 'normal') => { K.button(X, y, 240, 26, label, fn, { style, size: 11 }); y += 30; };
+    let y = 32;
+    const btn = (label, fn, style = 'normal', hh = 26) => { K.button(X, y, 240, hh, label, fn, { style, size: 11 }); y += hh + 4; };
     if (h.mode === 'docked') {
-      btn(h.crew ? '分離して単独飛行' : 'H8 を分離（護衛）', () => h.release(h.crew ? 'free' : 'escort'), 'warn');
+      // undocking from B-29, right here
+      btn(h.pending ? 'ハッチを閉めて分離中…' : h.crew ? 'B-29 から分離（単独飛行）' : 'H8 を分離（護衛）', () => h.release(h.crew ? 'free' : 'escort'), h.pending ? 'on' : 'danger', 34);
       if (!h.crew) btn('分離して停泊軌道へ', () => h.release('home'));
       btn(h.power.feedOn ? '給電を止める' : '給電する', () => h.toggleFeed(), h.power.feedOn ? 'on' : 'normal');
+      btn(h.xfer === 'toB29' ? '推進剤の移送を止める' : '推進剤を B-29 へ送る', () => h.setXfer('toB29'), h.xfer === 'toB29' ? 'warn' : 'normal');
+      K.text('上のタブで B-29 の航法・システムも操作できます', X + 120, y + 12, { size: 9, color: COL.dim, align: 'center' });
     } else {
       if (h.mode === 'parked') btn('H8 起動（B-29 へ）', () => h.call(), 'warn');
       else {
         btn(h.goalKind === 'b29' ? 'B-29 へ帰還中…（中止）' : 'B-29 へ帰還・ドッキング', () => (h.goalKind === 'b29' ? h.goal('hold') : h.call()), h.goalKind === 'b29' ? 'on' : 'warn');
+        const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+        btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ（ここへ）', () => (coming ? ap.disengage() : h.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled');
         btn(h.crew ? (P.goal ? '手動操縦にする' : '手動操縦中') : '待機', () => h.goal('hold'), !P.goal ? 'on' : 'normal');
         btn('停泊軌道へ', () => h.sendHome(), h.goalKind === 'home' ? 'on' : 'normal');
         if (h.crew) btn(h.flight.ultra ? 'ULTRA  作動中' : 'ULTRA', () => h.flight.setUltra(!h.flight.ultra), h.flight.ultra ? 'warn' : 'normal');
@@ -137,7 +191,7 @@ export const H8_PAGES = {
         }
       }
     }
-    K.button(10, H - 32, 120, 26, h.power.boost ? 'ブースト ON' : 'ブースト OFF', () => h.toggleBoost(), { style: h.power.boost ? 'on' : 'normal', size: 10 });
+    K.button(10, H - 30, 120, 24, h.power.boost ? 'ブースト ON' : 'ブースト OFF', () => h.toggleBoost(), { style: h.power.boost ? 'on' : 'normal', size: 10 });
   },
 
   // ------------------------------------------------------------------ CAM
@@ -147,9 +201,10 @@ export const H8_PAGES = {
     K.g.clearRect(0, 0, m.W, m.H);
     K.buttons.length = 0;
     m.camI = m.camI || 0;
-    const cam = CAMERAS[((m.camI % 4) + 4) % 4];
-    if (!m.feedSrc) {
-      m.feedSrc = () => {
+    const ci = ((m.camI % 4) + 4) % 4;
+    const cam = CAMERAS[ci];
+    if (!m.h8Feed) {
+      m.h8Feed = () => {
         const c = CAMERAS[((m.camI % 4) + 4) % 4];
         const p = c.dir.clone().multiplyScalar(H8.R + 0.8);
         const up = Math.abs(c.dir.y) > 0.9 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
@@ -157,29 +212,93 @@ export const H8_PAGES = {
         return h.root.matrixWorld.clone().multiply(local);
       };
     }
-    this.setFeed(m, true, [0, 0.16, 1, 0.84]);
-    K.rect(0, 0, 512, H * 0.16, { fill: 'rgba(23,13,5,0.95)', stroke: null, r: 0 });
-    K.text('H8 船外  ' + cam.name, 10, H * 0.11, { size: 11, color: AMBER, weight: 700 });
-    const rec = Math.floor(performance.now() / 600) % 2;
-    if (rec) K.circle(495, H * 0.08, 4, { fill: COL.red, stroke: null });
-    K.button(300, 4, 80, H * 0.16 - 8, '◀ 前', () => { m.camI--; }, { size: 10 });
-    K.button(388, 4, 80, H * 0.16 - 8, '次 ▶', () => { m.camI++; }, { size: 10 });
+    m.feedSrc = m.h8Feed;
+    this.feedHealth = h.hull.cams[ci];
+    this.setFeed(m, true, [0, 0.13, 1, 0.74]);
+    this.h8Tabs(K, m);
+    const dead = h.hull.cams[ci] < 0.5;
+    K.rect(0, 26, 512, 16, { fill: 'rgba(23,13,5,0.92)', stroke: null, r: 0 });
+    K.text('H8 船外  ' + cam.name + (dead ? '  （映像なし）' : ''), 10, 38, { size: 10, color: dead ? COL.red : AMBER, weight: 700 });
+    if (Math.floor(performance.now() / 600) % 2) K.circle(497, 34, 4, { fill: COL.red, stroke: null });
+    K.button(10, H - 30, 80, 24, '◀ 前', () => { m.camI--; }, { size: 10 });
+    K.button(422, H - 30, 80, 24, '次 ▶', () => { m.camI++; }, { size: 10 });
   },
 
-  // ------------------------------------------------------------------ B-29 nav: the H8 strip
+  // ------------------------------------------------------------------ LINK (apart: B-29 over the radio)
+  draw_h8link(K, m, H) {
+    const g = this.g, h = g.h8;
+    if (!h) return;
+    this.header(K, 'B-29 リンク', H);
+    const L = h.linkState(), fb = g.flight, ap = g.autopilot;
+    K.rect(10, 32, 492, 44, { fill: COL.bg2, r: 8 });
+    K.text('B-29', 22, 50, { size: 13, color: COL.cyan, weight: 700 });
+    K.text(L.ok ? 'リンク良好' : L.why === 'range' ? '通信圏外（1500 km 超）' : 'B-29 応答なし', 70, 50, { size: 11, color: L.ok ? COL.green : COL.red, weight: 600 });
+    K.text(`距離 ${fmtDist(L.d)}`, 490, 50, { size: 13, color: COL.text, align: 'right', mono: true });
+    K.bar(22, 62, 468, 5, 1 - Math.min(1, L.d / 1.5e6), L.ok ? COL.green : COL.red);
+    let y = 92;
+    if (L.ok) {
+      const integ = g.damage.integrityNow ?? g.damage.integrity();
+      const pw = g.systems.power ?? 1;
+      const row = (label, v, txt, col, warn) => {
+        K.text(label, 14, y + 8, { size: 10.5, color: COL.dim });
+        K.bar(100, y, 240, 8, v, warn ? COL.red : col);
+        K.text(txt, 410, y + 9, { size: 10.5, color: warn ? COL.red : COL.text, align: 'right', mono: true });
+        y += 20;
+      };
+      K.text('状態  ' + b29StateJP(g), 14, y + 4, { size: 11, color: COL.text }); y += 18;
+      row('推進剤', fb.fuel, `${Math.round(fb.tank ? fb.tank.kg : 0).toLocaleString()} kg`, AMBER, fb.fuel < 0.15);
+      row('船体', integ, `${Math.round(integ * 100)} %`, COL.green, integ < 0.6);
+      row('電力', pw, `${Math.round(pw * 100)} %`, COL.cyan, pw < 0.4);
+      const al = g.systems.alarm.active;
+      K.text('警報  ' + (al ? '作動中' : 'なし'), 14, y + 8, { size: 10.5, color: al ? COL.red : COL.green }); y += 20;
+    } else {
+      K.text(L.why === 'range' ? '1500 km 以内に近づくと、状況の確認と呼び出しができます。' : 'B-29 のサーバーが損傷しているようです。', 14, y + 8, { size: 10.5, color: COL.dim });
+      K.text('B-29 の位置は 360° ディスプレイの B-29 マーカーで追えます。', 14, y + 26, { size: 10, color: COL.dim });
+    }
+    // buttons (right)
+    const X = 420;
+    const coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+    const need = L.ok ? h.tripFuel(fb, L.d) : 0;
+    K.button(X, 88, 82, 40, coming ? '呼出 中止' : 'B-29 を呼ぶ', () => (coming ? ap.disengage() : h.callB29()), { style: !L.ok ? 'disabled' : coming ? 'on' : 'warn', size: 10 });
+    K.button(X, 134, 82, 30, '状況報告', () => h.reportB29(), { style: L.ok ? 'normal' : 'disabled', size: 10 });
+    K.button(X, 170, 82, 30, 'H8 で迎えに', () => h.call(), { style: L.ok ? 'normal' : 'disabled', size: 9 });
+    if (L.ok && !coming) K.text(`B-29 を呼ぶと B-29 の推進剤を 約 ${Math.ceil(need).toLocaleString()} kg 使います`, 14, H - 14, { size: 9.5, color: fb.tank && fb.tank.kg < need ? COL.red : COL.dim });
+    if (coming) K.text(`B-29 自動航行中  残り ${fmtDist(ap.dist || 0)}  ${ap.eta > 1 ? fmtEta(ap.eta) : ''}`, 14, H - 14, { size: 10, color: COL.cyan });
+  },
+
+  // ------------------------------------------------------------------ B-29 nav: the H8 corner
   drawH8Strip(K, x, y) {
     const g = this.g, h = g.h8;
     if (!h) return;
     const w = 150;
+    const L = h.linkState();
     K.rect(x, y, w, 46, { fill: 'rgba(20,12,4,0.82)', stroke: 'rgba(255,170,80,0.45)', r: 6 });
     K.text('H8', x + 8, y + 15, { size: 11, color: AMBER, weight: 700 });
-    const d = h.flight.pos.distanceTo(g.flight.pos);
-    K.text(h.mode === 'docked' ? '結合中' : `${stateJP(h)}  ${fmtDist(d)}`, x + 30, y + 15, { size: 9, color: COL.text });
+    K.text(h.mode === 'docked' ? '結合中' : L.ok ? `${stateJP(h)}  ${fmtDist(L.d)}` : `圏外  ${fmtDist(L.d)}`, x + 30, y + 15, { size: 9, color: L.ok ? COL.text : COL.red });
     let label, fn, style = 'normal';
     if (h.mode === 'docked') { label = '分離'; fn = () => h.release('escort'); style = 'warn'; }
     else if (h.goalKind === 'b29' || h.pilot.state === 'dock') { label = '呼び戻し中…（中止）'; fn = () => h.goal('hold'); style = 'on'; }
+    else if (!L.ok) { label = '通信圏外（呼べません）'; fn = null; style = 'disabled'; }
     else { label = h.mode === 'parked' ? 'H8 を呼ぶ' : 'H8 を呼ぶ（ドッキング）'; fn = () => h.call(); style = 'warn'; }
     K.button(x + 6, y + 21, w - 12, 20, label, fn, { style, size: 9 });
+  },
+
+  /** H8's box on B-29's comms screen: the link, H8's state, call / report */
+  drawH8Comms(K, x, y, w, hh) {
+    const g = this.g, h = g.h8;
+    if (!h) return;
+    const L = h.linkState();
+    K.rect(x, y, w, hh, { fill: 'rgba(20,12,4,0.82)', stroke: 'rgba(255,170,80,0.45)', r: 6 });
+    K.text('H8 リンク', x + 8, y + 15, { size: 10, color: AMBER, weight: 700 });
+    K.text(h.mode === 'docked' ? '結合中' : L.ok ? fmtDist(L.d) : '圏外', x + w - 8, y + 15, { size: 9, color: L.ok ? COL.green : COL.red, align: 'right' });
+    K.text(stateJP(h), x + 8, y + 31, { size: 9, color: COL.text });
+    K.text(`推進剤 ${Math.round(h.flight.fuel * 100)}%  装甲 ${Math.round(h.armour.outer * 100)}%`, x + 8, y + 45, { size: 8.5, color: COL.dim });
+    const bw = (w - 20) / 2;
+    if (h.mode === 'docked') K.button(x + 6, y + hh - 26, w - 12, 20, '分離', () => h.release('escort'), { style: 'warn', size: 9 });
+    else {
+      K.button(x + 6, y + hh - 26, bw, 20, '呼ぶ', () => h.call(), { style: L.ok ? 'warn' : 'disabled', size: 9 });
+      K.button(x + 14 + bw, y + hh - 26, bw, 20, '報告', () => h.reportH8(), { style: L.ok ? 'normal' : 'disabled', size: 9 });
+    }
   },
 };
 

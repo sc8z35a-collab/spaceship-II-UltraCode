@@ -190,7 +190,7 @@ export class Gameplay {
     } else if (cont) setTimeout(() => g.asphalt.say('boot', {}, { force: true }), 2500);
     else setTimeout(() => g.asphalt.say('welcome', {}, { force: true }), 3000);
     // a new game: Asphalt mentions H8 once things have settled
-    if (!cont && g.h8) setTimeout(() => { if (g.h8.mode === 'parked') g.asphalt.say('h8_hint', {}, { force: true }); }, 50000);
+    if (!cont && g.h8) setTimeout(() => { if (g.h8.mode === 'parked') g.asphalt.say('h8_hint', {}, { force: true }); }, 30000);
     // ambient machinery (positional, muffled when the air thins)
     const a = g.audio;
     a.humLoop('reactorHum', { pos: V(0, 1.0, 9.0), freq: 47, gain: 0.05, harm: [1, 0.7, 0.3, 0.2] });
@@ -526,6 +526,8 @@ export class Gameplay {
       } else if (e === 'ultra_off') g.asphalt.say('ultra_off', {}, { force: true });
       else if (e === 'ultra_stage') { g.shake = Math.max(g.shake, 0.35); if (g.audio.ready) g.audio._burst(null, { dur: 0.6, freq: 90, q: 0.7, gain: 0.35, type: 'brown', filter: 'lowpass', direct: true }); }
       else if (e === 'ultra_denied') { g.asphalt.say('ultra_denied', {}, { force: true }); g.audio.denied(V(0, 0.8, -10.6)); }
+      else if (e === 'ultra_nofuel') { g.asphalt.say('ultra_nofuel', {}, { force: true }); g.audio.denied(V(0, 0.8, -10.6)); }
+      else if (e === 'fuel_out') g.asphalt.say('fuel_out', {}, { minGap: 60 });
       else if (e === 'touchdown' || e === 'splashdown') {
         if (!this.landingSaid) setTimeout(() => g.asphalt.say(e === 'splashdown' ? 'splash' : 'landing', {}, { force: true }), 1500);
         this.landingSaid = false;
@@ -825,7 +827,13 @@ export class Gameplay {
     g.hud.setFade(1);
     setTimeout(() => {
       g.damage.repairAll();
-      if (g.h8 && g.h8.docked) { g.h8.armour.outer = 1; g.h8.armour.inner = 1; if (g.h8._leak) { g.lifeSupport.removeLeak(g.h8._leak); g.h8._leak = null; } }
+      if (g.flight.tank) g.flight.tank.kg = g.flight.tank.cap;
+      if (g.h8 && g.h8.docked) {
+        g.h8.armour.outer = 1; g.h8.armour.inner = 1;
+        if (g.h8._leak) { g.lifeSupport.removeLeak(g.h8._leak); g.h8._leak = null; }
+        g.h8.hull.repairAll();
+        g.h8.flight.tank.kg = g.h8.flight.tank.cap;
+      }
       const ls = g.lifeSupport;
       ls.reserve.o2 = 9100; ls.reserve.n2 = 17000; ls.water = 180;
       for (const z of Object.values(ls.z)) { z.n2 = 79.2; z.o2 = 21.3; z.co2 = 0.04; z.leaks = []; }
@@ -1098,6 +1106,24 @@ export class Gameplay {
     }
   }
 
+  // ================================================================== propellant
+  /** B-29's tanks: filled at a station's berth (and at the repair dock); warnings when low */
+  updateFuel(dt) {
+    const g = this.g, f = g.flight, T = f.tank;
+    if (!T) return;
+    if (g.docking && g.docking.state === 'docked' && T.kg < T.cap - 0.5) {
+      if (!this.refueling) { this.refueling = true; g.asphalt.say('b29_refuel', {}, { minGap: 120 }); }
+      T.kg = Math.min(T.cap, T.kg + 40 * dt);
+      if (T.kg >= T.cap - 0.5) { T.kg = T.cap; this.refueling = false; g.asphalt.say('b29_refueled', {}, { minGap: 120 }); }
+    } else this.refueling = false;
+    const fr = f.fuel;
+    if (fr < 0.15 && !this.fuelWarned) { this.fuelWarned = true; g.asphalt.say('b29_fuel_low', { pct: Math.round(fr * 100) }, { force: true }); }
+    else if (fr > 0.25) this.fuelWarned = false;
+    // run dry: only the reserve thrusters are left
+    if (f.dry && !this.fuelEmpty) { this.fuelEmpty = true; g.asphalt.say('fuel_out', {}, { minGap: 60 }); this.raise(0.3); }
+    else if (!f.dry) this.fuelEmpty = false;
+  }
+
   // ================================================================== main update
   update(dt) {
     const g = this.g;
@@ -1116,6 +1142,7 @@ export class Gameplay {
     this.updateLoose(dt);
     this.ultraStress(dt);
     this.updateDanger(dt);
+    this.updateFuel(dt);
     const ls = g.lifeSupport;
     // door safety interlocks: no opening against a pressure difference
     for (const d of Object.values(g.doors)) {

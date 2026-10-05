@@ -260,33 +260,56 @@ export function buildH8Interior(M) {
   const seatPanY = C.y + 0.12 - 0.68, seatPanZ = C.z - 0.12;
   const headPad = V(0, 0.84, -0.1).applyAxisAngle(V(1, 0, 0), SEAT_BACK).add(V(0, seatPanY + 0.04, seatPanZ + 0.24));
   const seatEye = V(C.x, headPad.y - 0.03, headPad.z - 0.13);
-  const S0 = V(0, H8.floorY, C.z - 0.05);   // pedestal foot
+  const S0 = V(0, H8.floorY, C.z - 0.05);   // pedestal foot: the seat turns round its column (360°)
+  const sb = new Builder();                   // the turning part
   {
     b.box(0.3, 0.22, 0.34, 'frameIn', [S0.x, S0.y + 0.11, S0.z], null, 0.04);
     b.cyl(0.07, 0.08, 0.12, 'steel', [S0.x, S0.y + 0.27, S0.z], null, 16);
     for (const s of [-1, 1]) b.box(0.03, 0.03, 0.6, 'steel', [s * 0.12, S0.y + 0.03, S0.z - 0.1], null, 0.005);   // seat rails
+    // the swivel bearing: a ring with an index scale and the lock lever
+    sb.torus(0.105, 0.016, 'steel', [S0.x, S0.y + 0.34, S0.z], [Math.PI / 2, 0, 0], 32);
+    sb.cyl(0.1, 0.1, 0.03, 'frameIn', [S0.x, S0.y + 0.355, S0.z], null, 24);
+    for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; b.box(0.004, 0.012, k % 6 ? 0.012 : 0.022, 'switchLever', [S0.x + Math.sin(a) * 0.092, S0.y + 0.335, S0.z - Math.cos(a) * 0.092], [0, -a, 0], 0.001); }
+    sb.pipe(V(S0.x + 0.1, S0.y + 0.36, S0.z - 0.02), V(S0.x + 0.2, S0.y + 0.33, S0.z - 0.1), 0.008, 'switchLever', 8);
+    sb.sphere(0.018, 'harness', [S0.x + 0.2, S0.y + 0.33, S0.z - 0.1], 10);
     // shell: pan, back (reclined 22 degrees), headrest, side bolsters
     const panY = seatPanY, back = SEAT_BACK;     // reclined backwards
-    b.push([0, panY, seatPanZ]);
-    b.box(0.52, 0.08, 0.5, 'seatShell', [0, 0, 0], null, 0.03);
-    b.box(0.46, 0.07, 0.46, 'seatCushion', [0, 0.06, -0.01], null, 0.03);
-    for (const s of [-1, 1]) b.box(0.07, 0.14, 0.46, 'seatCushion', [s * 0.23, 0.1, 0], [0, 0, s * 0.25], 0.03);
-    b.push([0, 0.04, 0.24], [back, 0, 0]);
-    b.box(0.52, 0.74, 0.08, 'seatShell', [0, 0.37, 0], null, 0.03);
-    b.box(0.44, 0.68, 0.07, 'seatCushion', [0, 0.37, -0.06], null, 0.03);
-    for (let k = 0; k < 5; k++) b.box(0.4, 0.008, 0.012, 'padDark', [0, 0.12 + k * 0.12, -0.096], null, 0.003);   // quilting
-    for (const s of [-1, 1]) b.box(0.08, 0.6, 0.13, 'seatCushion', [s * 0.25, 0.36, -0.03], [0, s * 0.3, 0], 0.03);
-    b.box(0.3, 0.2, 0.12, 'seatShell', [0, 0.84, 0.0], null, 0.04);              // headrest
-    b.box(0.26, 0.16, 0.06, 'seatCushion', [0, 0.84, -0.07], null, 0.025);
-    for (const s of [-1, 1]) b.cyl(0.035, 0.035, 0.02, 'switchBody', [s * 0.16, 0.86, -0.04], [0, 0, Math.PI / 2], 12);   // headrest speakers
+    sb.cyl(0.09, 0.07, Math.max(0.05, panY - 0.06 - (S0.y + 0.37)), 'frameIn', [S0.x, (panY - 0.06 + S0.y + 0.37) / 2, S0.z], null, 16);
+    sb.push([0, panY, seatPanZ]);
+    sb.box(0.52, 0.08, 0.5, 'seatShell', [0, 0, 0], null, 0.03);
+    sb.box(0.46, 0.07, 0.46, 'seatCushion', [0, 0.06, -0.01], null, 0.03);
+    for (const s of [-1, 1]) sb.box(0.07, 0.14, 0.46, 'seatCushion', [s * 0.23, 0.1, 0], [0, 0, s * 0.25], 0.03);
+    sb.push([0, 0.04, 0.24], [back, 0, 0]);
+    sb.box(0.52, 0.74, 0.08, 'seatShell', [0, 0.37, 0], null, 0.03);
+    sb.box(0.44, 0.68, 0.07, 'seatCushion', [0, 0.37, -0.06], null, 0.03);
+    for (let k = 0; k < 5; k++) sb.box(0.4, 0.008, 0.012, 'padDark', [0, 0.12 + k * 0.12, -0.096], null, 0.003);   // quilting
+    for (const s of [-1, 1]) sb.box(0.08, 0.6, 0.13, 'seatCushion', [s * 0.25, 0.36, -0.03], [0, s * 0.3, 0], 0.03);
+    sb.box(0.3, 0.2, 0.12, 'seatShell', [0, 0.84, 0.0], null, 0.04);              // headrest
+    sb.box(0.26, 0.16, 0.06, 'seatCushion', [0, 0.84, -0.07], null, 0.025);
+    for (const s of [-1, 1]) sb.cyl(0.035, 0.035, 0.02, 'switchBody', [s * 0.16, 0.86, -0.04], [0, 0, Math.PI / 2], 12);   // headrest speakers
     // harness: two shoulder straps, lap belt, rotary buckle
-    for (const s of [-1, 1]) b.tube([V(s * 0.1, 0.72, -0.11), V(s * 0.09, 0.5, -0.17), V(s * 0.05, 0.22, -0.2), V(0, 0.08, -0.22)], 0.012, 'harness', { radial: 4 });
-    b.pop();
-    for (const s of [-1, 1]) b.tube([V(s * 0.22, 0.08, 0.05), V(s * 0.14, 0.12, -0.1), V(0, 0.12, -0.18)], 0.012, 'harness', { radial: 4 });
-    b.cyl(0.045, 0.045, 0.02, 'buckle', [0, 0.13, -0.19], [Math.PI / 2 - 0.3, 0, 0], 20);
+    for (const s of [-1, 1]) sb.tube([V(s * 0.1, 0.72, -0.11), V(s * 0.09, 0.5, -0.17), V(s * 0.05, 0.22, -0.2), V(0, 0.08, -0.22)], 0.012, 'harness', { radial: 4 });
+    sb.pop();
+    for (const s of [-1, 1]) sb.tube([V(s * 0.22, 0.08, 0.05), V(s * 0.14, 0.12, -0.1), V(0, 0.12, -0.18)], 0.012, 'harness', { radial: 4 });
+    sb.cyl(0.045, 0.045, 0.02, 'buckle', [0, 0.13, -0.19], [Math.PI / 2 - 0.3, 0, 0], 20);
     // armrests with the side-stick (right) and the throttle (left)
-    for (const s of [-1, 1]) b.box(0.08, 0.06, 0.36, 'seatShell', [s * 0.31, 0.24, -0.05], null, 0.02);
-    b.pop();
+    for (const s of [-1, 1]) sb.box(0.08, 0.06, 0.36, 'seatShell', [s * 0.31, 0.24, -0.05], null, 0.02);
+    // (they are on the seat, so they turn with it)
+    sb.cyl(0.026, 0.03, 0.022, 'frameIn', [0.31, 0.281, -0.17], null, 16);
+    sb.cyl(0.03, 0.03, 0.012, 'rubber', [0.31, 0.296, -0.17], null, 16);
+    sb.push([0.31, 0.3, -0.17], [-0.16, 0, 0]);
+    sb.cyl(0.016, 0.019, 0.1, 'padDark', [0, 0.05, 0], null, 12);
+    sb.sphere(0.022, 'padDark', [0, 0.105, -0.004], 12, [1, 0.8, 1.15]);
+    sb.box(0.012, 0.022, 0.012, 'switchLever', [0, 0.085, -0.024], [0.4, 0, 0], 0.003);       // trigger
+    sb.cyl(0.006, 0.006, 0.008, 'harness', [0, 0.126, -0.004], null, 8);                      // hat button
+    sb.pop();
+    sb.box(0.055, 0.03, 0.13, 'frameIn', [-0.31, 0.285, -0.14], null, 0.006);                // throttle quadrant
+    sb.push([-0.31, 0.3, -0.15], [0.35, 0, 0]);
+    sb.box(0.016, 0.075, 0.016, 'steel', [0, 0.035, 0], null, 0.003);
+    sb.box(0.045, 0.028, 0.05, 'padDark', [0, 0.078, 0], null, 0.008);
+    sb.box(0.01, 0.006, 0.01, 'harness', [0.012, 0.094, -0.012], null, 0.002);
+    sb.pop();
+    sb.pop();
   }
   // seat collider (so Kaito does not walk through it)
   b.colBox(0.52, 0.5, 0.5, [0, seatPanY - 0.07, seatPanZ]);
@@ -393,9 +416,17 @@ export function buildH8Interior(M) {
     group.add(rg);
     return rg;
   });
-  // the seat (for the seat system): eye, forward, exit point
-  const seat = { id: 'h8pilot', kind: 'pilot', eye: seatEye, fwd: V(0, -0.08, -1).normalize(), exit: V(0, H8.floorY, sz - 0.05), h8: true };
-  return { group, colliders: b.colliders, lamps, seat, mfd, leds, rotors, coreAt };
+  // the turning seat on its column (pivot on the column's axis)
+  const seatPivot = new THREE.Group();
+  seatPivot.name = 'h8Seat';
+  seatPivot.position.set(S0.x, 0, S0.z);
+  const seatMesh = sb.build(M, { castShadow: false });
+  seatMesh.position.set(-S0.x, 0, -S0.z);
+  seatPivot.add(seatMesh);
+  group.add(seatPivot);
+  // the seat (for the seat system): eye, forward, exit point; it swivels round its column
+  const seat = { id: 'h8pilot', kind: 'pilot', eye: seatEye, fwd: V(0, -0.08, -1).normalize(), exit: V(0, H8.floorY, sz - 0.05), h8: true, swivel: true, axis: V(S0.x, 0, S0.z), yawSeat: 0 };
+  return { group, colliders: b.colliders, lamps, seat, mfd, leds, rotors, coreAt, seatPivot };
 }
 
 /**

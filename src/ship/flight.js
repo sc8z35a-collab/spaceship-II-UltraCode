@@ -11,6 +11,10 @@ export const NORMAL_MAX = 60;     // m/s cruise limit
 export const ULTRA_MAX = 900;     // m/s (three times the first drive)
 export const SHIP_MASS = 42000;
 export const HULL_BOTTOM = 2.25;  // m below ship origin (incl. skids)
+// propellant: B-29's tanks (xenon / hydrogen for its drive). An empty tank leaves only the
+// reserve thrusters (a few per cent of the thrust, enough to hold an orbit and creep to a dock)
+export const B29_TANK = { cap: 12000, ve: 4.0e5 };
+export const RESERVE_K = 0.06;
 
 const _v1 = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _v4 = new THREE.Vector3();
 const _q1 = new THREE.Quaternion(), _m = new THREE.Matrix4();
@@ -23,7 +27,13 @@ export class Flight {
    * acceleration, its inertial damper, the health of its drive)
    */
   constructor(spec = {}) {
-    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1 }, spec);
+    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1, tank: B29_TANK }, spec);
+    // propellant { kg, cap, ve (exhaust speed, m/s) }; a docked H8 pushes on its own tank (extTank)
+    // and adds its mass (extMass)
+    this.tank = this.spec.tank ? { kg: this.spec.tank.cap, cap: this.spec.tank.cap, ve: this.spec.tank.ve } : null;
+    this.extTank = null;
+    this.extMass = 0;
+    this.fuelK = 1;
     this.mul = 1;
     this.aExtra = 0;
     this.boostDamp = false;
@@ -71,6 +81,23 @@ export class Flight {
 
   /** the drive that moves the ship: B-29's engine, or H8 pushing when docked */
   get driveHealth() { return Math.max(this.engineHealth, this.extHealth); }
+
+  /** propellant left (0..1) */
+  get fuel() { return this.tank ? this.tank.kg / this.tank.cap : 1; }
+
+  /** both drives (own and a docked H8's) are out of propellant */
+  get dry() {
+    const own = !this.tank || this.tank.kg > 0;
+    const ext = this.aExtra > 0 && this.extTank && this.extTank.kg > 0;
+    return !own && !ext;
+  }
+
+  /** propellant for a speed change dv (m/s) with the drive(s) as they are (kg, own tank) */
+  fuelFor(dv) {
+    if (!this.tank) return 0;
+    const m = this.spec.mass + this.extMass;
+    return m * (1 - Math.exp(-Math.abs(dv) / this.tank.ve));
+  }
 
   /** initialise on a circular orbit at position with prograde direction */
   initOrbit(pos, prograde) {
@@ -127,6 +154,7 @@ export class Flight {
     if (on === this.ultra) return;
     if (on) {
       if (this.driveHealth < 0.45) { this.events.push('ultra_denied'); return; }
+      if (this.dry || (this.tank && this.fuel < 0.02 && !(this.aExtra > 0 && this.extTank && this.extTank.kg > this.extTank.cap * 0.02))) { this.events.push('ultra_nofuel'); return; }
       this.ultra = true;
       this.ultraAuto = true;                 // spools up to full ULTRA speed unless the pilot takes over
       this.preUltraSpeed = Math.min(this.setSpeed, this.vNormal);
@@ -203,6 +231,12 @@ export class Flight {
     }
     this.speedLimit = this.ultra ? this.vUltra : (this.ultraDown ? Math.max(this.vNormal, this.setSpeed) : this.vNormal);
     this.speedLimit *= Math.max(0.2, this.driveHealth);
+    // out of propellant: the reserve thrusters only creep (and the ULTRA drive goes out)
+    const dry = this.dry;
+    if (dry) {
+      this.speedLimit = Math.min(this.speedLimit, this.vNormal * 0.25);
+      if (this.ultra) { this.setUltra(false); this.events.push('fuel_out'); }
+    }
     this.setSpeed = Math.max(-15, Math.min(this.speedLimit, this.setSpeed));
     this.ultraLevel += ((this.ultra ? 1 : 0) - this.ultraLevel) * Math.min(1, dt * 0.5);
     // the ULTRA drive's inertial damper is on for the whole ULTRA run including the staged
@@ -235,7 +269,11 @@ export class Flight {
     const T = this.hullTemp;
     this.hullTemp = Math.max(150, Math.min(4000, T + (this.heatFlux * 0.85 - 0.8 * 5.67e-8 * (T ** 4 - 250 ** 4)) / 4000 * dt));
     // --- thrust
-    const aMaxEngine = this.spec.aMax * Math.max(0, this.engineHealth) + this.aExtra;
+    const ownDry = this.tank && this.tank.kg <= 0, extDry = this.extTank && this.extTank.kg <= 0;
+    this.fuelK = ownDry ? RESERVE_K : 1;
+    const aOwn = this.spec.aMax * Math.max(0, this.engineHealth) * this.fuelK;
+    const aExt = this.aExtra * (extDry ? RESERVE_K : 1);
+    const aMaxEngine = aOwn + aExt;
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     // stays stable for coarse (catch-up) steps too; tighter during a docking manoeuvre
@@ -258,6 +296,17 @@ export class Flight {
     if (this.landed && this.setSpeed <= 0.5 && !(inp && inp.throttle > 0.2) && !this.autopilot) thrust.set(0, 0, 0);
     // in deep space above the atmosphere with no command and FA holding: fine
     this.thrustAcc.copy(thrust);
+    // propellant: the force over the exhaust speed (shared with a docked H8 by what each drive
+    // can give; the reserve thrusters run on their own small supply)
+    if (this.tank && !this.landed) {
+      const aMag = thrust.length();
+      if (aMag > 1e-5) {
+        const F = aMag * (this.spec.mass + this.extMass);
+        const share = aExt > 0 && this.extTank ? aExt / Math.max(1e-6, aOwn + aExt) : 0;
+        if (!ownDry) this.tank.kg = Math.max(0, this.tank.kg - F * (1 - share) * dt / this.tank.ve);
+        if (share > 0 && !extDry) this.extTank.kg = Math.max(0, this.extTank.kg - F * share * dt / this.extTank.ve);
+      }
+    }
 
     // --- integrate (semi-implicit)
     const acc = g.clone().add(thrust).add(drag);
@@ -337,6 +386,7 @@ export class Flight {
       qRel: this.qRel.toArray(), wRel: this.wRel.toArray(), setSpeed: this.setSpeed,
       ultra: this.ultra, preUltraSpeed: this.preUltraSpeed, landed: this.landed, inWater: this.inWater,
       engineHealth: this.engineHealth, rcsHealth: this.rcsHealth, hullTemp: this.hullTemp,
+      fuel: this.tank ? Math.round(this.tank.kg * 10) / 10 : null,
     };
   }
 
@@ -346,6 +396,7 @@ export class Flight {
     this.setSpeed = d.setSpeed; this.ultra = d.ultra; this.preUltraSpeed = d.preUltraSpeed || 0;
     this.landed = d.landed; this.inWater = d.inWater;
     this.engineHealth = d.engineHealth ?? 1; this.rcsHealth = d.rcsHealth ?? 1; this.hullTemp = d.hullTemp ?? 290;
+    if (this.tank && typeof d.fuel === 'number') this.tank.kg = Math.max(0, Math.min(this.tank.cap, d.fuel));
     this.updateAttitude();
   }
 }

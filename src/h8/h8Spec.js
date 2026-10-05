@@ -52,6 +52,9 @@ export const H8 = {
   driveMW: { cruise: 120, boost: 310 },
   feedMW: 220,
   smesMJ: 90000,          // superconducting storage (MJ)
+  // propellant for the plasma drive (its exhaust is twice as fast as B-29's)
+  propKg: 5000,
+  ve: 5.2e5,
 };
 
 /** the four cameras: one at the top, three round the lower hemisphere (tetrahedral cover) */
