@@ -135,6 +135,7 @@ export class Monitors {
     parent.add(bez);
     const rate = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[slot.id] || 4;
     const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
+    m.lo = { canvas, kit, tex, W, H };
     this.list.push(m);
     this.byId[slot.id] = m;
     g.interact.addMesh(mesh, (hit) => this.tap(m, hit), { maxDist: 2.6 });
@@ -155,25 +156,37 @@ export class Monitors {
 
   /** while a monitor is looked at closely its canvas is rendered at a higher resolution and rate */
   setFocus(m, on) {
-    const W = on ? Math.min(1600, Math.round(m.slot.res * 2.4)) : m.slot.res;
-    const H = Math.round(W * m.slot.h / m.slot.w);
-    m.rate = on ? Math.max(m.baseRate, 15) : m.baseRate;
+    m.rate = on ? Math.max(m.baseRate, this.low ? 10 : 15) : m.baseRate;
     m.mat.uniforms.uGrid.value = on ? 0.035 : 0.1;
     m.t = 999;
-    if (m.canvas.width === W) return;
-    m.canvas.width = W; m.canvas.height = H;
-    m.kit.resize();
-    m.W = W; m.H = H;
-    const tex = new THREE.CanvasTexture(m.canvas);
+    const L = on ? this.hiRes(m) : m.lo;
+    if (m.canvas === L.canvas) return;
+    // two canvases per screen (the sharp one kept for the last couple of screens looked at), so
+    // going in and out swaps a texture instead of reallocating one
+    m.canvas = L.canvas; m.kit = L.kit; m.tex = L.tex; m.W = L.W; m.H = L.H;
+    m.mat.uniforms.tUI.value = L.tex;
+    this.draw(m);
+    L.tex.needsUpdate = true;
+  }
+
+  hiRes(m) {
+    this.hiLRU = (this.hiLRU || []).filter((x) => x !== m);
+    this.hiLRU.push(m);
+    while (this.hiLRU.length > 2) {
+      const o = this.hiLRU.shift();
+      if (o.hi && o.canvas !== o.hi.canvas) { o.hi.tex.dispose(); o.hi.canvas.width = o.hi.canvas.height = 1; o.hi = null; }
+    }
+    if (m.hi) return m.hi;
+    const W = Math.min(1600, Math.round(m.slot.res * 2.4)), H = Math.round(W * m.slot.h / m.slot.w);
+    const canvas = document.createElement('canvas');
+    canvas.width = W; canvas.height = H;
+    const tex = new THREE.CanvasTexture(canvas);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = 4;
     tex.minFilter = THREE.LinearFilter;
     tex.generateMipmaps = false;
-    m.mat.uniforms.tUI.value = tex;
-    m.tex.dispose();
-    m.tex = tex;
-    this.draw(m);
-    tex.needsUpdate = true;
+    m.hi = { canvas, kit: new Kit(canvas), tex, W, H };
+    return m.hi;
   }
 
   /** a tap while zoomed in on monitor m: press its buttons, or leave when tapping beside it */

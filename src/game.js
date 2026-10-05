@@ -38,6 +38,7 @@ import { QUALITY, saveQuality } from './core/quality.js';
 import { Combat } from './combat/combat.js';
 import { Drones } from './combat/drones.js';
 import { Weapons } from './combat/weapons.js';
+import { springVec, springQuat } from './core/spring.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -234,12 +235,9 @@ export class Game {
     const dead = pl.state === 'dead';
     // ---- mode routing
     let flightIn = null;
+    // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
     const focused = !!(F && !F.out);
-    if (F) {
-      F.t = Math.max(0, Math.min(1, F.t + (F.out ? -dt : dt) / 0.4));
-      if (F.out && F.t <= 0) this.focus = null;
-    }
     if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
@@ -327,11 +325,13 @@ export class Game {
     const d = Math.max(slot.h / (2 * Math.tan(vf / 2) * 0.86), slot.w / (2 * Math.tan(hf) * 0.9), 0.18);
     const pos = slot.pos.clone().addScaledVector(slot.n, d);
     const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(pos, slot.pos, slot.up));
-    const prev = this.focus && !this.focus.out ? this.focus : null;
+    const old = this.focus;
+    const prev = old && !old.out ? old : null;
     if (prev && prev.m !== m) this.monitors.setFocus(prev.m, false);
-    this.focus = { m, t: this.focus ? this.focus.t : 0, out: false, pos, q, input: prev ? prev.input : this.input.mode };
+    // the camera's spring carries on from wherever it is (another screen, or on the way back out);
+    // the sharp, fast-refreshing picture comes once it has arrived (no hitch during the move)
+    this.focus = { m, out: false, pos, q, input: prev ? prev.input : this.input.mode, s: old ? old.s : null, amt: old ? old.amt : 0, hi: false };
     this.input.setMode('focus');
-    this.monitors.setFocus(m, true);
     this.audio.click(slot.pos, 0.16);
   }
 
@@ -339,8 +339,37 @@ export class Game {
     const F = this.focus;
     if (!F || F.out) return;
     F.out = true;
+    F.hi = false;
     this.input.setMode(F.input);
     this.monitors.setFocus(F.m, false);
+  }
+
+  /**
+   * The lean-in to a screen and back, per drawn frame: the eye rides a critically damped spring to
+   * the screen (the look turns slightly ahead of the move), settles without a wobble and is then
+   * held exactly there; leaving, it springs back to wherever Kaito's head is now. Returns the pose
+   * ({ pos, q }, ship frame), or null once back.
+   */
+  focusPose(F, eye, q, dt) {
+    if (!F.s) F.s = { pos: eye.clone(), v: new THREE.Vector3(), q: q.clone(), w: new THREE.Vector3() };
+    const S = F.s;
+    if (S.m !== F.m) { S.m = F.m; S.d0 = Math.max(0.05, S.pos.distanceTo(F.pos)); }
+    const gp = F.out ? eye : F.pos, gq = F.out ? q : F.q;
+    const h = Math.min(dt, 0.05);
+    springVec(S.pos, S.v, gp, 10, h);
+    const ang = springQuat(S.q, S.w, gq, 12.5, h);
+    const err = S.pos.distanceTo(gp);
+    const amt = Math.max(0, 1 - S.pos.distanceTo(F.pos) / S.d0);
+    if (!F.out) {
+      F.amt = amt;
+      // arrived: pinned to the screen exactly (no drift, no shake)
+      if (err < 2e-4 && ang < 2e-4 && S.v.lengthSq() < 1e-6 && S.w.lengthSq() < 1e-6) { S.pos.copy(gp); S.q.copy(gq); S.v.set(0, 0, 0); S.w.set(0, 0, 0); F.amt = 1; }
+      if (!F.hi && F.amt > 0.96) { F.hi = true; this.monitors.setFocus(F.m, true); }
+    } else {
+      F.amt = Math.min(F.amt, amt);
+      if (err < 1e-3 && ang < 1e-3) { this.focus = null; return null; }
+    }
+    return S;
   }
 
   /** climbing B-29's dorsal well and H8's shaft under thrust: hand over hand */
@@ -438,12 +467,14 @@ export class Game {
       eyeLocal = new THREE.Vector3(Math.sin(a) * 26, 6 + Math.sin(a * 0.7) * 3, Math.cos(a) * 26 - 2);
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(eyeLocal, new THREE.Vector3(0, 0, -2), new THREE.Vector3(0, 1, 0)));
     } else {
+      // H8's auto-follow turns the head now, on this frame's positions (no frame of lag behind a
+      // fast target: at x42 that would be half the view)
+      if (this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat && this.h8.zoom.aim(dt, pl)) pl.viewQuat(pl.lookQuat);
       eyeLocal = pl.eyeLocal; viewQ = pl.lookQuat;
       const F = this.focus;
       if (F) {
-        const e = F.t * F.t * (3 - 2 * F.t);
-        eyeLocal = eyeLocal.clone().lerp(F.pos, e);
-        viewQ = viewQ.clone().slerp(F.q, e);
+        const P = this.focusPose(F, eyeLocal, viewQ, dt);
+        if (P) { eyeLocal = P.pos; viewQ = P.q; }
       }
     }
     // shake
@@ -451,7 +482,11 @@ export class Game {
     const shakeQ = new THREE.Quaternion();
     if (sh > 0.001) {
       const t = performance.now() / 1000;
-      const k = this.focus ? 1 - 0.85 * this.focus.t : 1;
+      // (none at all once the eye is on a screen: the picture holds still; through H8's zoom a
+      // jolt moves the magnified picture only as far as it moves the head, and a followed target
+      // is held by the stabiliser)
+      let k = this.focus ? 1 - (this.focus.amt || 0) : 1;
+      if (this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat) { const Z = this.h8.zoom; k *= Z.follow ? 0 : 1 / Math.max(1, Z.z); }
       shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02 * k, Math.sin(t * 39 + 1) * sh * 0.02 * k, Math.sin(t * 31 + 2) * sh * 0.03 * k));
       this.shake *= Math.exp(-dt * 2.2);
     }

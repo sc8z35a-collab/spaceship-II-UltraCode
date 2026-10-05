@@ -1600,7 +1600,7 @@ export class H8Vessel {
     this.display.setHatch(this.floorHatch);
     this.display.setLocker(this.locker.open);
     if (inCockpit && this.display.power > 0.01) this.updateDisplay(dt, rw, camWorld);
-    else { this.tabs.place(dt, null, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; }
+    else { this.tabs.place(dt, null, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; if (this.seat) this.seat.stab = 0; }
     // the zoom narrows the view itself (and coarsens it past the optical range)
     const z = inCockpit ? this.zoom.z : 1;
     g.engine.setZoom(z);
@@ -1756,6 +1756,9 @@ export class H8Vessel {
     const pl = g.player;
     const seated = pl.state === 'seated' && pl.seat === this.seat;
     const z = this.zoom.update(dt, seated ? g.lastInput : null, pl, seated && (g.mode === 'pilot' || g.mode === 'camera'));
+    // a magnified (or followed) view is stabilised against the seat's lean and shiver
+    // (a tilt of the head moves the magnified picture by the same angle, not z times as much)
+    this.seat.stab = this.zoom.follow ? 1 : 1 - 1 / Math.max(1, z);
     for (const l of D.locks) l.follow = this.zoom.follow && this.zoom.target && this.zoom.target.id === l.id;
     this.tabs.place(dt, camL, true, z, D.locks);
     this.tabs.draw(dt, D.power);

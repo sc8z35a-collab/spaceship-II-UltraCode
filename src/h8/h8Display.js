@@ -328,6 +328,8 @@ export class H8Display {
     this.locks = [];          // { id, c (candidate), slot, t, redraw }
     this.dwell = new Map();   // id -> s looked at
     this.lastFocus = -1;
+    this.fkS = 0;             // the dwell arc as drawn (eased)
+    this.pulse = 0;           // the ring's flash when something locks
     this.eye = H8.cockpitC.clone();
   }
 
@@ -503,7 +505,12 @@ export class H8Display {
     // lock markers
     for (const l of this.locks) {
       l.t += dt;
-      this.place(l.slot.sp, l.c.dir);
+      const sp = l.slot.sp;
+      this.place(sp, l.c.dir);
+      // it snaps on: in from a little larger and fainter over a fifth of a second
+      const e = Math.min(1, l.t / 0.22), k = 1 - (1 - e) * (1 - e) * (1 - e);
+      if (k < 1) sp.scale.multiplyScalar(1 + 0.6 * (1 - k));
+      sp.material.opacity = 0.25 + 0.75 * k;
       l.redraw -= dt;
       if (l.redraw <= 0 || l.t < 0.9) { l.redraw = 0.25; this.drawLock(l); }
     }
@@ -516,19 +523,32 @@ export class H8Display {
     // the focus ring rides the line of sight (with a dwell arc while something is being locked)
     const F = this.focus;
     if (gaze && live) this.place(F.sp, gaze); else F.sp.visible = false;
-    const fk = Math.round(Math.min(1, focusK) * 20);
-    if (fk !== this.lastFocus) {
-      this.lastFocus = fk;
-      const g = F.g;
+    // the dwell arc fills smoothly (and runs back instead of vanishing when the gaze moves off);
+    // a lock flashes the ring and closes its corner ticks in
+    this.fkS += (Math.min(1, focusK) - this.fkS) * (1 - Math.exp(-dt * (focusK > this.fkS ? 30 : 10)));
+    if (this.fkS < 0.004) this.fkS = 0;
+    this.pulse = Math.max(0, this.pulse - dt * 3.2);
+    const fk = Math.round(this.fkS * 240), pk = Math.round(this.pulse * 24);
+    if (F.sp.visible && this.pulse > 0) F.sp.scale.multiplyScalar(1 - 0.12 * Math.sin(this.pulse * Math.PI));
+    if (fk !== this.lastFocus || pk !== this.lastPulse) {
+      this.lastFocus = fk; this.lastPulse = pk;
+      const g = F.g, p = pk / 24;
       g.clearRect(0, 0, 128, 128);
-      g.strokeStyle = 'rgba(150,230,255,0.3)'; g.lineWidth = 2;
-      for (let a = 0; a < 4; a++) { g.beginPath(); g.arc(64, 64, 58, a * Math.PI / 2 + Math.PI / 4 - 0.22, a * Math.PI / 2 + Math.PI / 4 + 0.22); g.stroke(); }
-      if (fk > 0) { g.strokeStyle = 'rgba(160,240,255,0.9)'; g.lineWidth = 4; g.beginPath(); g.arc(64, 64, 52, -Math.PI / 2, -Math.PI / 2 + fk / 20 * Math.PI * 2); g.stroke(); }
+      g.strokeStyle = `rgba(150,230,255,${0.3 + 0.6 * p})`; g.lineWidth = 2 + 2 * p;
+      const gap = 0.22 + 0.25 * p;
+      for (let a = 0; a < 4; a++) { g.beginPath(); g.arc(64, 64, 58, a * Math.PI / 2 + Math.PI / 4 - gap, a * Math.PI / 2 + Math.PI / 4 + gap); g.stroke(); }
+      if (fk > 0) {
+        g.strokeStyle = 'rgba(160,240,255,0.9)'; g.lineWidth = 4; g.lineCap = 'round';
+        g.beginPath(); g.arc(64, 64, 52, -Math.PI / 2, -Math.PI / 2 + fk / 240 * Math.PI * 2); g.stroke();
+        g.lineCap = 'butt';
+      }
+      if (p > 0) { g.fillStyle = `rgba(170,245,255,${0.18 * p})`; g.beginPath(); g.arc(64, 64, 50, 0, Math.PI * 2); g.fill(); }
       F.tex.needsUpdate = true;
     }
   }
 
   lock(c) {
+    this.pulse = 1;
     if (this.locks.length >= LOCK_MAX) {
       // make room: the oldest lock that is not a threat
       const i = this.locks.findIndex((l) => !l.c.threat);
@@ -555,7 +575,7 @@ export class H8Display {
     const col = c.threat ? C.red : c.kind === 'b29' ? C.amber : c.kind === 'body' ? C.white : C.cyan;
     const x = 96, y = 96;
     // acquisition: the brackets close in and square up, LOCK flashes
-    const k = Math.min(1, l.t / 0.5);
+    const e = Math.min(1, l.t / 0.42), k = 1 - Math.pow(1 - e, 3);
     const s = 74 - 30 * k, rot = (1 - k) * Math.PI / 4;
     g.save(); g.translate(x, y); g.rotate(rot);
     g.strokeStyle = col; g.lineWidth = c.threat ? 5 : 4;

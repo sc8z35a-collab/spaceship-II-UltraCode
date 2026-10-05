@@ -9,6 +9,7 @@ const EYE_STAND = 0.66, EYE_CROUCH = 0.36; // above capsule centre
 
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const _qUp = new THREE.Quaternion(), _Y = new THREE.Vector3(0, 1, 0);
+const _q2 = new THREE.Quaternion(), _qI = new THREE.Quaternion();
 
 export class Player {
   constructor(phys) {
@@ -63,8 +64,9 @@ export class Player {
       const s = this.seat;
       const base = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), s.fwd, new THREE.Vector3(0, 1, 0)));
       out.copy(base).multiply(_q.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ')));
-      // a seat on springs: its lean and shiver tilt the head with it
-      if (s.dynQ) out.premultiply(s.dynQ);
+      // a seat on springs: its lean and shiver tilt the head with it (a zoomed-in view is
+      // stabilised against them: s.stab 0..1)
+      if (s.dynQ) out.premultiply(s.stab > 0 ? _q2.copy(s.dynQ).slerp(_qI, Math.min(1, s.stab)) : s.dynQ);
       return out;
     }
     this.frameQuat(out);

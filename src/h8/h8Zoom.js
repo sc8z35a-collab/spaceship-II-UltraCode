@@ -5,12 +5,14 @@
 // Kaito's head (and the seat with it) to stay on it. Pinch in the view or use the buttons; a drag
 // to look elsewhere hands the view back to him.
 import * as THREE from 'three';
+import { spring1 } from '../core/spring.js';
 
 export const OPT_MAX = 10.5;
 export const DIG_MAX = 4;
 export const Z_MAX = OPT_MAX * DIG_MAX;
 const NOTCH = [1, 1.5, 2.2, 3.3, 5, 7.5, 10.5, 15, 21, 30, 42];
-const _q = new THREE.Quaternion(), _v = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4();
+const _Y = new THREE.Vector3(0, 1, 0), _O = new THREE.Vector3();
 
 function wrap(a) { while (a > Math.PI) a -= Math.PI * 2; while (a < -Math.PI) a += Math.PI * 2; return a; }
 
@@ -21,6 +23,8 @@ export class H8Zoom {
     this.zT = 1;         // where it is going
     this.follow = false;
     this.target = null;
+    this.lz = { x: 0, v: 0 };   // log magnification on its spring
+    this.aimS = null;            // the follow's tracking state
     this.hud = document.getElementById('hud-zoom');
     this.ctx = this.hud ? this.hud.getContext('2d') : null;
     this.hudOn = false;
@@ -45,7 +49,7 @@ export class H8Zoom {
     this.zT = Math.max(1, Math.min(Z_MAX, this.zT / f));
   }
 
-  reset() { this.zT = 1; this.follow = false; this.target = null; this.beep(900); }
+  reset() { this.zT = 1; this.follow = false; this.target = null; this.aimS = null; this.beep(900); }
 
   toggleFollow() {
     this.follow = !this.follow;
@@ -54,8 +58,9 @@ export class H8Zoom {
       const T = this.pickTarget();
       if (!T) { this.follow = false; v.say('hachi_follow_none', {}, { minGap: 4, force: false }); return; }
       this.target = T;
+      this.aimS = null;
       v.say('hachi_follow_on', { name: T.short || T.name }, { minGap: 3, force: true });
-    } else { this.target = null; v.say('hachi_follow_off', {}, { minGap: 3, force: false }); }
+    } else { this.target = null; this.aimS = null; v.say('hachi_follow_off', {}, { minGap: 3, force: false }); }
     this.beep(this.follow ? 1800 : 1000);
   }
 
@@ -89,37 +94,68 @@ export class H8Zoom {
       // looking elsewhere by hand ends the follow
       if (this.follow && Math.abs(input.lookDX) + Math.abs(input.lookDY) > 6) { this.follow = false; this.target = null; this.beep(1000); }
     }
-    // follow: keep the target in the middle, sized to fill about a seventh of the view's height
+    // follow: the target (re-picked if it is gone) and the framing; the head is turned in aim()
     if (this.follow) {
       const live = this.target && v.cands.find((c) => c.id === this.target.id);
       if (!live || (live.ref && live.ref.alive === false)) {
         const next = this.pickTarget();
+        if (!next || !this.target || next.id !== this.target.id) this.aimS = null;
         this.target = next;
         if (!next) { this.follow = false; v.say('hachi_follow_lost', {}, { minGap: 4, force: false }); }
       } else this.target = live;
       const T = this.target;
       if (T && pl && pl.state === 'seated') {
-        // the direction in H8's frame, into the seat's look angles
-        const s = pl.seat;
-        const base = _q.setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), s.fwd, new THREE.Vector3(0, 1, 0)));
-        const d = _v.copy(T.dir).applyQuaternion(base.invert());
-        const yaw = Math.atan2(-d.x, -d.z), pitch = Math.asin(Math.max(-1, Math.min(1, d.y)));
-        const k = Math.min(1, dt * 7);
-        pl.yaw += wrap(yaw - pl.yaw) * k;
-        pl.pitch += (Math.max(-1.5, Math.min(1.5, pitch)) - pl.pitch) * k;
+        // sized to fill about a seventh of the view's height
         const R = T.R || (T.kind === 'drone' ? 1.25 : T.kind === 'station' ? 60 : T.kind === 'b29' ? 15 : 3);
         const ang = 2 * Math.atan(R / Math.max(1, T.dist));
         const fov = v.g.engine.baseVFov ? v.g.engine.baseVFov() * Math.PI / 180 : 1.0;
         this.zT = Math.max(1.5, Math.min(Z_MAX, fov * 0.14 / Math.max(1e-6, ang)));
       }
     }
-    // the lenses drive (about x2 per 0.4 s); the digital part follows at once
-    const lz = Math.log(this.z), lt = Math.log(this.zT);
-    const rate = (this.z >= OPT_MAX - 1e-3 && this.zT >= OPT_MAX) ? 8 : 1.8;
-    const step = rate * dt;
-    this.z = Math.exp(lz + Math.max(-step, Math.min(step, lt - lz)));
-    if (Math.abs(this.z - this.zT) / this.zT < 0.002) this.z = this.zT;
+    // the magnification on a spring in log space (it eases in and settles; the lenses' drive caps
+    // its speed at about x2 per 0.4 s, the digital part is quicker)
+    const L = this.lz, lt = Math.log(this.zT);
+    if (!Number.isFinite(L.x) || Math.abs(Math.exp(L.x) - this.z) > 1e-6 * this.z) L.x = Math.log(this.z);
+    const x0 = L.x, h = Math.min(dt, 0.05);
+    spring1(L, lt, 7, h);
+    const vmax = (this.z >= OPT_MAX - 1e-3 && this.zT >= OPT_MAX) ? 8 : 1.8;
+    if (Math.abs(L.x - x0) > vmax * h) { L.x = x0 + Math.sign(L.x - x0) * vmax * h; L.v = Math.sign(L.v) * Math.min(Math.abs(L.v), vmax); }
+    if (Math.abs(L.x - lt) < 4e-4 && Math.abs(L.v) < 1e-3) { L.x = lt; L.v = 0; }
+    this.z = Math.exp(L.x);
     return this.z;
+  }
+
+  /**
+   * Auto-follow, per drawn frame just before the view is set: the target's direction is worked out
+   * right now (from the eye, with the parallax). The head's offset from it rides a critically
+   * damped spring down to zero — so it swings on smoothly and then sits exactly on the target,
+   * however the target moves; once there it is pinned, frame after frame.
+   */
+  aim(dt, pl) {
+    const T = this.follow && this.target;
+    if (!T || !pl || pl.state !== 'seated' || !T.pos) { this.aimS = null; return false; }
+    const v = this.v, f = v.flight, s = pl.seat;
+    // the target from the eye, in H8's frame
+    _v.copy(T.pos).sub(f.pos).applyQuaternion(_q.copy(f.quat).invert());
+    _v2.copy(pl.eyeLocal).sub(s.dock || _O);
+    _v.sub(_v2).normalize();
+    // into the seat's look angles
+    _q.setFromRotationMatrix(_m.lookAt(_O, s.fwd, _Y)).invert();
+    _v.applyQuaternion(_q);
+    const yawT = Math.atan2(-_v.x, -_v.z), pitchT = Math.max(-1.5, Math.min(1.5, Math.asin(Math.max(-1, Math.min(1, _v.y)))));
+    const h = Math.max(1e-4, Math.min(dt, 0.05));
+    let S = this.aimS;
+    if (!S || S.id !== T.id) S = this.aimS = { id: T.id, ry: { x: wrap(pl.yaw - yawT), v: 0 }, rp: { x: pl.pitch - pitchT, v: 0 }, locked: false };
+    if (!S.locked) {
+      spring1(S.ry, 0, 10, h);
+      spring1(S.rp, 0, 10, h);
+      if (Math.hypot(S.ry.x, S.rp.x) < 2e-4 && Math.hypot(S.ry.v, S.rp.v) < 2e-3) S.locked = true;
+    }
+    if (S.locked) { S.ry.x = S.ry.v = S.rp.x = S.rp.v = 0; }
+    // (the yaw kept next to the head's own, so the seat does not spin round at +-180 degrees)
+    pl.yaw = pl.yaw + wrap(yawT + S.ry.x - pl.yaw);
+    pl.pitch = pitchT + S.rp.x;
+    return true;
   }
 
   /** the scope's overlay on the screen: reticle, magnification, the followed target */

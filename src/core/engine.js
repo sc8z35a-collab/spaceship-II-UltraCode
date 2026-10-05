@@ -259,7 +259,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor
   col *= 1.0 - uVignette * smoothstep(0.12, 0.62, r2);
   // grain
   float n = gHash(uv0 * vec2(1920.0, 1080.0) + fract(uTime * 13.7) * 100.0) - 0.5;
-  col += n * (uGrain + max(0.0, uPixel - 1.0) * 0.012) * (0.6 + 0.4 * (1.0 - l));
+  col += n * (uGrain + max(0.0, uPixel - 1.0) * 0.007) * (0.6 + 0.4 * (1.0 - l));
   col *= 1.0 - uFade;
   outputColor = vec4(max(col, 0.0), 1.0);
 }

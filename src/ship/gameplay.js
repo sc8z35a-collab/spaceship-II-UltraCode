@@ -785,7 +785,7 @@ export class Gameplay {
     this.brokenUp = true;
     g.damage.broken = true;
     if (this.sleeping) { this.sleeping = false; g.timeScale = 1; }
-    if (g.focus) g.focus = null;
+    if (g.focus) { g.monitors.setFocus(g.focus.m, false); g.focus = null; }
     g.autopilot.disengage(true);
     g.flight.ultra = false; g.flight.ultraDown = null;
     g.player.state = 'dead';
