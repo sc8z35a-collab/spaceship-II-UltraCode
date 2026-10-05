@@ -81,6 +81,9 @@ export class Particles {
     if (opts.color) P.c = opts.color;
     if (opts.life) P.life *= opts.life;
     if (opts.size) P.size *= opts.size;
+    if (opts.grow !== undefined) P.grow = opts.grow;
+    if (opts.alpha !== undefined) P.a = opts.alpha;
+    if (opts.drag !== undefined) P.drag = opts.drag;
   }
 
   /** continuous emitter; returns handle with .rate (particles/s) .pos .dir .kind */

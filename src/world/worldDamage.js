@@ -3,9 +3,16 @@
 // lose power and stop (lights out, habitat ring spinning down, elevator climbers stuck), and a big
 // enough strike breaks it apart. Kaito cannot fix any of it — station crews slowly patch what is
 // still alive; a wreck stays a wreck. Nearby strikes are seen and heard, and the ship warns.
+//
+// A station in trouble looks and behaves like one: air and ice stream out of its holes in jets
+// that weaken as the sections empty, embers drift out of the fires, torn cables arc; a crippled
+// station has secondary explosions (fireball, shock ring, smoke, debris — and its health keeps
+// falling), turns its emergency beacons on and launches escape pods; flying debris round a wreck
+// or a burning station really hits B-29.
 import * as THREE from 'three';
-import { LAYER_FAR, LAYER_MID, LAYER_NEAR } from '../core/layers.js';
+import { LAYER_FAR, LAYER_MID, LAYER_NEAR, assignLayers } from '../core/layers.js';
 import { petalGeometry, linerGeometry, outlineF, shardGeometry } from '../ship/tornMetal.js';
+import { Particles } from '../fx/particles.js';
 
 const H = 3600;
 const STATUS_ORDER = ['ok', 'damaged', 'critical', 'failed', 'destroyed'];
@@ -13,6 +20,9 @@ const statusOf = (D) => (D.destroyed ? 'destroyed' : D.health > 0.72 ? 'ok' : D.
 export const STATUS_JP = { ok: '正常', damaged: '損傷', critical: '危険', failed: '機能停止', destroyed: '崩壊' };
 
 function rand(a, b) { return a + Math.random() * (b - a); }
+
+/** sprites / points are not given layers by the station (only its meshes): show them in every pass */
+function allLayers(o) { o.layers.set(LAYER_MID); o.layers.enable(LAYER_NEAR); o.layers.enable(LAYER_FAR); return o; }
 
 let FLASH_TEX = null;
 function flashTexture() {
@@ -50,6 +60,24 @@ function sootTexture() {
   return SOOT_TEX;
 }
 
+let SMOKE_TEX = null;
+/** a soft, lumpy puff (smoke / dust of an explosion) */
+function smokeTexture() {
+  if (SMOKE_TEX) return SMOKE_TEX;
+  const c = document.createElement('canvas');
+  c.width = c.height = 128;
+  const g = c.getContext('2d');
+  for (let k = 0; k < 26; k++) {
+    const a = Math.random() * Math.PI * 2, r = Math.random() * 30;
+    const x = 64 + Math.cos(a) * r, y = 64 + Math.sin(a) * r, R = 18 + Math.random() * 26;
+    const gr = g.createRadialGradient(x, y, 0, x, y, R);
+    gr.addColorStop(0, 'rgba(255,255,255,0.22)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+    g.fillStyle = gr; g.fillRect(0, 0, 128, 128);
+  }
+  SMOKE_TEX = new THREE.CanvasTexture(c);
+  return SMOKE_TEX;
+}
+
 export class WorldDamage {
   constructor(game) {
     this.g = game;
@@ -62,7 +90,11 @@ export class WorldDamage {
       rim: new THREE.MeshStandardMaterial({ color: 0x2b2522, roughness: 0.8, metalness: 0.5, side: THREE.DoubleSide }),
       vent: new THREE.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
       fire: new THREE.MeshBasicMaterial({ color: new THREE.Color(3.0, 1.1, 0.3), transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }),
+      ring: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.8, 0.85, 1.0), transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
+      pod: new THREE.MeshStandardMaterial({ color: 0xe9e6dc, metalness: 0.3, roughness: 0.5 }),
+      podBand: new THREE.MeshStandardMaterial({ color: 0xd2691e, metalness: 0.2, roughness: 0.55 }),
     };
+    this.visT = 0;          // real time since the last explosion we showed (sleeping speeds the sim up)
     for (const s of game.stations.list) s.dmg = { health: 1, status: 'ok', hits: [], destroyed: false, t: rand(1.5, 7) * H, dirty: false };
     game.elevator.dmg = { health: 1, status: 'ok', hits: [], destroyed: false, breakH: 0, t: rand(4, 12) * H, dirty: false };
     this.anim = [];   // flashes / fires / vents to animate
@@ -88,8 +120,130 @@ export class WorldDamage {
       }
       // the crews patch what still has power, slowly
       if (D.status === 'ok' || D.status === 'damaged' || D.status === 'critical') D.health = Math.min(1, D.health + dt * 0.015 / H);
+      // a crippled station keeps burning: secondary explosions now and then (each one sets it back)
+      if (D.status === 'critical' && !this.isElevator(t)) {
+        D.boomT = (D.boomT ?? rand(4, 20) * 60) - dt;
+        if (D.boomT <= 0) { D.boomT = rand(10, 45) * 60; this.secondary(t); }
+      }
       this.refresh(t);
     }
+    this.debrisDanger(dt);
+  }
+
+  /** flying debris round a wreck (and round a burning station): it really hits B-29 */
+  debrisDanger(dt) {
+    const g = this.g;
+    if (!g.running || g.flight.landed) return;
+    const dk = g.docking;
+    for (const t of g.stations.list) {
+      const D = t.dmg;
+      if (!D) continue;
+      const fresh = D.hits.some((h) => g.time - h.time < 2 * H * 1000 && h.sev >= 0.08);
+      const R = D.destroyed ? (g.time - (D.destroyedAt || 0) < 6 * H * 1000 ? 1500 : 800) : D.status === 'critical' && fresh ? 250 : 0;
+      if (!R) continue;
+      if (dk && dk.station === t && dk.state !== 'free') continue;
+      const d = this.distTo(t);
+      if (d > R) continue;
+      const lam = 0.05 * (1 - d / R) ** 2;
+      if (Math.random() < 1 - Math.exp(-lam * dt)) {
+        g.asteroids.micro();
+        g.asphalt.say('w_debris', { name: this.name(t) }, { minGap: 90 });
+      }
+    }
+  }
+
+  /** an explosion inside a burning station (sim time; seen and heard only from close by) */
+  secondary(t) {
+    const D = t.dmg;
+    if (D.destroyed) return;
+    const sev = rand(0.005, 0.022);
+    D.health -= sev;
+    const base = D.hits.length && Math.random() < 0.7 ? D.hits[Math.floor(Math.random() * D.hits.length)] : this.hitPoint(t);
+    const hit = { p: base.p.clone(), n: base.n.clone(), r: 0.6 + sev * 160, sev: Math.min(0.3, sev * 8), time: this.g.time, seed: Math.random() * 100 };
+    D.hits.push(hit);
+    if (D.hits.length > 20) D.hits.shift();
+    D.dirty = true;
+    if (D.health <= 0) this.destroy(t);
+    const near = this.distTo(t);
+    if (near < 3.0e4) this.explosionFx(t, hit, 0.3 + sev * 25, near);
+    if (near < 2.0e5 && this.g.asphalt && this.g.running) this.g.asphalt.say('w_secondary', { name: this.name(t) }, { minGap: 120 });
+    this.dockedBreach(t, sev * 3);
+    this.refresh(t);
+  }
+
+  /** flash, fireball, shock ring, smoke, sparks and debris at a hit point (station frame) */
+  explosionFx(t, hit, k, dist) {
+    const g = this.g;
+    if (this.visT < 1.5 || !t.model.visible) return;
+    this.visT = 0;
+    const grp = this.groupFor(t);
+    const at = hit.p.clone().addScaledVector(hit.n, 1.5);
+    const sprite = (map, color, blend, scale, life, kind, extra = {}) => {
+      const sp = allLayers(new THREE.Sprite(new THREE.SpriteMaterial({ map, color, transparent: true, blending: blend, depthWrite: false })));
+      sp.position.copy(at);
+      sp.scale.setScalar(scale);
+      grp.add(sp);
+      this.anim.push(Object.assign({ o: sp, kind, t: 0, life, s0: scale }, extra));
+      return sp;
+    };
+    sprite(flashTexture(), 0xffffff, THREE.AdditiveBlending, 12 + 40 * k, 0.9, 'flash');
+    sprite(flashTexture(), new THREE.Color(1.6, 0.55, 0.15), THREE.AdditiveBlending, 6 + 22 * k, 2.6, 'fireball');
+    sprite(smokeTexture(), new THREE.Color(0.16, 0.15, 0.14), THREE.NormalBlending, 8 + 20 * k, 14, 'smoke', { v: hit.n.clone().multiplyScalar(1.5 + 3 * k) });
+    // the shock ring, flat across the hole
+    const ring = new THREE.Mesh(new THREE.RingGeometry(0.93, 1, 64), this.mats.ring.clone());
+    ring.position.copy(at);
+    ring.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), hit.n);
+    ring.scale.setScalar(2);
+    grp.add(ring);
+    this.anim.push({ o: ring, kind: 'shock', t: 0, life: 0.9, s1: 30 + 90 * k });
+    const F = this.fxOf(t);
+    F.P.burst('spark', at, hit.n, Math.round(40 + 120 * k), { speed: 18 + 30 * k, spread: 1.0, size: 22, life: 1.6 });
+    F.P.burst('debris', at, hit.n, Math.round(20 + 50 * k), { speed: 6 + 12 * k, spread: 1.1, size: 30, life: 1 });
+    F.P.burst('ice', at, hit.n, Math.round(30 + 60 * k), { speed: 20 + 25 * k, spread: 0.6, size: 40, life: 1.4 });
+    if (dist < 8000) {
+      const f = Math.max(0.15, 1 - dist / 8000);
+      g.audio.impact(new THREE.Vector3(0, 0, -30), Math.min(0.7, (0.2 + 0.5 * k) * f));
+      g.shake = Math.max(g.shake, Math.min(0.8, k * f * 0.8));
+    }
+    // too close: bits of it hit the ship
+    if (dist < 400 && !(g.docking && g.docking.station === t && g.docking.state !== 'free')) for (let i = 0; i < 1 + Math.floor(k * 2 * (1 - dist / 400)); i++) setTimeout(() => g.asteroids.micro(), 300 + i * 400 + dist * 4);
+  }
+
+  /** the crew abandons ship: escape pods fire away from the station, beacons blinking */
+  launchPods(t, n) {
+    if (!t.model.visible) return;
+    const grp = this.groupFor(t);
+    if (!this.podGeo) {
+      this.podGeo = new THREE.CapsuleGeometry(0.9, 1.6, 6, 14);
+      this.podGeo.rotateX(Math.PI / 2);
+      this.podBandGeo = new THREE.CylinderGeometry(0.93, 0.93, 0.3, 14, 1, true);
+      this.podBandGeo.rotateX(Math.PI / 2);
+    }
+    for (let i = 0; i < n; i++) {
+      const hp = this.hitPoint(t);
+      const pod = new THREE.Group();
+      pod.add(new THREE.Mesh(this.podGeo, this.mats.pod), new THREE.Mesh(this.podBandGeo, this.mats.podBand));
+      const plume = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(1.4, 0.9, 0.6), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      plume.position.set(0, 0, 1.9);
+      plume.scale.setScalar(3.5);
+      allLayers(plume);
+      const blink = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(0.3, 1.6, 0.4), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+      blink.position.set(0, 1.0, 0);
+      blink.scale.setScalar(1.2);
+      allLayers(blink);
+      pod.add(plume, blink);
+      pod.position.copy(hp.p).addScaledVector(hp.n, 2);
+      const dir = hp.n.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.35)).normalize();
+      pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
+      grp.add(pod);
+      this.anim.push({ o: pod, kind: 'pod', t: -i * rand(0.8, 2.5), life: 480, v: dir.clone().multiplyScalar(rand(4, 8)), dir, plume, blink, w: new THREE.Vector3().randomDirection().multiplyScalar(rand(0.05, 0.25)) });
+    }
+  }
+
+  /** the particle system riding with a station (vents, embers, explosion debris) */
+  fxOf(t) {
+    if (!t.fxs) t.fxs = { P: new Particles(this.groupFor(t)), vents: [], arcT: rand(0.5, 2) };
+    return t.fxs;
   }
 
   /** one asteroid strike (sev 0..1, or random) */
@@ -234,6 +388,7 @@ export class WorldDamage {
     if (st === D.status) return;
     const worse = STATUS_ORDER.indexOf(st) > STATUS_ORDER.indexOf(D.status);
     D.status = st;
+    if (st === 'failed') D.failedAt = this.g.time;
     D.dirty = true;
     if (!worse) return;
     const g = this.g;
@@ -241,6 +396,15 @@ export class WorldDamage {
     const near = this.distTo(t) < 2.0e5 || (g.docking && g.docking.station === t) || (g.autopilot.target === t);
     const key = { damaged: 'w_damaged', critical: 'w_critical', failed: 'w_failed', destroyed: 'w_destroyed' }[st];
     if (key && (near || st === 'destroyed' || st === 'failed')) g.asphalt.say(this.isElevator(t) ? key + '_el' : key, { name: this.name(t) }, { force: st === 'destroyed', minGap: 20 });
+    // the crew gets out: escape pods (seen from up to 60 km)
+    if (!this.isElevator(t) && (st === 'critical' || st === 'failed' || st === 'destroyed') && !D.podsOut) {
+      D.podsOut = true;
+      const dist = this.distTo(t);
+      if (dist < 6.0e4) {
+        this.launchPods(t, 3 + Math.floor(Math.random() * 4));
+        if (dist < 2.0e5) setTimeout(() => g.asphalt.say('w_pods', { name: this.name(t) }, { minGap: 60 }), 4000);
+      }
+    }
     if (near && g.gameplay && (st === 'critical' || st === 'failed' || st === 'destroyed')) g.gameplay.raise(st === 'destroyed' ? 0.9 : 0.6);
     // a failed station cannot hold a docked ship: crew evacuates, Asphalt keeps the berth only
     if (st === 'failed' && g.docking && g.docking.station === t && g.docking.state === 'docked') g.asphalt.say('w_berth_dark', {}, { minGap: 60 });
@@ -309,6 +473,10 @@ export class WorldDamage {
     for (const c of [...S.children]) { S.remove(c); if (c.geometry) c.geometry.dispose(); }
     const M = this.mats, up = new THREE.Vector3(0, 1, 0);
     const fresh = (h) => this.g.time - h.time < 3 * H * 1000;
+    const F = this.fxOf(t);
+    for (const e of F.vents) F.P.removeEmitter(e);
+    F.vents.length = 0;
+    this.anim = this.anim.filter((a) => !(a.static && a.o.parent === S));
     for (const h of D.hits) {
       const q = new THREE.Quaternion().setFromUnitVectors(up, h.n);
       const sc = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 8), M.scorch);
@@ -348,11 +516,14 @@ export class WorldDamage {
           }
         }
         if (!D.destroyed && (fresh(h) || D.status === 'critical')) {
-          const cone = new THREE.Mesh(new THREE.ConeGeometry(h.r * 1.4, h.r * 7, 16, 1, true), M.vent);
-          cone.position.copy(h.p).addScaledVector(h.n, h.r * 3.5);
-          cone.quaternion.setFromUnitVectors(new THREE.Vector3(0, -1, 0), h.n);
-          S.add(cone);
-          this.anim.push({ o: cone, kind: 'vent', t: Math.random() * 10, life: Infinity, static: true });
+          // air and ice crystals streaming out of the hole in a tight jet (weaker as the section
+          // behind it empties)
+          const at = h.p.clone().addScaledVector(h.n, 0.3);
+          const jet = F.P.emitter('ice', at, h.n, 1, { speed: 28 + 40 * h.sev, spread: 0.16, size: 8 + h.r * 9, life: 1.6, grow: 4, alpha: 0.22 });
+          const haze = F.P.emitter('mist', at, h.n, 1, { speed: 10 + 12 * h.sev, spread: 0.45, size: 18 + h.r * 14, life: 2.2, alpha: 0.06, drag: 0.15 });
+          jet.h = h; jet.base = Math.min(150, 40 + 300 * h.sev);
+          haze.h = h; haze.base = Math.min(12, 3 + 25 * h.sev);
+          F.vents.push(jet, haze);
         }
       }
       if (!D.destroyed && h.sev >= 0.25 && (fresh(h) || D.status !== 'ok')) {
@@ -366,7 +537,32 @@ export class WorldDamage {
         glow.matrixAutoUpdate = false;
         S.add(glow);
         this.anim.push({ o: glow, kind: 'fire', t: Math.random() * 10, life: Infinity, static: true });
+        // embers drifting out of the fire
+        const em = F.P.emitter('spark', h.p.clone().addScaledVector(h.n, 0.2), h.n, 1, { speed: 4, spread: 0.7, size: 20, life: 2.5, color: [1, 0.45, 0.12] });
+        em.h = h; em.base = 6 + 20 * h.sev; em.fire = true;
+        F.vents.push(em);
       }
+    }
+    // emergency beacons: red lights sweeping round on a crippled station (on batteries for a few
+    // hours after it fails)
+    const emergency = !D.destroyed && (D.status === 'critical' || (D.status === 'failed' && this.g.time - (D.failedAt || 0) < 6 * H * 1000));
+    if (emergency) {
+      const P = t.model.userData.proxies || [];
+      const pts = [];
+      for (const pr of P) {
+        if (pts.length >= 8) break;
+        if (pr.type === 'sphere') pts.push(pr.c.clone().add(new THREE.Vector3(0, pr.r + 0.6, 0)));
+        else if (pr.type === 'capsule' || pr.type === 'cyl') { pts.push(pr.a.clone().add(new THREE.Vector3(0, pr.r + 0.6, 0))); pts.push(pr.b.clone().add(new THREE.Vector3(0, pr.r + 0.6, 0))); }
+        else if (pr.type === 'box') pts.push(pr.c.clone().add(new THREE.Vector3(0, pr.h.y + 0.6, 0)));
+      }
+      if (!pts.length) for (let k = 0; k < 4; k++) pts.push(new THREE.Vector3(0, 4 * (t.size || 1), (k - 1.5) * 12 * (t.size || 1)));
+      pts.forEach((p, i) => {
+        const b = allLayers(new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(2.2, 0.12, 0.06), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })));
+        b.position.copy(p);
+        b.scale.setScalar(5 + 3 * (t.size || 1));
+        S.add(b);
+        this.anim.push({ o: b, kind: 'beacon', t: 0, life: Infinity, static: true, ph: i * 1.7, dim: D.status === 'failed', s0: b.scale.x });
+      });
     }
     // a wreck: the structure is gone, a debris field drifts where it was
     const keep = new Set([grp]);
@@ -445,32 +641,108 @@ export class WorldDamage {
   }
 
   /** per render frame: dress visible stations, animate flashes / fires / vents / debris */
-  updateVisual(dt) {
-    for (const s of this.g.stations.list) {
+  updateVisual(dt, camWorld) {
+    const g = this.g;
+    this.visT += dt;
+    const sc = g.engine.renderer.domElement.height / (2 * Math.tan(g.engine.camera.fov * Math.PI / 360));
+    const tt = performance.now() / 1000;
+    for (const s of g.stations.list) {
       const D = s.dmg;
       if (!s.model.visible || !D) continue;
       const key = D.hits.length + (D.destroyed ? 100 : 0) + STATUS_ORDER.indexOf(D.status) * 1000;
       if (D.dirty || D.dressedFor !== key) this.dress(s);
+      const F = s.fxs;
+      if (!F) continue;
+      // the jets weaken as the sections behind them empty (a critical station keeps leaking)
+      for (const e of F.vents) {
+        const age = (g.time - e.h.time) / 1000;
+        const k = e.fire ? 0.6 + 0.4 * Math.sin(tt * 3 + e.base) : D.status === 'critical' ? 0.55 + 0.45 * Math.exp(-age / 5400) : Math.exp(-age / 3600);
+        e.rate = e.base * k * (0.85 + 0.3 * Math.sin(tt * 7.3 + e.base * 3));
+      }
+      // torn cables arcing on a crippled station
+      if (D.status === 'critical' && D.hits.length) {
+        F.arcT -= dt;
+        if (F.arcT <= 0) {
+          F.arcT = rand(0.4, 2.8);
+          const h = D.hits[Math.floor(Math.random() * D.hits.length)];
+          const at = h.p.clone().addScaledVector(h.n, 0.5).add(new THREE.Vector3().randomDirection().multiplyScalar(h.r * 0.3));
+          const arc = allLayers(new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(1.1, 1.4, 2.6), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })));
+          arc.position.copy(at);
+          arc.scale.setScalar(rand(2, 6) * (s.size || 1));
+          this.groupFor(s).add(arc);
+          this.anim.push({ o: arc, kind: 'arc', t: 0, life: rand(0.08, 0.3), s0: arc.scale.x });
+          F.P.burst('spark', at, h.n, 14, { speed: 9, spread: 1.2, size: 14, life: 0.8, color: [0.85, 0.9, 1] });
+        }
+      }
+      // the particles (they ride with the station; drawn in the pass that covers its distance)
+      const live = F.P.add.p.length || F.P.alpha.p.length || F.vents.some((e) => e.rate > 0.05);
+      if (live) {
+        F.P.add.pts.material.uniforms.uScale.value = sc;
+        F.P.alpha.pts.material.uniforms.uScale.value = sc;
+        F.P.update(Math.min(dt, 0.1));
+        F.idle = false;
+      } else if (!F.idle) { F.P.update(0); F.idle = true; }
+      if (camWorld) {
+        const d = new THREE.Vector3().setFromMatrixPosition(s.model.matrixWorld).distanceTo(camWorld);
+        const R = (s.model.userData.radius || 70 * (s.size || 1)) + 250;
+        assignLayers(F.P.add.pts, Math.max(0, d - R), d + R);
+        assignLayers(F.P.alpha.pts, Math.max(0, d - R), d + R);
+      }
     }
-    const tt = performance.now() / 1000;
     this.anim = this.anim.filter((a) => {
       a.t += dt;
       const o = a.o;
       if (!o.parent) return false;
+      if (a.t < 0) return true;
       if (a.kind === 'flash') {
         const k = a.t / a.life;
         o.material.opacity = Math.max(0, 1 - k);
         o.scale.setScalar(a.s0 * (1 + k * 2));
+      } else if (a.kind === 'fireball') {
+        // a ball of burning gas: swells fast, reddens and fades
+        const k = a.t / a.life;
+        o.scale.setScalar(a.s0 * (0.6 + 2.2 * Math.sqrt(k)));
+        o.material.opacity = Math.max(0, 1 - k) ** 1.5;
+        o.material.color.setRGB(1.6 * (1 - 0.3 * k), 0.55 * (1 - 0.7 * k), 0.15 * (1 - k));
+      } else if (a.kind === 'smoke') {
+        const k = a.t / a.life;
+        o.scale.setScalar(a.s0 * (1 + 3 * k));
+        o.material.opacity = 0.75 * Math.min(1, a.t / 0.6) * (1 - k);
+        o.position.addScaledVector(a.v, dt);
+      } else if (a.kind === 'shock') {
+        const k = a.t / a.life;
+        o.scale.setScalar(2 + a.s1 * Math.sqrt(k));
+        o.material.opacity = 0.35 * (1 - k) * (1 - k);
+      } else if (a.kind === 'arc') {
+        o.material.opacity = Math.random() < 0.3 ? 0.2 : 1;
+        o.scale.setScalar(a.s0 * (0.6 + Math.random() * 0.8));
+      } else if (a.kind === 'beacon') {
+        // a rotating beacon: a short bright sweep once a turn
+        const ph = ((tt * (a.dim ? 0.6 : 1.1) + a.ph) % 1 + 1) % 1;
+        const k = Math.max(0, Math.cos((ph - 0.5) * Math.PI * 2)) ** 8;
+        o.material.opacity = (a.dim ? 0.35 : 1) * (0.12 + 0.88 * k);
+        o.scale.setScalar(a.s0 * (0.7 + 0.6 * k));
+      } else if (a.kind === 'pod') {
+        // escape pod: thrusts away for half a minute, then coasts, tumbling slowly
+        const burn = a.t < 30;
+        if (burn) a.v.addScaledVector(a.dir, 2.5 * dt);
+        o.position.addScaledVector(a.v, dt);
+        o.rotation.x += a.w.x * dt * (burn ? 0.2 : 1); o.rotation.y += a.w.y * dt * (burn ? 0.2 : 1);
+        a.plume.visible = burn;
+        if (burn) a.plume.scale.setScalar(3 + Math.random() * 1.5);
+        a.blink.material.opacity = (tt * 1.3 + a.dir.x) % 1 < 0.12 ? 1 : 0.05;
       } else if (a.kind === 'debris' || a.kind === 'drift') {
         const v = a.kind === 'drift' ? a.v.clone().multiplyScalar(Math.max(0, 1 - a.t / 3600)) : a.v;
         o.position.addScaledVector(v, dt);
         o.rotation.x += a.w.x * dt; o.rotation.y += a.w.y * dt; o.rotation.z += a.w.z * dt;
       } else if (a.kind === 'fire') {
         o.material.opacity = Math.max(0.08, 0.36 + 0.18 * Math.sin(tt * 13 + a.t * 3) + 0.12 * Math.sin(tt * 31 + a.t) + 0.08 * Math.sin(tt * 4.3));
-      } else if (a.kind === 'vent') {
-        o.scale.set(1, 0.8 + 0.25 * Math.sin(tt * 9 + a.t), 1);
       }
-      if (a.t > a.life) { o.parent.remove(o); return false; }
+      if (a.t > a.life) {
+        o.parent.remove(o);
+        if (o.isSprite || (o.isMesh && (a.kind === 'shock'))) o.material.dispose();
+        return false;
+      }
       return true;
     });
   }

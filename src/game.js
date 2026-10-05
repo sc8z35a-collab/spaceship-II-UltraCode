@@ -428,7 +428,7 @@ export class Game {
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
-    if (this.worldDamage) this.worldDamage.updateVisual(dt);
+    if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
       const ls = this.lifeSupport;

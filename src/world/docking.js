@@ -401,6 +401,7 @@ export class Docking {
 
   despawn() {
     const g = this.g;
+    if (this.klaxon) { this.klaxon = false; g.audio.stopLoop('stKlaxon'); }
     if (!this.lobby) return;
     this.despawnRing();
     g.shipVis.root.remove(this.lobby.group);
@@ -581,6 +582,42 @@ export class Docking {
       for (const e of this.air.events.splice(0)) if (e.type === 'recovered') g.asphalt.say('st_air_ok', { sec: this.air.sec[e.sec].name }, { minGap: 20 });
     }
     for (const d of this.lobby.doors || []) d.update(dt, who, g.audio);
+    this.emergencyLights(dt, st);
+  }
+
+  /** the station's own trouble inside the lobby: failing lights, red emergency lighting, a klaxon */
+  emergencyLights(dt, st) {
+    const g = this.g;
+    const L = this.lamps;
+    if (!L.length) return;
+    for (const l of L) if (l.base0 === undefined) { l.base0 = l.intensity; l.color0 = new THREE.Color(l.color); }
+    this.emT = (this.emT || 0) + dt;
+    const t = this.emT;
+    const red = new THREE.Color(1, 0.12, 0.06);
+    L.forEach((l, i) => {
+      let k = 1, col = l.color0;
+      // (smooth changes only, and a rare dip: no strobing)
+      if (st === 'damaged') k = Math.sin(t * 0.7 + i * 2.3) > 0.996 ? 0.5 : 0.85;
+      else if (st === 'critical') {
+        // half the lamps are out of power; the emergency lights sweep red
+        const sweep = Math.max(0, Math.cos(((t * 0.9 + i * 0.37) % 1) * Math.PI * 2)) ** 6;
+        if (i % 2 === 0) { col = red; k = 0.15 + 0.85 * sweep; } else k = Math.sin(t * 0.9 + i * 1.7) > 0.99 ? 0.05 : 0.3;
+      } else if (st === 'failed' || st === 'destroyed') { col = red; k = i % 3 === 0 ? 0.22 : 0; }
+      l.intensity = l.base0 * k;
+      if (typeof l.color === 'number') l.color = col.getHex(); else if (l.color && l.color.copy) l.color.copy(col);
+    });
+    // the station's klaxon (muffled through the walls)
+    const loud = st === 'critical' || st === 'failed';
+    if (loud !== !!this.klaxon && g.audio.ready) {
+      this.klaxon = loud;
+      if (loud) g.audio.humLoop('stKlaxon', { pos: new THREE.Vector3(3.5, 2.4, -2.0), freq: 440, gain: 0.0, harm: [1, 0.5, 0.25, 0.1] });
+      else g.audio.stopLoop('stKlaxon');
+    }
+    if (this.klaxon) {
+      const on = (t % 1.4) < 0.7;
+      g.audio.setLoopFreq && g.audio.setLoopFreq('stKlaxon', on ? 620 : 470);
+      g.audio.setLoopGain('stKlaxon', st === 'critical' ? 0.035 : 0.015, 0.05);
+    }
   }
 
   /** is a ship-local point inside the docked station's walkable space */

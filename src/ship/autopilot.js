@@ -53,7 +53,8 @@ export class Autopilot {
     this.dist = dist;
     const dir = rel.clone().divideScalar(Math.max(dist, 1e-6));
     const vmax = Math.min(f.ultra ? f.vUltra : f.vNormal, f.speedLimit);
-    const standoff = s.standoff || (s.kind === 'dock' ? 120 : 320);
+    // (a wreck is surrounded by a field of flying debris: hold well clear of it)
+    const standoff = s.dmg && s.dmg.destroyed ? 1800 : s.standoff || (s.kind === 'dock' ? 120 : 320);
     // braking profile (the ULTRA drive can shed speed much faster; with H8 pushing, faster still)
     const a = (f.ultra ? 2.2 : 0.55) * Math.min(8, f.mul);
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
