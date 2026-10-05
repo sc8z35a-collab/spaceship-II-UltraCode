@@ -1043,6 +1043,25 @@ export class Gameplay {
       m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
       m.scale.y = a.distanceTo(b) / len;
     };
+    // in H8's seat the hands are on H8's own side-stick and throttle (the arms ride in H8's frame)
+    const h8 = g.h8, inH8 = !!(pl.seat.h8 && h8 && h8.int.seatParts);
+    const parent = inH8 ? h8.root : g.shipVis.root;
+    if (this.arms.parent !== parent) parent.add(this.arms);
+    if (inH8) {
+      const S = h8.int.seatParts;
+      const toL = (v, obj) => h8.root.worldToLocal(v.applyMatrix4(obj.matrixWorld));
+      const sGrip = toL(V(0, 0.1, 0), S.stick), tGrip = toL(V(0, 0.075, 0), S.throttle);
+      [[1, sGrip], [-1, tGrip]].forEach(([side, grip], i) => {
+        const P = this.armParts[i];
+        const sh = toL(V(side * 0.19, 0.37, 0.16), S.pitch);
+        const elbow = sh.clone().lerp(grip, 0.5).add(toL(V(side * 0.09, -0.12, 0.08), S.pitch).sub(toL(V(0, 0, 0), S.pitch)));
+        seg(P.upper, sh, elbow, 0.36);
+        seg(P.fore, elbow, grip.clone(), 0.32);
+        P.hand.position.copy(grip);
+        P.hand.quaternion.setFromUnitVectors(V(0, 0, 1), grip.clone().sub(elbow).normalize());
+      });
+      return;
+    }
     const eye = pl.seat.eye;
     // grip points follow the animated controls
     const stickGrip = V(0, 0.15, 0).applyEuler(c.stick.rotation).add(c.stick.position).add(c.stick.parent.position);

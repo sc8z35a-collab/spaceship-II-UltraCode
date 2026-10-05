@@ -63,6 +63,8 @@ export class Player {
       const s = this.seat;
       const base = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(new THREE.Vector3(), s.fwd, new THREE.Vector3(0, 1, 0)));
       out.copy(base).multiply(_q.setFromEuler(new THREE.Euler(this.pitch, this.yaw, 0, 'YXZ')));
+      // a seat on springs: its lean and shiver tilt the head with it
+      if (s.dynQ) out.premultiply(s.dynQ);
       return out;
     }
     this.frameQuat(out);
@@ -86,7 +88,7 @@ export class Player {
   sit(seat) {
     this.seat = seat;
     this.state = 'seated';
-    this.yaw = seat.swivel ? seat.yawSeat || 0 : 0; this.pitch = 0;
+    this.yaw = seat.swivel ? seat.yawSeat || 0 : 0; this.pitch = seat.gimbal ? seat.pitchSeat || 0 : 0;
     this.vel.set(0, 0, 0);
     this.colStand.setEnabled(false);
   }
@@ -111,11 +113,21 @@ export class Player {
     const sens = 0.0042;
     this.yaw -= input.lookDX * sens;
     this.pitch -= input.lookDY * sens;
-    const pLim = this.state === 'seated' ? 1.2 : 1.5;
+    const pLim = this.state === 'seated' ? (this.seat && this.seat.gimbal ? 1.5 : 1.2) : 1.5;
     this.pitch = Math.max(-pLim, Math.min(pLim, this.pitch));
     if (this.state === 'seated') {
       const s = this.seat;
-      if (s.swivel) {
+      if (s.gimbal) {
+        // a seat on a gimbal: it turns all the way round after the head, and tips back or forward
+        // after it too (lying back to look straight up, leaning over to look at the floor)
+        const d = this.yaw - s.yawSeat;
+        if (Math.abs(d) > 0.6) s.yawSeat += (d - Math.sign(d) * 0.6) * Math.min(1, dt * 5);
+        const dp = this.pitch - (s.pitchSeat || 0);
+        if (Math.abs(dp) > 0.42) s.pitchSeat = (s.pitchSeat || 0) + (dp - Math.sign(dp) * 0.42) * Math.min(1, dt * 4);
+        s.pitchSeat = Math.max(-0.95, Math.min(1.4, s.pitchSeat || 0));
+        if (s.eyeLocal) this.eyeLocal.copy(s.eyeLocal).add(s.dock || _v.set(0, 0, 0));
+        else this.eyeLocal.copy(s.eye);
+      } else if (s.swivel) {
         // a swivel seat turns all the way round: the body follows the head once it looks more
         // than ~40 degrees off the seat's heading (the eye goes round the seat's column with it)
         const d = this.yaw - s.yawSeat;
@@ -244,6 +256,6 @@ export class Player {
   }
 
   serialize() {
-    return { pos: this.pos.toArray(), yaw: this.yaw, pitch: this.pitch, state: this.state, seat: this.seat ? this.seat.id : null, suit: this.suit, suitO2: this.suitO2, suitFuel: this.suitFuel, health: this.health, outside: this.outside };
+    return { pos: this.pos.toArray(), yaw: this.yaw, pitch: this.pitch, state: this.state, seat: this.seat ? this.seat.id : null, suit: this.suit, suitH8: !!this.suitH8, suitO2: this.suitO2, suitFuel: this.suitFuel, health: this.health, outside: this.outside };
   }
 }

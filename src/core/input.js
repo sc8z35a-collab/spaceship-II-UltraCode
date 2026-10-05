@@ -47,7 +47,7 @@ export class Input {
     window.addEventListener('blur', () => { this.keys.clear(); this.touches.clear(); this._resetSticks(); });
     el.addEventListener('wheel', (e) => { if (!this.enabled) return; e.preventDefault(); this.pinch *= Math.exp(e.deltaY * 0.0012); }, opt);
     // HUD buttons
-    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto']) {
+    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto', 'b-zin', 'b-zout', 'b-zfol']) {
       const b = document.getElementById(id);
       if (!b) continue;
       this.btn[id] = { down: false, pressed: false };
@@ -62,9 +62,14 @@ export class Input {
   _down(e) {
     if (!this.enabled) return;
     e.preventDefault();
-    const zone = this._zone(e.clientX, e.clientY);
-    const t = { id: e.pointerId, zone, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now(), moved: 0, type: e.pointerType };
+    let zone = this._zone(e.clientX, e.clientY);
+    // something in the world can take the touch for itself (H8's tabs: tap, fold, drag)
+    let cap = null;
+    if (this.capture && this.mode !== 'focus') cap = this.capture(e.clientX, e.clientY);
+    if (cap) zone = 'ui';
+    const t = { id: e.pointerId, zone, cap, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now(), moved: 0, type: e.pointerType };
     this.touches.set(e.pointerId, t);
+    if (cap) return;
     if (zone === 'L') this._placeStick(this.stickL, t);
     if (zone === 'R') this._placeStick(this.stickR, t);
     if (e.pointerType === 'mouse') this.mouseDown = true;
@@ -85,6 +90,7 @@ export class Input {
     const dx = e.clientX - t.x, dy = e.clientY - t.y;
     t.moved += Math.abs(dx) + Math.abs(dy);
     t.x = e.clientX; t.y = e.clientY;
+    if (t.zone === 'ui') { if (this.captureMove) this.captureMove(t); return; }
     const R = window.innerHeight * 0.11;
     if (t.zone === 'L' || t.zone === 'R') {
       let sx = (t.x - t.x0) / R, sy = (t.y - t.y0) / R;
@@ -116,6 +122,7 @@ export class Input {
     if (!t) return;
     this.touches.delete(e.pointerId);
     const dt = performance.now() - t.t0;
+    if (t.zone === 'ui') { if (this.captureUp) this.captureUp(t, !cancel && t.moved < 14 && dt < 450); if (e.pointerType === 'mouse') this.mouseDown = false; return; }
     if (!cancel && t.moved < 14 && dt < 350) {
       this.taps.push({ x: (t.x / window.innerWidth) * 2 - 1, y: -(t.y / window.innerHeight) * 2 + 1, px: t.x, py: t.y });
     }

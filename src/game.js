@@ -242,6 +242,7 @@ export class Game {
     if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
+    this.lastFlightIn = flightIn;
     if (!dead) {
       if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
@@ -295,7 +296,10 @@ export class Game {
       env = this.systems.playerEnv();
       this.docking.envFor(env, pl);
     }
-    const lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    let lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    // through H8's zoom the head turns slower (the view is magnified)
+    const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
+    if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     // ---- taps

@@ -75,7 +75,7 @@ export class SaveSystem {
     const p = d.player;
     g.player.teleport(new THREE.Vector3(...p.pos));
     g.player.yaw = p.yaw; g.player.pitch = p.pitch;
-    g.player.suit = p.suit; g.player.suitO2 = p.suitO2 ?? 1; g.player.suitFuel = p.suitFuel ?? 1; g.player.health = Math.max(0.3, p.health ?? 1);
+    g.player.suit = p.suit; g.player.suitH8 = !!p.suitH8; g.player.suitO2 = p.suitO2 ?? 1; g.player.suitFuel = p.suitFuel ?? 1; g.player.health = Math.max(0.3, p.health ?? 1);
     if (p.outside) { g.player.outside = true; g.player.state = 'eva'; }
     // H8 before the seat: Kaito may have been sitting in H8's cockpit
     if (d.h8 && g.h8) g.h8.restore(d.h8);

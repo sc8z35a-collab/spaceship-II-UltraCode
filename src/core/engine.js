@@ -173,6 +173,7 @@ uniform float uVisor;
 uniform float uHeat;
 uniform float uDesat;
 uniform float uBlur;
+uniform float uPixel;
 uniform vec3 uTint;
 
 vec3 agxDefault(vec3 color){
@@ -200,7 +201,10 @@ vec3 agxDefault(vec3 color){
 }
 float gHash(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
 
-void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor){
+void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor){
+  // digital zoom: the picture is a crop of fewer sensor pixels (blocks)
+  vec2 uv = uv0;
+  if (uPixel > 1.01){ vec2 px = resolution / uPixel; uv = (floor(uv0 * px) + 0.5) / px; }
   vec2 dc = uv - 0.5;
   float r2 = dot(dc, dc);
   // heat shimmer during re-entry
@@ -219,7 +223,7 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
     }
     col = mix(col, b / 6.0, clamp(uBlur, 0.0, 1.0));
   }
-  col += inputColor.rgb - base; // keep bloom from earlier effects
+  col += (uPixel > 1.01 ? vec3(0.0) : inputColor.rgb - base); // keep bloom from earlier effects
   float avg = texture2D(tLum, vec2(0.5)).r;
   float exposure = uExposureBias * 0.34 / clamp(avg, 0.05, 3.0);
   col *= exposure;
@@ -254,8 +258,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv, out vec4 outputColor)
   // vignette
   col *= 1.0 - uVignette * smoothstep(0.12, 0.62, r2);
   // grain
-  float n = gHash(uv * vec2(1920.0, 1080.0) + fract(uTime * 13.7) * 100.0) - 0.5;
-  col += n * uGrain * (0.6 + 0.4 * (1.0 - l));
+  float n = gHash(uv0 * vec2(1920.0, 1080.0) + fract(uTime * 13.7) * 100.0) - 0.5;
+  col += n * (uGrain + max(0.0, uPixel - 1.0) * 0.012) * (0.6 + 0.4 * (1.0 - l));
   col *= 1.0 - uFade;
   outputColor = vec4(max(col, 0.0), 1.0);
 }
@@ -281,6 +285,7 @@ export class GradeEffect extends Effect {
         ['uHeat', new THREE.Uniform(0)],
         ['uDesat', new THREE.Uniform(0)],
         ['uBlur', new THREE.Uniform(0)],
+        ['uPixel', new THREE.Uniform(1)],
         ['uTint', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
       ]),
     });
@@ -346,9 +351,26 @@ export class Engine {
 
   setHFov(deg) {
     this.hfov = deg;
+    this.applyFov();
+  }
+
+  /** the vertical field of view without any zoom (degrees) */
+  baseVFov() {
     const a = this.camera.aspect;
-    const vf = 2 * Math.atan(Math.tan((deg * Math.PI) / 360) / a) * 180 / Math.PI;
-    this.camera.fov = Math.min(100, Math.max(25, vf));
+    const vf = 2 * Math.atan(Math.tan(((this.hfov || 92) * Math.PI) / 360) / a) * 180 / Math.PI;
+    return Math.min(100, Math.max(25, vf));
+  }
+
+  /** magnify the view (H8's zoom): the field of view narrows by z */
+  setZoom(z) {
+    if (Math.abs((this.zoom || 1) - z) < 1e-5) return;
+    this.zoom = z;
+    this.applyFov();
+  }
+
+  applyFov() {
+    const vf = this.baseVFov(), z = this.zoom || 1;
+    this.camera.fov = z > 1.00001 ? 2 * Math.atan(Math.tan(vf * Math.PI / 360) / z) * 180 / Math.PI : vf;
     this.camera.updateProjectionMatrix();
   }
 

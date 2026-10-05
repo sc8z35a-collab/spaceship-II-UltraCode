@@ -40,6 +40,10 @@ export const H8 = {
   neckHatchSlide: 0.96,
   // the point-defence laser (the comm terminal doubles as one)
   laserDir: V(0.86, 0.45, -0.24).normalize(),
+  // the suit locker behind a section of the cockpit display (port side, a little aft): azimuth
+  // (rad, 0 = forward, + = starboard), its elevation span and half-width (rad, from the cockpit's
+  // middle) and how deep the niche goes
+  locker: { az: -1.83, el0: -0.32, el1: 0.44, hw: 0.25, depth: 0.42 },
   // drive: the plasma drive's magnetic nozzle at the stern, four auxiliary engines round it
   driveZ: 3.15,
   aux: [[1.55, 45], [1.55, 135], [1.55, 225], [1.55, 315]],

@@ -15,7 +15,10 @@ import { H8, CAMERAS } from './h8Spec.js';
 import { createH8Materials, H8_UNIFORMS } from './h8Materials.js';
 import { buildH8Exterior } from './h8Exterior.js';
 import { buildH8Interior, createH8InteriorMaterials } from './h8Interior.js';
-import { H8Display, fmtDist, altOf } from './h8Display.js';
+import { H8Display, fmtDist, altOf, FLOOR } from './h8Display.js';
+import { H8Tabs } from './h8Tabs.js';
+import { H8Zoom } from './h8Zoom.js';
+import { SeatMotion, SEAT } from './h8Seat.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
 import { Particles } from '../fx/particles.js';
 import { HachiPilot } from './h8Pilot.js';
@@ -36,6 +39,7 @@ function fmtEta(sec) {
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DOCK = H8.dockAt;
+const COL_DIM = 'rgba(150,190,230,0.55)';
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
 const Y = new THREE.Vector3(0, 1, 0);
 
@@ -71,10 +75,12 @@ export class H8Vessel {
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
+    this.tabs = new H8Tabs(this);
+    this.zoom = new H8Zoom(this);
     this.root = new THREE.Group();
     this.root.name = 'H8';
     this.root.matrixAutoUpdate = false;
-    this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh);
+    this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh, this.tabs.group);
     this.extMeshes = [];
     // the outside takes no shadows (B-29 underneath would black out the earthshine on H8's belly);
     // its substrate sphere casts them: the sealed cockpit inside gets no sunlight, and H8 shades
@@ -124,6 +130,8 @@ export class H8Vessel {
     this.flickT = 0;
     this.cands = [];
     this.rockSeq = 0;
+    this.floorHatch = 0;         // the cockpit floor hatch 0 shut .. 1 open
+    this.locker = { open: 0, target: 0, out: 0 };   // the suit locker's panel, and the suit on its rail
   }
 
   // ==================================================================== construction helpers
@@ -192,22 +200,35 @@ export class H8Vessel {
     this.lamps = this.int.lamps.map((l) => Object.assign({}, l, { local: l.pos.clone(), pos: l.pos.clone().add(DOCK), base: l.intensity }));
     this.lampsIn = false;
     const s = this.int.seat;
-    // standing up puts Kaito over the floor hatch behind the seat (between the seat and the
-    // console there is no room for a body: he got wedged there and could not move)
-    this.seat = Object.assign({}, s, { eye: s.eye.clone().add(DOCK), exit: V(0, H8.floorY, H8.shaftZ).add(DOCK), axis: s.axis.clone().add(DOCK), h8: true });
+    // standing up puts Kaito over the floor hatch behind the seat; the seat rides on its gimbal
+    // (h8Seat.js works out the eye and the motion's tilt every frame)
+    this.seat = Object.assign({}, s, { eye: s.eye.clone().add(DOCK), exit: V(0, H8.floorY, H8.shaftZ).add(DOCK), axis: s.axis.clone().add(DOCK), h8: true, dock: DOCK.clone() });
+    this.seatMotion = new SeatMotion(this.seat, this.int.seatParts);
+    // the floor hatch over the shaft: walkable while shut
+    this.floorCol = g.phys.addKinematicBox(FLOOR.hatchR + 0.03, 0.03, FLOOR.hatchR + 0.03, V(FLOOR.hatch.x, FLOOR.y - 0.03, FLOOR.hatch.z).add(DOCK));
+    this.floorCol.col.setEnabled(this.colsOn);
     const proxy = (pos, r) => {
       const m = new THREE.Mesh(new THREE.SphereGeometry(r, 8, 6), g.interact.proxyMat);
       m.position.copy(pos); m.layers.set(LAYER_PROXY);
       this.int.group.add(m);
       return m;
     };
-    g.interact.addMesh(proxy(V(0, H8.cockpitC.y - 0.42, H8.cockpitC.z - 0.12), 0.34), () => g.systems.sit(this.seat), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' });
+    g.interact.addMesh(proxy(SEAT.G.clone().add(V(0, -0.12, -0.08)), 0.36), () => g.systems.sit(this.seat), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' });
+    // the suit locker behind the display panel on the port side
+    const LK = this.int.locker.userData;
+    g.interact.addMesh(proxy(H8.cockpitC.clone().addScaledVector(LK.n, H8.cockpitR - 0.3), 0.4), () => this.lockerTapped(), { maxDist: 2.4, enabled: () => g.player.state !== 'seated' });
+    // the floor hatch (from above; it opens by itself for Kaito coming up the shaft)
+    g.interact.addMesh(proxy(V(FLOOR.hatch.x, FLOOR.y + 0.12, FLOOR.hatch.z), 0.38), () => this.floorHatchTapped(), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' && g.player.pos.y > FLOOR.y + DOCK.y });
     // the port panel in B-29's corridor, and the hatch wheel seen from the shaft in H8
     g.interact.addSphere(PORT.panel.clone().add(V(0.04, 0, 0)), 0.16, () => this.portTapped(), { maxDist: 2.2 });
     g.interact.addMesh(proxy(NECK_HATCH.clone().add(V(0, 0.12, 0)), 0.32), () => this.portTapped(), { maxDist: 2.4 });
-    // ---- the three small displays in H8's cockpit
+    // ---- H8's corner on B-29's own screens (the cockpit itself has no screens of that kind: all
+    // its information is on the tabs of the all-round display)
     Object.assign(Object.getPrototypeOf(g.monitors), H8_PAGES);
-    this.mfd = this.int.mfd.map((slot) => g.monitors.addSlot(Object.assign({ h8: true }, slot), this.int.group, DOCK));
+    // touches on the display's tabs (tap, fold, drag) are theirs, not the look's
+    g.input.capture = (x, y) => this.tabTouch(x, y);
+    g.input.captureMove = (t) => this.tabMove(t);
+    g.input.captureUp = (t, tap) => this.tabUp(t, tap);
     // ---- a new game: H8 waits right above B-29, on standby
     if (!this.park) this.initAbove();
     this.placeParked(g.time);
@@ -852,6 +873,65 @@ export class H8Vessel {
     const ok = docked && this.awake > 0.5 ? 'ok' : 'none';
     this.hatch.update(dt, busy ? 'busy' : ok);
     if (Math.abs(pv - this.neckOpen) > 1e-6 && this.g.audio.ready && Math.random() < dt * 2) this.g.audio.rcsPuff && this.g.audio.rcsPuff(NECK_HATCH.clone().add(DOCK), 0.03);
+    // ---- the cockpit floor hatch: opened by a tap from above, by itself for Kaito coming up the
+    // shaft; it shuts again once nobody is near it
+    const pl = this.g.player;
+    const hx = FLOOR.hatch.x + DOCK.x, hy = FLOOR.y + DOCK.y, hz = FLOOR.hatch.z + DOCK.z;
+    const dxz = Math.hypot(pl.pos.x - hx, pl.pos.z - hz);
+    const reach = (this.mode === 'docked' || this.crew) && pl.state !== 'dead' && pl.state !== 'seated';
+    const below = reach && dxz < FLOOR.hatchR + 0.2 && pl.pos.y < hy && pl.pos.y > hy - 1.6;
+    const near = reach && dxz < FLOOR.hatchR + 0.55 && pl.pos.y > hy - 3.8 && pl.pos.y < hy + 1.9;
+    if (below) this.floorHatchT = 1;
+    if (!near) this.floorHatchT = 0;
+    const want = this.floorHatchT || 0;
+    const fh0 = this.floorHatch;
+    this.floorHatch = Math.max(0, Math.min(1, this.floorHatch + (want > this.floorHatch ? 1 : want < this.floorHatch ? -1 : 0) * dt / 0.9));
+    if (this.floorHatch !== fh0) {
+      const k = this.floorHatch * this.floorHatch * (3 - 2 * this.floorHatch);
+      this.floorCol.body.setNextKinematicTranslation({ x: hx + k * (FLOOR.hatchR * 2 + 0.1), y: hy - 0.03 - 0.06 * Math.min(1, this.floorHatch * 5), z: hz });
+      if ((fh0 === 0 || fh0 === 1) && this.g.audio.doorMotor) this.g.audio.doorMotor(V(hx, hy, hz), want > 0.5);
+    }
+    // ---- the suit locker: the display panel slides aside, then the suit rides out on its rail
+    const LK = this.locker;
+    const tOpen = LK.target > 0.5 ? 1 : (LK.out > 0.02 ? 1 : 0);
+    LK.open = Math.max(0, Math.min(1, LK.open + (tOpen > LK.open ? 1 : tOpen < LK.open ? -1 : 0) * dt / 0.8));
+    const tOut = LK.target > 0.5 && LK.open > 0.98 ? 1 : 0;
+    LK.out = Math.max(0, Math.min(1, LK.out + (tOut > LK.out ? 1 : tOut < LK.out ? -1 : 0) * dt / 1.2));
+  }
+
+  /** the floor hatch, tapped from the cockpit */
+  floorHatchTapped() {
+    this.floorHatchT = this.floorHatchT ? 0 : 1;
+    this.g.audio.beep && this.g.audio.beep(this.floorHatchT ? 990 : 660, 0.06, 0.05, { pos: V(FLOOR.hatch.x, FLOOR.y, FLOOR.hatch.z).add(DOCK) });
+  }
+
+  lockerSound() {
+    const A = this.g.audio, p = H8.cockpitC.clone().addScaledVector(this.int.locker.userData.n, H8.cockpitR).add(DOCK);
+    if (A.doorMotor) A.doorMotor(p, this.locker.target > 0.5);
+    if (A.ready && A._burst) A._burst(p, { dur: 0.5, freq: 1800, q: 1.2, gain: 0.05, type: 'white', sweep: 0.5 });
+  }
+
+  /** the suit locker: open it (the suit comes out), put the suit on, or take it off and stow it */
+  lockerTapped() {
+    const g = this.g, pl = g.player, LK = this.locker, GP = g.gameplay;
+    if (pl.suit && pl.suitH8) {
+      const z = g.lifeSupport.z.h8;
+      const kPa = z ? z.n2 + z.o2 + z.co2 : 0;
+      if (kPa < 60) { g.audio.denied(pl.eyeLocal); this.say('hachi_suit_keep', {}, { minGap: 6 }); return; }
+      LK.target = 1; this.lockerSound();
+      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1800); });
+      return;
+    }
+    if (pl.suit) { g.audio.denied(pl.eyeLocal); return; }      // already in B-29's suit
+    if (LK.target < 0.5 || LK.out < 0.95) {
+      if (LK.target < 0.5) { LK.target = 1; this.lockerSound(); this.say('hachi_suit_out', {}, { minGap: 5 }); }
+      return;
+    }
+    GP.fadeAction(() => {
+      pl.suit = true; pl.suitH8 = true; pl.suitO2 = 1; pl.suitFuel = Math.max(pl.suitFuel, 0.98);
+      this.say('hachi_suit_on', {}, { force: true });
+      setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1200);
+    });
   }
 
   /** H8's own life support (cabin air), and the air shared through the open port */
@@ -879,6 +959,7 @@ export class H8Vessel {
     this.colsOn = on;
     for (const c of this.cols) c.setEnabled(on);
     this.neckCol.col.setEnabled(on);
+    if (this.floorCol) this.floorCol.col.setEnabled(on);
   }
 
   setLamps(on) {
@@ -968,7 +1049,8 @@ export class H8Vessel {
     const inside = this.crew || this.mode === 'docked';
     if (inside && E > 3e5) {
       this.flickT = Math.min(1.5, 0.3 + E / 2e7);
-      if (E > 2e6) this.display.power *= 0.45;
+      this.display.stutter(Math.min(1, 0.2 + E / 4e6));
+      if (this.seatMotion && this.crew) this.seatMotion.jolt(Math.min(2.2, 0.25 + E / 2e6));
       if (E > 1.5e6 && this.fx) {
         const side = dirLocal.x >= 0 ? 1 : -1;
         const p = V(side * 0.9, H8.cockpitC.y - 0.62, H8.cockpitC.z - 0.25);
@@ -1115,8 +1197,16 @@ export class H8Vessel {
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
     DENT_U.uH8Root.value.copy(rw);
     DENT_U.uH8RootInv.value.copy(rw).invert();
-    // the seat turns on its column
-    this.int.seatPivot.rotation.y = this.seat.yawSeat || 0;
+    // the seat on its gimbal: it rides H8's motion on springs and shivers with the guns and hits
+    if (this.seatMotion) {
+      const fl = this.mode === 'docked' ? g.flight : this.flight;
+      const acc = _v2.copy(fl.properAcc).applyQuaternion(_q.copy(fl.quat).invert());
+      const thrust = Math.min(1, fl.thrustAcc.length() / Math.max(1, fl.spec.aMax + (fl.aExtra || 0)));
+      const inp = this.flightInput || (this.mode === 'docked' && g.player.seat === this.seat ? g.lastFlightIn : null);
+      this.seat.input = inp;
+      this.seat.occupied = g.player.state === 'seated' && g.player.seat === this.seat;
+      this.seatMotion.update(dt, acc, fl.wRel, thrust);
+    }
     // ---- level of detail, layers
     const inside = eyePF && (this.containsPF(eyePF) || this.inVestibule(eyePF)) && (this.mode === 'docked' || this.crew);
     const near = this.mode === 'docked' || dCam < 2500;
@@ -1188,12 +1278,12 @@ export class H8Vessel {
         L.setColorAt(i, c);
       }
       L.instanceColor.needsUpdate = true;
-      for (const r of this.int.rotors) r.rotateY(dt * 40 * aw);
+      for (const r of this.int.rotors || []) r.rotateY(dt * 40 * aw);
     }
     // lamps: dim on standby; they stutter when a hit shakes the wiring
     this.flickT = Math.max(0, this.flickT - dt);
     const stut = this.flickT > 0 ? (Math.random() < 0.35 ? 0.15 : 0.6 + Math.random() * 0.4) : 1;
-    for (const l of this.lamps) l.intensity = l.base * (0.25 + 0.75 * aw) * stut;
+    for (const l of this.lamps) l.intensity = l.locker ? 0.9 * this.locker.open * aw : l.base * (0.25 + 0.75 * aw) * stut;
     // ---- laser beams: from the terminal to the rock, a flash where it hits
     if (this.pd.beams.length) {
       this.root.updateMatrixWorld(true);
@@ -1218,10 +1308,31 @@ export class H8Vessel {
     // ---- umbilical (B-29 frame) and latch settle
     this.latchT = Math.max(0, this.latchT - dt);
     this.updateUmbilical();
-    // ---- the wrap-around display: on with Kaito in the cockpit and the power up
+    // ---- the all-round display: on with Kaito in the cockpit and the power up
     const inCockpit = eyePF && this.crew && this.inCockpit(eyePF);
     this.display.update(dt, inCockpit && aw > 0.5);
+    this.display.setHatch(this.floorHatch);
+    this.display.setLocker(this.locker.open);
     if (inCockpit && this.display.power > 0.01) this.updateDisplay(dt, rw, camWorld);
+    else { this.tabs.place(dt, null, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; }
+    // the zoom narrows the view itself (and coarsens it past the optical range)
+    const z = inCockpit ? this.zoom.z : 1;
+    g.engine.setZoom(z);
+    this.display.setZoom(z);
+    g.engine.grade.set('uPixel', z > 10.6 ? Math.min(4, z / 10.5) : 1);
+    this.zoom.drawHud(inCockpit && g.player.seat === this.seat && (g.mode === 'pilot' || g.mode === 'camera'));
+    // the shaft below the floor is out of sight (and not drawn) while the hatch is shut
+    const eyeUp = eyePF && this.inCockpit(eyePF) && eyePF.y > FLOOR.y + DOCK.y;
+    this.int.shaft.visible = !(eyeUp && this.floorHatch < 0.01);
+    // the suit locker: its niche shows while the panel is open; the suit is gone while worn
+    const LK = this.int.locker, LD = LK.userData;
+    LK.visible = this.locker.open > 0.002 && this.int.group.visible;
+    if (LK.visible) {
+      const e = this.locker.out * this.locker.out * (3 - 2 * this.locker.out);
+      LD.carriage.position.copy(LD.inPos).lerp(LD.outPos, e);
+      LD.suit.visible = !(g.player.suit && g.player.suitH8);
+      this.M.lockerLight.emissiveIntensity = 2.2 * this.locker.open;
+    }
     // ---- sparks, spall, venting air (H8's own particles, in H8's frame)
     const live = this.fx.add.p.length || this.fx.alpha.p.length || this.fx.emitters.length;
     if (live || !this.fxIdle) {
@@ -1282,11 +1393,9 @@ export class H8Vessel {
   /** per frame while Kaito is in the cockpit: where he looks, what is out there, the cards */
   updateDisplay(dt, rw, camWorld) {
     const g = this.g, D = this.display, f = this.flight;
-    // the camera and the seat's eye (with its swivel) in H8's frame
+    // the camera in H8's frame: the markers hang along the lines from it
     const camL = new THREE.Vector3().copy(camWorld).applyMatrix4(DENT_U.uH8RootInv.value);
-    const s = this.int.seat, yaw = this.seat.yawSeat || 0;
-    const eyeL = s.eye.clone().sub(s.axis).applyAxisAngle(Y, yaw).add(s.axis);
-    D.setEye(eyeL, yaw, camL);
+    D.setEye(camL);
     // the line of sight
     const qv = new THREE.Quaternion().setFromRotationMatrix(rw).invert().multiply(g.camQuat);
     const gaze = new THREE.Vector3(0, 0, -1).applyQuaternion(qv);
@@ -1308,8 +1417,13 @@ export class H8Vessel {
     const orbit = { zen: up, nad: up.clone().negate() };
     if (vRel.lengthSq() > 1) { orbit.pro = vRel.normalize().applyQuaternion(qInv); orbit.retro = orbit.pro.clone().negate(); }
     D.updateMarks(dt, this.cands, gaze, orbit, up, (c) => this.onLock(c));
-    this.cardT = (this.cardT || 0) - dt;
-    if (this.cardT <= 0) { this.cardT = 0.25; D.paint(this.cards()); }
+    // the zoom (from the seat) and the tabs
+    const pl = g.player;
+    const seated = pl.state === 'seated' && pl.seat === this.seat;
+    const z = this.zoom.update(dt, seated ? g.lastInput : null, pl, seated && (g.mode === 'pilot' || g.mode === 'camera'));
+    for (const l of D.locks) l.follow = this.zoom.follow && this.zoom.target && this.zoom.target.id === l.id;
+    this.tabs.place(dt, camL, true, z, D.locks);
+    this.tabs.draw(dt, D.power);
   }
 
   /** everything the display can track: B-29, stations within 3000 km, the Moon, rocks nearby */
@@ -1358,6 +1472,7 @@ export class H8Vessel {
   /** a jolt through H8's frame (recoil, the railgun, hits): felt in the seat */
   seatKick(k) {
     this.kick = Math.min(4, (this.kick || 0) + k);
+    if (this.seatMotion) this.seatMotion.jolt(k);
     if (this.crew || (this.mode === 'docked' && this.kaitoInside())) this.g.shake = Math.max(this.g.shake, Math.min(0.9, k * 0.5));
   }
 
@@ -1384,74 +1499,116 @@ export class H8Vessel {
     else { A.beep(1500, 0.04, 0.035, { direct: true }); A.beep(2000, 0.05, 0.035, { direct: true, when: 0.06 }); }
   }
 
-  /** the three glass cards: H8, B-29 (over the cable or the radio), HACHI / the alert */
-  cards() {
-    const g = this.g, f = this.flight, P = this.power, docked = this.mode === 'docked';
-    const fl = docked ? g.flight : f;
-    const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, new THREE.Vector3())).length();
-    const modeTxt = docked ? 'B-29と結合' : this.pilot.state === 'dock' ? 'ドッキング進入' : this.pilot.state === 'undock' ? '離脱中' : this.pilot.goal ? 'HACHI 自律航行' : '手動操縦';
+  // ==================================================================== touching the tabs
+  camPose() {
+    const g = this.g;
+    return { pos: g.camWorld.clone(), quat: g.camQuat.clone(), proj: g.engine.camera.projectionMatrix };
+  }
+
+  ndc(x, y) { return { x: x / window.innerWidth * 2 - 1, y: -(y / window.innerHeight) * 2 + 1 }; }
+
+  tabTouch(x, y) {
+    if (!this.tabs.visible || this.zoom.z > 1.3 || this.g.mode === 'camera') return null;
+    return this.tabs.hit(this.ndc(x, y), this.camPose());
+  }
+
+  tabMove(t) {
+    const h = t.cap;
+    if (!h || h.part !== 'head') return;
+    if (!this.tabs.drag) { if (t.moved < 10) return; this.tabs.dragStart(h); }
+    this.tabs.dragMove(this.ndc(t.x, t.y), this.camPose());
+  }
+
+  tabUp(t, tap) {
+    if (this.tabs.drag) { this.tabs.dragEnd(); return; }
+    if (tap && t.cap) this.tabs.tap(t.cap);
+  }
+
+  // ==================================================================== what the tabs show
+  /** the alert of the moment (the slim tab low ahead), or null */
+  alertText() {
+    const g = this.g, f = this.flight, docked = this.mode === 'docked';
     const z = g.lifeSupport.z.h8;
     const kPa = z ? z.n2 + z.o2 + z.co2 : 101.3;
-    const camsDown = this.hull.cams.map((h, i) => (h < 0.5 ? CAMERAS[i].name.split(' ')[0] : null)).filter(Boolean);
-    const left = {
-      title: 'H8', titleColor: 'rgba(255,190,90,0.97)', sub: modeTxt,
-      warnBg: this.armour.inner < 0.15 || kPa < 70,
-      lines: [
-        { label: '速度', text: `${vRel.toFixed(vRel < 100 ? 1 : 0)} m/s`, big: true, right: `高度 ${(altOf(fl.pos) / 1000).toFixed(1)} km` },
-        { label: '推力', text: `×${docked ? g.flight.mul : 6 * f.mul}${f.ultra && !docked ? '  ULTRA' : ''}`, amber: true, right: P.feed ? `給電 ${Math.round(P.feedMW)} MW` : '内部電源' },
-        { label: '推進剤', bar: f.fuel, right: `${Math.round(f.fuel * 100)}%`, warn: f.fuel < 0.15, barColor: 'rgba(255,190,90,0.97)' },
-        { label: '蓄電', bar: P.smes / H8.smesMJ, right: `${Math.round(P.smes / H8.smesMJ * 100)}%`, warn: P.smes < H8.smesMJ * 0.1 },
-        { label: '装甲', bar: this.armour.outer, right: `外${Math.round(this.armour.outer * 100)} 内${Math.round(this.armour.inner * 100)}`, warn: this.armour.outer < 0.35, barColor: 'rgba(120,255,170,0.95)' },
-        { label: '船内', text: `${kPa.toFixed(1)} kPa`, right: z ? `O₂ ${z.o2.toFixed(1)}` : '', warn: kPa < 90 },
-      ],
-    };
-    if (this.pilot.goal) left.lines.push({ label: '目標', text: this.pilot.goal.name, right: fmtDist(this.pilot.dist || 0), dim: false });
-    if (camsDown.length) left.lines.push({ label: 'カメラ', text: camsDown.join(' ') + ' 映像なし', warn: true });
-    // B-29
-    let right;
-    const fb = g.flight, ap = g.autopilot;
-    const integ = g.damage.integrityNow ?? g.damage.integrity();
-    const alarm = g.systems.alarm.active;
-    const pw = g.systems.power ?? 1;
-    const b29State = g.docking && g.docking.state === 'docked' ? 'ステーション係留中' : ap.state === 'cruise' || ap.state === 'approach' ? `${ap.target ? ap.target.name.replace('（修理基地）', '').replace('（サブ拠点）', '') : ''}へ ${fmtEta(ap.eta)}` : ap.state === 'hold' ? '到着・保持中' : fb.landed ? '着陸中' : '待機';
-    const common = [
-      { label: '推進剤', bar: fb.fuel, right: `${Math.round(fb.fuel * 100)}%`, warn: fb.fuel < 0.15, barColor: 'rgba(255,190,90,0.97)' },
-      { label: '船体', bar: integ, right: `${Math.round(integ * 100)}%`, warn: integ < 0.6, barColor: 'rgba(120,255,170,0.95)' },
-      { label: '電力', bar: pw, right: `${Math.round(pw * 100)}%`, warn: pw < 0.4 },
-      { label: '警報', text: alarm ? '作動中' : 'なし', warn: alarm, good: !alarm },
-    ];
-    if (docked) {
-      right = { title: 'B-29', sub: '結合中・ケーブル', warnBg: alarm, lines: [{ label: '航法', text: b29State }, ...common] };
-      right.lines.push({ label: '移送', text: this.xfer === 'toB29' ? 'H8 → B-29 推進剤' : this.fueling ? 'B-29 → H8 推進剤' : '—', amber: !!(this.xfer || this.fueling), dim: !(this.xfer || this.fueling) });
-    } else if (this.link.ok) {
-      const d = this.link.d;
-      const cl = -g.flight.pos.clone().sub(f.pos).dot(g.flight.vel.clone().sub(f.vel)) / Math.max(1, d);
-      right = { title: 'B-29', sub: 'リンク良好', subColor: 'rgba(120,255,170,0.95)', warnBg: alarm, lines: [
-        { label: '距離', text: fmtDist(d), big: true, right: `${cl >= 0 ? '接近' : '離隔'} ${Math.abs(cl).toFixed(Math.abs(cl) > 100 ? 0 : 1)} m/s` },
-        { label: '状態', text: b29State }, ...common,
-      ] };
-    } else {
-      right = { title: 'B-29', sub: '通信圏外', subColor: 'rgba(255,92,64,0.98)', lines: [
-        { label: '距離', text: fmtDist(this.link.d), big: true, warn: true },
-        { text: `${(LINK_RANGE / 1000).toFixed(0)} km 以内で通信・呼び出しができます`, dim: true },
-      ] };
-    }
-    // HACHI's words or the alert of the moment
-    let alert = null;
     const hostile = this.cands.filter((c) => c.kind === 'drone' && c.threat).sort((a, b) => a.dist - b.dist);
     const th = this.cands.filter((c) => c.threat && c.kind !== 'drone').sort((a, b) => a.tca - b.tca)[0];
-    if (th && th.tca < 30) alert = `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
-    else if (hostile.length) alert = `敵無人機 ${hostile.length}機  最接近 ${hostile[0].short} ${fmtDist(hostile[0].dist)}`;
-    else if (th) alert = `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
-    else if (this._leak && kPa < 95) alert = `船内減圧中  ${kPa.toFixed(1)} kPa`;
-    else if (f.fuel < 0.05 && !docked) alert = `推進剤 残り ${Math.round(f.tank.kg)} kg`;
-    else if (this.armour.outer < 0.2) alert = `外部装甲 限界  ${Math.round(this.armour.outer * 100)}%`;
-    const last = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-1)[0];
-    const say = last && g.time - last.t < 9000 ? last.text.replace(/^HACHI: /, 'HACHI：') : null;
-    const n = this.display.locks.length;
-    const foot = `ロック ${n}/8  ・  見つめるとロックオン` + (this.pilot.notes && this.pilot.notes.length ? '  ・  回避中' : docked ? '  ・  B-29 の操作は下のモニターのタブで' : '');
-    const center = { alert, say: say && say.length > 36 ? say.slice(0, 35) + '…' : say, foot };
-    return { left, right, center };
+    if (th && th.tca < 30) return `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
+    if (hostile.length) return `敵無人機 ${hostile.length}機  最接近 ${hostile[0].short} ${fmtDist(hostile[0].dist)}`;
+    if (th) return `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
+    if (this._leak && kPa < 95) return `船内減圧中  ${kPa.toFixed(1)} kPa`;
+    if (f.fuel < 0.05 && !docked) return `推進剤 残り ${Math.round(f.tank.kg)} kg`;
+    if (this.armour.outer < 0.2) return `外部装甲 限界  ${Math.round(this.armour.outer * 100)}%`;
+    const dead = this.hull.cams.filter((c) => c < 0.15).length;
+    if (dead) return `カメラ ${dead} 台 信号なし`;
+    return null;
+  }
+
+  /** the navigation tab's header */
+  navLine() {
+    const P = this.pilot;
+    if (this.mode === 'docked') return 'B-29 と結合中';
+    if (P.state === 'dock') return 'ドッキング進入';
+    if (P.state === 'undock') return '離脱中';
+    if (P.goal) return `${P.goal.name}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '  ' + fmtEta(P.eta) : ''}`;
+    return this.crew ? '手動操縦' : '待機';
+  }
+
+  /** what B-29 is doing (for the B-29 tab and HACHI's reports) */
+  b29State() {
+    const g = this.g, ap = g.autopilot, fb = g.flight;
+    if (g.docking && g.docking.state === 'docked') return 'ステーション係留中';
+    if (ap.state === 'cruise' || ap.state === 'approach') return `${ap.target ? ap.target.name.replace('（修理基地）', '').replace('（サブ拠点）', '') : ''}へ ${fmtEta(ap.eta)}`;
+    if (ap.state === 'hold') return '到着・保持中';
+    if (fb.landed) return '着陸中';
+    return '待機';
+  }
+
+  /** HACHI's tab header: its newest words, or what it is doing */
+  hachiLine() {
+    const last = this.g.asphalt.log.filter((e) => e.who === 'hachi').slice(-1)[0];
+    if (last && this.g.time - last.t < 20000) { const t = last.text.replace(/^HACHI: /, ''); return t.length > 30 ? t.slice(0, 29) + '…' : t; }
+    return this.awake > 0.5 ? '待機中・周辺監視' : '省電力';
+  }
+
+  suitLine() {
+    const pl = this.g.player;
+    if (pl.suit && pl.suitH8) return `着用中  O₂ ${Math.round(pl.suitO2 * 100)}%`;
+    return this.locker.open > 0.5 ? '収納庫 開' : '収納中';
+  }
+
+  /** HACHI's tab: its log, and what it can be asked to do */
+  drawHachi(K, H) {
+    const g = this.g;
+    const log = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-6);
+    let y = 10;
+    for (const e of log) {
+      const t = e.text.replace(/^HACHI: /, '');
+      const age = (g.time - e.t) / 1000;
+      K.text(t.length > 40 ? t.slice(0, 39) + '…' : t, 14, y + 12, { size: 12.5, color: age < 15 ? '#ffd9a8' : COL_DIM });
+      y += 19;
+    }
+    if (!log.length) K.text('HACHI からの報告はまだありません', 14, y + 12, { size: 12.5, color: COL_DIM });
+    const bw = 158, by = H - 40;
+    K.button(10, by, bw, 32, 'H8 状況報告', () => this.reportH8(), { size: 12 });
+    K.button(10 + bw + 7, by, bw, 32, 'B-29 状況', () => this.reportB29(), { style: this.link.ok ? 'normal' : 'disabled', size: 12 });
+    K.button(10 + (bw + 7) * 2, by, bw, 32, 'タブ 初期化', () => this.tabs.resetLayout(), { size: 12 });
+  }
+
+  /** the suit tab */
+  drawSuit(K, H) {
+    const g = this.g, pl = g.player;
+    const on = pl.suit && pl.suitH8;
+    K.text(on ? '小型宇宙服  着用中（HACHI と接続）' : '小型宇宙服  収納庫', 14, 24, { size: 14, color: on ? '#7cf0a6' : COL_DIM, weight: 600 });
+    if (on) {
+      K.text('酸素', 14, 52, { size: 13, color: COL_DIM });
+      K.bar(96, 45, 290, 8, pl.suitO2, '#5fd0ff');
+      K.text(`${Math.round(pl.suitO2 * 100)}%`, 498, 53, { size: 13, color: '#d7e7f7', align: 'right', mono: true });
+      K.text('推進剤', 14, 74, { size: 13, color: COL_DIM });
+      K.bar(96, 67, 290, 8, pl.suitFuel, '#ffb347');
+      K.text(`${Math.round(pl.suitFuel * 100)}%`, 498, 75, { size: 13, color: '#d7e7f7', align: 'right', mono: true });
+    } else K.text('外の回路の応急処置に出るときに着ます。', 14, 52, { size: 12.5, color: COL_DIM });
+    const by = H - 40;
+    K.button(10, by, 240, 32, this.locker.target > 0.5 ? '収納庫を閉める' : 'スーツを出す', () => { this.locker.target = this.locker.target > 0.5 ? 0 : 1; this.lockerSound(); }, { style: this.locker.target > 0.5 ? 'on' : 'warn', size: 12 });
   }
 
   /** external-camera views around H8 (physics frame, for the camera mode while flying H8) */

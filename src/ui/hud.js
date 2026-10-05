@@ -18,6 +18,8 @@ export class Hud {
       rail: document.getElementById('b-rail'),
       msl: document.getElementById('b-msl'),
       auto: document.getElementById('b-auto'),
+      zoom: document.getElementById('btns-zoom'),
+      zfol: document.getElementById('b-zfol'),
     };
     this.fade = 0;
     this.fadeTarget = 0;
@@ -67,6 +69,13 @@ export class Hud {
       if (this.last.railDim !== railDim) { this.last.railDim = railDim; this.el.rail.classList.toggle('dim', railDim); }
       const mslDim = h8 && W.ammo.missile <= 0;
       if (this.last.mslDim !== mslDim) { this.last.mslDim = mslDim; this.el.msl.classList.toggle('dim', mslDim); }
+    }
+    // H8's zoom (in its seat)
+    const inH8 = !!(g.h8 && g.player.state === 'seated' && g.player.seat === g.h8.seat);
+    this.show('zoom', inH8 && (g.mode === 'pilot' || g.mode === 'camera') && !foc);
+    if (inH8) {
+      const fol = !!g.h8.zoom.follow;
+      if (this.last.fol !== fol) { this.last.fol = fol; this.el.zfol.classList.toggle('active', fol); }
     }
     this.fade += (this.fadeTarget - this.fade) * Math.min(1, dt * 2.5);
     if (Math.abs(this.fade - this.fadeTarget) < 0.002) this.fade = this.fadeTarget;
