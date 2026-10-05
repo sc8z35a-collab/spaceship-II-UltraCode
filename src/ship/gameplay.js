@@ -477,7 +477,12 @@ export class Gameplay {
     const g = this.g;
     const ev = g.damage.events.splice(0);
     for (const e of ev) {
-      if (e.type === 'impact') {
+      if (e.type === 'impact' && e.shot && !e.breach && e.E < 1e6) {
+        // gunfire: one alarm and a word now and then, not a line per round
+        this.raise(0.7);
+        g.asphalt.say('hit_shot', {}, { minGap: 9 });
+        if (this.sleeping) this.wake();
+      } else if (e.type === 'impact') {
         if (e.E < 3e4 && !e.breach) g.asphalt.say('impact_micro', {}, { minGap: 10 });
         else { this.raise(e.E > 5e5 ? 1 : 0.75); g.asphalt.say(e.E > 5e5 ? 'impact_big' : 'impact', {}, { minGap: 5, force: e.E > 5e5 }); }
         if (e.breach) {
@@ -834,6 +839,7 @@ export class Gameplay {
         g.h8.hull.repairAll();
         g.h8.flight.tank.kg = g.h8.flight.tank.cap;
       }
+      if (g.weapons) g.weapons.rearm(!!(g.h8 && g.h8.docked));
       const ls = g.lifeSupport;
       ls.reserve.o2 = 9100; ls.reserve.n2 = 17000; ls.water = 180;
       for (const z of Object.values(ls.z)) { z.n2 = 79.2; z.o2 = 21.3; z.co2 = 0.04; z.leaks = []; }
@@ -1116,6 +1122,12 @@ export class Gameplay {
       T.kg = Math.min(T.cap, T.kg + 40 * dt);
       if (T.kg >= T.cap - 0.5) { T.kg = T.cap; this.refueling = false; g.asphalt.say('b29_refueled', {}, { minGap: 120 }); }
     } else this.refueling = false;
+    // the station's crew loads ammunition too (a while after the berth is made)
+    const W = g.weapons, withH8 = !!(g.h8 && g.h8.docked);
+    if (W && g.docking && g.docking.state === 'docked' && W.needsRearm(withH8)) {
+      this.rearmT = (this.rearmT || 0) + dt;
+      if (this.rearmT > 25) { this.rearmT = 0; W.rearm(withH8); g.asphalt.say('b29_rearm', {}, { minGap: 60 }); }
+    } else this.rearmT = 0;
     const fr = f.fuel;
     if (fr < 0.15 && !this.fuelWarned) { this.fuelWarned = true; g.asphalt.say('b29_fuel_low', { pct: Math.round(fr * 100) }, { force: true }); }
     else if (fr > 0.25) this.fuelWarned = false;

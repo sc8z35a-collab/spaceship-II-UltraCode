@@ -162,6 +162,15 @@ const LINES = {
   b29_fuel_low: ['推進剤の残りが{pct}パーセントです。ステーションにドッキングすれば補給できます。'],
   b29_refuel: ['ステーションから推進剤を補給しています。'],
   b29_refueled: ['推進剤、満タンになりました。'],
+  // the hunter drones and B-29's defence gun
+  drones_contact: ['警告！ 無人機を{n}機探知しました。こちらに向かってきます！ 武装しています！', 'カイト、無人の攻撃機が{n}機、接近中です！ 機関砲を持っています！'],
+  hit_shot: ['被弾しています！ 外板に弾痕が増えています！', '撃たれています！ 船体に命中！', 'また当たりました！ 同じ場所に集中すると穴が開きます！'],
+  drone_down: ['無人機を撃墜しました。残り{left}機です。', '一機、落ちました。残りは{left}機。'],
+  pd_auto_on: ['防衛機銃、自動迎撃に切り替えます。近づく無人機は私が撃ちます。'],
+  pd_auto_off: ['防衛機銃を手動にしました。発射ボタンで撃てます。'],
+  pd_ammo_out: ['防衛機銃の弾が尽きました。ステーションで補給してください。'],
+  w_shot: ['{name}に弾が当たっています！ 撃つのをやめてください！', '{name}を撃っています！ 民間のステーションですよ、カイト！'],
+  b29_rearm: ['ステーションで弾薬を補給しました。'],
 };
 
 // HACHI — H8's AI: terse, dry, very sure of itself
@@ -207,6 +216,22 @@ const HACHI = {
   hachi_xfer_stop: ['推進剤の移送を止めた。'],
   hachi_cam_lost: ['{cam}がやられた。その方向の映像が出ない。'],
   hachi_hole: ['外部装甲を抜かれた。穴が開いている。残り{pct}パーセント。'],
+  hachi_drones_contact: ['無人機だ。{n}機、{who}に向かってくる。武装している。迎撃準備。', '敵性の無人機を{n}機捕捉。狙いは{who}だ。砲を出す。'],
+  hachi_drone_hit: ['{id}に命中。', '{id}、被弾。まだ飛んでいる。'],
+  hachi_drone_down: ['{id}撃墜。残り{left}機。', '{id}を落とした。あと{left}機。'],
+  hachi_drone_down_station: ['ステーションの防衛砲が{id}を落とした。残り{left}機。'],
+  hachi_drone_dry: ['{id}が離れていく。弾切れだな。…また来るぞ。'],
+  hachi_drones_clear: ['無人機の反応が消えた。…警戒は続ける。'],
+  hachi_rock_kill: ['岩を砕いた。'],
+  hachi_auto_on: ['自動迎撃、開始。近づくものは私が撃つ。'],
+  hachi_auto_off: ['自動迎撃を切った。撃つのはそっちだ、カイト。'],
+  hachi_ammo_out: ['弾切れだ。ステーションで補給するまで撃てない。'],
+  hachi_rail_charging: ['レールガン充電中。{pct}パーセント。'],
+  hachi_no_target: ['目標がない。'],
+  hachi_rail_blocked: ['その方向はH8の船体が邪魔で撃てない。'],
+  hachi_salvo: ['ミサイル、{n}発発射。', 'ミサイル{n}発、追尾開始。'],
+  hachi_scramble_near: ['B-29が狙われている。H8、起動して迎撃に入る。上は任せろ。', 'H8、戦闘起動。B-29の上につく。'],
+  hachi_scramble: ['B-29が狙われている。H8、援護に向かう。距離{d}。', '無人機がB-29に向かっている。今から行く、持ちこたえろ。距離{d}。'],
 };
 
 export class Asphalt {

@@ -35,6 +35,9 @@ import { Breakup } from './ship/breakup.js';
 import { WorldDamage } from './world/worldDamage.js';
 import { H8Vessel } from './h8/h8.js';
 import { QUALITY, saveQuality } from './core/quality.js';
+import { Combat } from './combat/combat.js';
+import { Drones } from './combat/drones.js';
+import { Weapons } from './combat/weapons.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -131,6 +134,11 @@ export class Game {
       this.h8.init();
       this.systems.add({ env: (env) => this.h8env(env) });
     }
+    // combat: rounds in flight, the hunter drones, the guns of B-29 and H8
+    this.combat = new Combat(this);
+    if (!this.params.has('noDrones')) this.drones = new Drones(this, this.combat);
+    this.weapons = new Weapons(this, this.combat);
+    this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
     P(0.6);
     // graphics quality chosen earlier in this browser (the engine already started at its resolution)
     if (QUALITY.level === 'low') this.applyQuality('low');
@@ -273,6 +281,9 @@ export class Game {
     this.lifeSupport.step(sdt);
     this.damage.update(sdt);
     this.asteroids.update(sdt, dt);
+    if (this.drones) this.drones.update(sdt);
+    if (this.weapons) this.weapons.update(sdt, dead ? null : inp);
+    if (this.combat) this.combat.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
     let env, gPl = this.gLocal;
@@ -452,8 +463,11 @@ export class Game {
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
     this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
+    if (this.combat) this.combat.updateVisual(dt, origin, this.camWorld);
+    if (this.drones) this.drones.updateVisual(dt, origin, this.camWorld);
     const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
+    if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());

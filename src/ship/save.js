@@ -39,6 +39,7 @@ export class SaveSystem {
       ast: { timer: g.asteroids.timer, micro: g.asteroids.microTimer },
       world: g.worldDamage ? g.worldDamage.serialize() : null,
       h8: g.h8 ? g.h8.serialize() : null,
+      combat: { drones: g.drones ? g.drones.serialize() : null, weapons: g.weapons ? g.weapons.serialize() : null },
       dead: g.player.state === 'dead',
     };
     return d;
@@ -86,6 +87,11 @@ export class SaveSystem {
     const gap = Math.min(30 * 86400, Math.max(0, (Date.now() - d.wall) / 1000));
     this.offline = this.catchUp(gap, d.dock ? null : d.ap);
     if (g.h8 && gap > 5) g.h8.catchUp(gap);
+    // the drones (and the ammunition left)
+    if (d.combat) {
+      if (g.weapons) g.weapons.restore(d.combat.weapons);
+      if (g.drones) g.drones.restore(d.combat.drones, gap);
+    }
     // docked: the ship rode along with the station the whole time
     if (d.dock && g.docking) {
       g.docking.redock(d.dock);
@@ -108,6 +114,7 @@ export class SaveSystem {
     const ap = g.autopilot.state !== 'off' && g.autopilot.target ? g.autopilot.target.id : null;
     const rep = this.catchUp(gap, ap, true);
     if (g.h8) g.h8.catchUp(gap);
+    if (g.drones && gap > 600) g.drones.restore(g.drones.serialize(), gap);
     g.last = 0;
     if (gap > 60) {
       const h = gap / 3600;

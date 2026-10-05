@@ -952,7 +952,7 @@ export class H8Vessel {
 
   /** armour takes a blow: the outer plates first, then the inner pressure armour. dirLocal: from
    * H8's centre toward the point hit (H8-local) */
-  armourHit(E, dirLocal) {
+  armourHit(E, dirLocal, opts = {}) {
     const A = this.armour, g = this.g;
     const k = E / 4.0e7;
     const outerBefore = A.outer;
@@ -962,7 +962,7 @@ export class H8Vessel {
     if (rest > 0) A.inner = Math.max(0, A.inner - rest * 0.6);
     this.hits++;
     // the hull itself: a dent (or a hole) where it was hit, sparks, a blinded camera
-    const res = this.hull.hit(dirLocal, E, { outer: outerBefore });
+    const res = this.hull.hit(dirLocal, E, { outer: outerBefore, shot: !!opts.shot });
     if (res.blinded >= 0) setTimeout(() => this.say('hachi_cam_lost', { cam: CAMERAS[res.blinded].name }), 1800);
     // inside: the lights stutter, the display drops out for a moment, a console spits sparks
     const inside = this.crew || this.mode === 'docked';
@@ -1339,7 +1339,41 @@ export class H8Vessel {
         extra: threat ? `衝突まで ${Math.max(0, tca).toFixed(0)} 秒・${a.radius <= 0.8 ? '迎撃' : '回避'}` : `最接近 ${fmtDist(miss)}`, tca,
       });
     }
+    // the hunter drones: hostile once they are after Kaito (they lock themselves then)
+    if (g.drones) {
+      for (const d of g.drones.list) {
+        if (!d.alive) continue;
+        const dist = d.pos.distanceTo(f.pos);
+        if (dist > 90e3) continue;
+        const hostile = d.state === 'hunt' || d.state === 'attack' || d.state === 'evade';
+        out.push({
+          id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d,
+          extra: d.state === 'evade' ? `損傷 ${Math.round(d.hp * 100)}%・後退中` : d.state === 'attack' ? (d.run ? '攻撃航過中' : '周回・攻撃中') + (d.hp < 1 ? `  損傷${Math.round((1 - d.hp) * 100)}%` : '') : hostile ? '接近中' : '巡回中',
+        });
+      }
+    }
     return out;
+  }
+
+  /** a jolt through H8's frame (recoil, the railgun, hits): felt in the seat */
+  seatKick(k) {
+    this.kick = Math.min(4, (this.kick || 0) + k);
+    if (this.crew || (this.mode === 'docked' && this.kaitoInside())) this.g.shake = Math.max(this.g.shake, Math.min(0.9, k * 0.5));
+  }
+
+  /** the drones have found Kaito: HACHI gets ready, and comes to cover B-29 if it can */
+  onThreat(T) {
+    const g = this.g;
+    this.threatT = g.time;
+    if (T.kind !== 'b29' || this.mode === 'docked' || this.crew) return;
+    const L = this.linkState();
+    if (!L.ok) return;
+    const busy = this.goalKind === 'b29' || this.goalKind === 'escort' || this.pilot.state === 'dock';
+    if (busy) return;
+    if (this.flight.tank.kg < this.tripFuel(this.flight, L.d)) return;
+    this.wake();
+    this.goal('escort');
+    setTimeout(() => this.say(L.d < 3000 ? 'hachi_scramble_near' : 'hachi_scramble', { d: fmtDist(L.d) }), 3200);
   }
 
   /** a lock-on: a short double pip (a threat: three low ones) */
@@ -1404,8 +1438,11 @@ export class H8Vessel {
     }
     // HACHI's words or the alert of the moment
     let alert = null;
-    const th = this.cands.filter((c) => c.threat).sort((a, b) => a.tca - b.tca)[0];
-    if (th) alert = `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
+    const hostile = this.cands.filter((c) => c.kind === 'drone' && c.threat).sort((a, b) => a.dist - b.dist);
+    const th = this.cands.filter((c) => c.threat && c.kind !== 'drone').sort((a, b) => a.tca - b.tca)[0];
+    if (th && th.tca < 30) alert = `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
+    else if (hostile.length) alert = `敵無人機 ${hostile.length}機  最接近 ${hostile[0].short} ${fmtDist(hostile[0].dist)}`;
+    else if (th) alert = `衝突コース  ${th.name}  ${fmtDist(th.dist)}・${Math.max(0, th.tca).toFixed(0)}秒`;
     else if (this._leak && kPa < 95) alert = `船内減圧中  ${kPa.toFixed(1)} kPa`;
     else if (f.fuel < 0.05 && !docked) alert = `推進剤 残り ${Math.round(f.tank.kg)} kg`;
     else if (this.armour.outer < 0.2) alert = `外部装甲 限界  ${Math.round(this.armour.outer * 100)}%`;

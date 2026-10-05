@@ -47,7 +47,7 @@ export class Input {
     window.addEventListener('blur', () => { this.keys.clear(); this.touches.clear(); this._resetSticks(); });
     el.addEventListener('wheel', (e) => { if (!this.enabled) return; e.preventDefault(); this.pinch *= Math.exp(e.deltaY * 0.0012); }, opt);
     // HUD buttons
-    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next']) {
+    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto']) {
       const b = document.getElementById(id);
       if (!b) continue;
       this.btn[id] = { down: false, pressed: false };

@@ -10,6 +10,7 @@
 import * as THREE from 'three';
 import { H8, CAMERAS } from './h8Spec.js';
 import { LAYER_NEAR } from '../core/layers.js';
+import { Pockmarks } from '../combat/pockmarks.js';
 
 export const DENT_MAX = 12;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -192,11 +193,30 @@ export class H8Hull {
     this.petals = [];
     this.vents = [];
     this.petalMat = new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.55, metalness: 0.75, side: THREE.DoubleSide });
+    // bullet strikes: pits on the plates (they sink with the dents they lie in)
+    this.pocks = new Pockmarks(vessel.ext.group, 300, [LAYER_NEAR]);
+    dentify(this.pocks.mesh.material);
+    vessel.extMeshes.push(this.pocks.mesh);
   }
 
   /** a blow: dir (H8-local unit, from the centre to the point hit), E (J). Returns the dent */
   hit(dir, E, opts = {}) {
     const d = dir.clone().normalize();
+    // a gun round: a pit on the plate — until the strikes crowd together and the plate there gives
+    if (opts.shot && E < 2e6) {
+      const p = d.clone().multiplyScalar(H8.R + 0.03);
+      this.pocks.add(p, d, 0.22 + 0.06 * Math.cbrt(E / 5e5));
+      const v = this.v;
+      if (v.fx) {
+        v.fx.burst('spark', p, d, Math.min(60, 14 + E / 3e4), { speed: 6, spread: 0.9 });
+        v.fx.burst('debris', p, d, 5, { speed: 2.5, spread: 1.0 });
+      }
+      if (this.pocks.countNear(p, 0.45) < 6) {
+        const blinded = this.camHit(d, E, 0.06);
+        this.sync();
+        return { dent: { hole: 0, holeSaid: true }, blinded };
+      }
+    }
     const k = Math.cbrt(Math.max(1, E) / 1000);
     const rc = Math.min(0.95, 0.05 + 0.021 * k);
     const depth = Math.min(0.24, 0.006 + 0.0042 * k);
@@ -226,15 +246,7 @@ export class H8Hull {
       this.addPetals(dent);
     }
     // cameras near the blow
-    let blinded = -1;
-    CAMERAS.forEach((c, i) => {
-      const ang = c.dir.angleTo(d);
-      if (ang < dent.a * 1.4 + 0.1) {
-        const before = this.cams[i];
-        this.cams[i] = Math.max(0, this.cams[i] - Math.min(1, E / 1.2e7) * (1 - ang / (dent.a * 1.4 + 0.1)));
-        if (before >= 0.5 && this.cams[i] < 0.5) blinded = i;
-      }
-    });
+    const blinded = this.camHit(d, E, dent.a);
     this.sync();
     // sparks and spall off the face; a fresh crater smokes a little
     const v = this.v;
@@ -245,6 +257,21 @@ export class H8Hull {
       if (E > 1e6) v.fx.burst('smoke', p, d, 12, { speed: 0.6, spread: 0.8 });
     }
     return { dent, blinded };
+  }
+
+  /** a blow near a camera hurts it (0 = gone): returns the camera that just went blind, or -1 */
+  camHit(d, E, a) {
+    let blinded = -1;
+    CAMERAS.forEach((c, i) => {
+      const ang = c.dir.angleTo(d);
+      const reach = a * 1.4 + 0.1;
+      if (ang < reach) {
+        const before = this.cams[i];
+        this.cams[i] = Math.max(0, this.cams[i] - Math.min(1, E / 1.2e7 + 0.05) * (1 - ang / reach));
+        if (before >= 0.5 && this.cams[i] < 0.5) blinded = i;
+      }
+    });
+    return blinded;
   }
 
   addPetals(dent) {
@@ -296,6 +323,7 @@ export class H8Hull {
   /** the repair dock makes it all good again */
   repairAll() {
     this.dents.length = 0;
+    this.pocks.clear();
     this.cams = [1, 1, 1, 1];
     for (const p of this.petals) {
       this.v.ext.group.remove(p.grp);
@@ -310,7 +338,7 @@ export class H8Hull {
   get worst() { return this.dents.reduce((m, d) => Math.max(m, d.depth / 0.24), 0); }
 
   serialize() {
-    return { d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E].map((x) => +x.toFixed(5))), cams: this.cams.slice() };
+    return { d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E].map((x) => +x.toFixed(5))), cams: this.cams.slice(), p: this.pocks.serialize(160) };
   }
 
   restore(s) {
@@ -322,6 +350,7 @@ export class H8Hull {
       if (d.hole) this.addPetals(d);
     }
     if (s.cams) this.cams = s.cams.slice(0, 4);
+    this.pocks.restore(s.p);
     this.sync();
   }
 }

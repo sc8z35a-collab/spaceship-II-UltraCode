@@ -14,6 +14,10 @@ export class Hud {
       ring: document.getElementById('hold-ring'),
       stickL: document.getElementById('stick-l'),
       stickR: document.getElementById('stick-r'),
+      wpn: document.getElementById('btns-wpn'),
+      rail: document.getElementById('b-rail'),
+      msl: document.getElementById('b-msl'),
+      auto: document.getElementById('b-auto'),
     };
     this.fade = 0;
     this.fadeTarget = 0;
@@ -51,6 +55,19 @@ export class Hud {
     this.show('cam', (g.mode === 'pilot' || g.mode === 'camera') && !foc);
     this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk' && !foc);
     this.show('camUi', g.mode === 'camera');
+    // the guns: in a pilot seat (B-29's defence gun, or H8's cannon, railgun and missiles)
+    const W = g.weapons, armed = W ? W.manned() : null;
+    this.show('wpn', !!armed && (g.mode === 'pilot' || g.mode === 'camera') && !foc);
+    if (armed) {
+      const h8 = armed === 'h8';
+      this.show('rail', h8); this.show('msl', h8);
+      const autoOn = h8 ? W.auto.hachi : W.auto.asphalt;
+      if (this.last.autoOn !== autoOn) { this.last.autoOn = autoOn; this.el.auto.classList.toggle('active', autoOn); }
+      const railDim = h8 && (W.railCharge < 1 || W.ammo.rail <= 0);
+      if (this.last.railDim !== railDim) { this.last.railDim = railDim; this.el.rail.classList.toggle('dim', railDim); }
+      const mslDim = h8 && W.ammo.missile <= 0;
+      if (this.last.mslDim !== mslDim) { this.last.mslDim = mslDim; this.el.msl.classList.toggle('dim', mslDim); }
+    }
     this.fade += (this.fadeTarget - this.fade) * Math.min(1, dt * 2.5);
     if (Math.abs(this.fade - this.fadeTarget) < 0.002) this.fade = this.fadeTarget;
     this.setOverlay('fade', this.fade);

@@ -12,6 +12,7 @@ import { setLayersDeep, LAYER_NEAR, LAYER_MID } from '../core/layers.js';
 import { petalGeometry, linerGeometry, cableCurves, patchPlate, holeFrame } from './tornMetal.js';
 import { CrackAtlas } from './glassCracks.js';
 import { crackPaths, crackGeometry, stressPoint } from './wallCracks.js';
+import { Pockmarks } from '../combat/pockmarks.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -51,6 +52,9 @@ export class Damage {
     this.group = new THREE.Group();
     game.shipVis.root.add(this.group);
     this.events = [];
+    // bullet strikes on the outside (their wear counts against the structure)
+    this.pocks = new Pockmarks(game.shipVis.root, 360, [LAYER_NEAR, LAYER_MID]);
+    this.shotWear = 0;
   }
 
   // ------------------------------------------------------------------ impacts
@@ -66,10 +70,21 @@ export class Damage {
     const r = Math.min(1.6, 0.08 + 0.025 * Math.cbrt(E / 1000));
     const depth = Math.min(0.34, 0.015 + 0.007 * Math.cbrt(E / 1000));
     const inward = dirLocal.clone().normalize();
-    this.addDent(pLocal, inward, r, depth);
-    this.addScorch(pLocal, r * 0.8);
+    // the skin is weaker where it is already dented (or shot full of holes): hit after hit on one
+    // spot goes through
+    let old = 0;
+    for (const d of this.dents) if (d.pos.distanceTo(pLocal) < Math.max(d.r, 0.3)) old = Math.max(old, d.depth);
+    const weak = Math.min(0.8, this.dentCount(pLocal, 0.6) * 0.15 + 0.7 * Math.min(1, old / 0.45) + this.pocks.countNear(pLocal, 0.35) * 0.1);
+    if (opts.shot && E < 1e6) {
+      // a gun round: a pit and a splash of soot where it struck (no dent); the wear adds up
+      this.pocks.add(pLocal, opts.normal || inward.clone().negate(), 0.2 + 0.07 * Math.cbrt(E / 1e5));
+      this.shotWear += E / 1e8;
+    } else {
+      this.addDent(pLocal, inward, r, depth);
+      this.addScorch(pLocal, r * 0.8);
+    }
     // breach?
-    const pen = E / (3e5 * (1 + this.dentCount(pLocal, 0.6) * -0.15));
+    const pen = E / (3e5 * (1 - weak));
     const zone = this.zoneForHullPoint(pLocal);
     let breach = null;
     if (pen > 1 && zone) {
@@ -88,16 +103,20 @@ export class Damage {
     if (inCanopy(pLocal) || pLocal.z < -11.5 && pLocal.y > 0.6) {
       this.crackWindow(15, pLocal, Math.min(2, E / 2.5e5));
     }
-    // equipment & pipes near the impact
+    // equipment & pipes near the impact (a gun round that stays in the skin only hurts what is
+    // mounted outside; through the skin, it hurts what lies behind)
+    const shotOnly = opts.shot && !breach;
     for (const [k, eq] of Object.entries(EQUIPMENT)) {
+      if (shotOnly && !eq.ext) continue;
       const d = eq.pos.distanceTo(pLocal);
-      const reach = r * 2 + (big ? 3.0 : 1.2);
+      const reach = opts.shot ? r + 0.8 : r * 2 + (big ? 3.0 : 1.2);
       if (d < reach) {
         const dmg = Math.min(0.9, (E / 4e5) * (1 - d / reach) * (0.5 + Math.random()));
         if (dmg > 0.03) this.damageEquipment(k, dmg, pLocal);
       }
     }
     for (const s of g.layout.pipes) {
+      if (shotOnly) break;
       const d = s.mid.distanceTo(pLocal);
       const reach = r + (big ? 2.4 : 1.0);
       if (d < reach && Math.random() < 0.6) {
@@ -113,8 +132,10 @@ export class Damage {
     // loose items fly, ship kicks, shake
     const kick = inward.clone().multiplyScalar(Math.min(4, Math.sqrt(E) / 900));
     g.phys.kick(kick, Math.min(6, Math.sqrt(E) / 400), pLocal, Math.min(0.9, E / 2e6));
-    g.player.vel.addScaledVector(kick, -0.9);
-    g.shake = Math.min(3, g.shake + 0.4 + Math.log10(E) * 0.25);
+    // gunfire: many small blows — each one a hard knock, but they do not pile up into an earthquake
+    g.player.vel.addScaledVector(kick, opts.shot ? -0.3 : -0.9);
+    if (opts.shot) g.shake = Math.min(3, Math.max(g.shake, 0.3 + Math.log10(E) * 0.12));
+    else g.shake = Math.min(3, g.shake + 0.4 + Math.log10(E) * 0.25);
     if (g.flight) {
       const dvShip = inward.clone().applyQuaternion(g.flight.quat).multiplyScalar(Math.sqrt(E * 2 * 1) / Math.sqrt(42000 * 42000) * 2);
       g.flight.vel.add(dvShip);
@@ -127,11 +148,11 @@ export class Damage {
       fx.burst('debris', pLocal, inward.clone().negate(), 10 + Math.min(80, E / 20000), { speed: 2.5, spread: 1.2 });
       if (breach) fx.burst('ice', pLocal, inward.clone().negate(), 40, { speed: 6 });
     }
-    g.audio.impact(pLocal, Math.min(1, Math.log10(E) / 7));
+    g.audio.impact(pLocal, Math.min(1, Math.log10(E) / 7) * (opts.shot ? 0.6 : 1));
     g.systems.flicker = Math.min(0.5, 0.15 + E / 2e6);
     setTimeout(() => { g.systems.flicker = 0; }, 900 + Math.min(4000, E / 500));
     g.engine.grade.set('uFlash', Math.min(0.6, E / 3e6));
-    this.events.push({ type: 'impact', E, breach: !!breach, zone, pos: pLocal.clone() });
+    this.events.push({ type: 'impact', E, breach: !!breach, zone, pos: pLocal.clone(), shot: !!opts.shot });
     this.stress += E / 1e6;
     this.fatigue = (this.fatigue || 0) + E / 4e8;
     // far too much energy for the frame: the ship comes apart right away
@@ -461,6 +482,8 @@ export class Damage {
     for (const k of Object.keys(this.health)) this.health[k] = k === 'cameras' ? [1, 1, 1, 1, 1] : 1;
     this.issues = [];
     this.fatigue = 0;
+    this.shotWear = 0;
+    this.pocks.clear();
     this.broken = false;
     this.group.clear();
     this.syncUniforms();
@@ -472,7 +495,7 @@ export class Damage {
    * metal fatigue all eat into it. Below ~0.35 the hull is in danger; at 0 it comes apart.
    */
   integrity() {
-    let x = this.fatigue || 0;
+    let x = (this.fatigue || 0) + (this.shotWear || 0);
     for (const d of this.dents) x += d.depth * d.r * 2.2;
     for (const b of this.breaches) x += b.r * (b.patched ? 0.8 : 2.4);
     for (const c of this.cracks) if (c && c.broken) x += 0.12;
@@ -697,6 +720,7 @@ export class Damage {
       cracks: this.cracks.map((c) => c ? { u: c.u, v: c.v, sev: c.sev, seed: c.seed, patched: c.patched, broken: !!c.broken } : null),
       scorch: this.scorch.map((s) => ({ p: s.pos.toArray(), r: s.r })),
       health: this.health, coolant: this.coolant ?? 1, fatigue: this.fatigue || 0,
+      shotWear: this.shotWear || 0, pocks: this.pocks.serialize(),
       pipes: this.g.layout.pipes.filter((s) => s.leak > 0 || s.patched).map((s) => ({ id: s.id, leak: s.leak, patched: s.patched })),
       equipIssues: this.issues.filter((i) => i.kind === 'equip').map((i) => ({ k: i.ref.k, sev: i.sev, state: i.state })),
     };
@@ -708,6 +732,8 @@ export class Damage {
     Object.assign(this.health, d.health || {});
     this.coolant = d.coolant ?? 1;
     this.fatigue = d.fatigue || 0;
+    this.shotWear = d.shotWear || 0;
+    this.pocks.restore(d.pocks);
     for (const b of d.breaches || []) {
       const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone);
       br.seed = b.seed;

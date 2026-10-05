@@ -272,6 +272,30 @@ export class WorldDamage {
     this.refresh(t);
   }
 
+  /**
+   * a gun hit at a point of a station (station-local p, outward n). Small hits pockmark the same
+   * area (merged, so the big strikes are not pushed out of the record); big ones are full hits.
+   */
+  shot(t, p, n, sev, opts = {}) {
+    const D = t.dmg;
+    if (!D || D.destroyed || this.isElevator(t)) return;
+    D.health -= sev;
+    D.lastHit = { sev, time: this.g.time };
+    const small = sev < 0.02;
+    let hit = small ? D.hits.find((h) => h.small && h.p.distanceTo(p) < 4) : null;
+    if (hit) { hit.sev += sev; hit.r = Math.min(3.2, hit.r + sev * 6); hit.time = this.g.time; }
+    else {
+      hit = { p: p.clone(), n: n.clone().normalize(), r: 0.5 + sev * 9, sev, time: this.g.time, small };
+      D.hits.push(hit);
+      if (D.hits.length > 20) D.hits.shift();
+    }
+    if (D.health <= 0) this.destroy(t);
+    else if (!small) this.dockedBreach(t, sev);
+    D.dirty = true;
+    this.refresh(t);
+    if (opts.byPlayer && this.g.asphalt && this.g.running) this.g.asphalt.say('w_shot', { name: this.name(t) }, { minGap: 40 });
+  }
+
   distTo(t) {
     const g = this.g;
     if (this.isElevator(t)) {
@@ -650,7 +674,8 @@ export class WorldDamage {
       const D = s.dmg;
       if (!s.model.visible || !D) continue;
       const key = D.hits.length + (D.destroyed ? 100 : 0) + STATUS_ORDER.indexOf(D.status) * 1000;
-      if (D.dirty || D.dressedFor !== key) this.dress(s);
+      // (rebuilt at most a couple of times a second while it is being shot at)
+      if ((D.dirty || D.dressedFor !== key) && (D.dressedFor === undefined || tt - (D.dressT || 0) > 0.6)) { this.dress(s); D.dressT = tt; }
       const F = s.fxs;
       if (!F) continue;
       // the jets weaken as the sections behind them empty (a critical station keeps leaking)
