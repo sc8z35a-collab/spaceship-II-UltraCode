@@ -104,7 +104,7 @@ export class Game {
     this.lifeSupport = new LifeSupport(this);
     this.damage = new Damage(this);
     this.stations = new Stations(this.engine, this.shipVis.M, START_TIME);
-    this.elevator = new SpaceElevator(this.engine, this.stations.M);
+    this.elevator = new SpaceElevator(this.engine, this.stations.M, this.stations, this);
     this.shafts = new LightShafts(this.shipVis.root);
     this.autopilot = new Autopilot(this);
     this.docking = new Docking(this);
@@ -424,7 +424,7 @@ export class Game {
     this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
     this.stations.update(this.time, origin, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
-    this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt);
+    this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);

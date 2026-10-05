@@ -278,23 +278,28 @@ function hubModel(def, M) {
   }
   sph([0, 0, 0], coreR + 0.4);
   for (const z of [-24, 22]) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
-  // ---- elevator terminal: the ribbon runs up the axis of this tower (station y)
+  // ---- elevator terminal: the two ribbons run up through this tower (station y, at x = -+4.2);
+  // at both ends a berth deck where the climbers dock (the berth gantries, traversers and
+  // bridges are the elevator's own: see elevatorPort.js)
   if (tether) {
     b.cyl(6.6, 6.6, 96, 'hull', [0, 0, 0], null, 48, true);
-    for (const y of [-48, 48]) { b.cyl(y > 0 ? 3 : 6.6, y > 0 ? 6.6 : 3, 7, 'hullDark', [0, y + Math.sign(y) * 3.5, 0], null, 48); b.torus(5.2, 0.5, 'hullOrange', [0, y + Math.sign(y) * 7.5, 0], [Math.PI / 2, 0, 0], 48); }
+    for (const sg of [-1, 1]) {
+      b.cyl(sg > 0 ? 8.2 : 6.6, sg > 0 ? 6.6 : 8.2, 2.4, 'hull', [0, sg * 46.8, 0], null, 56);
+      b.cyl(10.2, 10.2, 1.6, 'hullDark', [0, sg * 48.8, 0], null, 64);
+      b.torus(10.2, 0.2, 'gold', [0, sg * 49.6, 0], [Math.PI / 2, 0, 0], 64);
+      b.torus(10.2, 0.2, 'hullOrange', [0, sg * 48.0, 0], [Math.PI / 2, 0, 0], 64);
+      for (const lx of [-4.2, 4.2]) {
+        b.torus(1.25, 0.22, 'hullOrange', [lx, sg * 49.75, 0], [Math.PI / 2, 0, 0], 32);
+        for (const sz of [-1, 1]) b.box(2.2, 0.6, 0.6, 'metalDark', [lx, sg * 50.0, sz * 0.62], null, 0.05);
+      }
+      // deck lights round the rim
+      for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; b.box(0.9, 0.22, 0.12, 'lobbyGlow', [Math.cos(a) * 10.22, sg * 48.8, Math.sin(a) * 10.22], [0, -a + Math.PI / 2, 0], 0.03); }
+      P.push({ type: 'cyl', a: new THREE.Vector3(0, sg * 47.9, 0), b: new THREE.Vector3(0, sg * 49.8, 0), r: 10.3 });
+      box([0, sg * 63.4, 0], [9.4, 13.9, 8.0]);
+    }
     for (let y = -44; y <= 44; y += 8) b.torus(6.7, 0.14, 'gold', [0, y, 0], [Math.PI / 2, 0, 0], 64);
     for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; for (let y = -40; y <= 40; y += 8) b.box(0.6, 3.2, 0.14, 'lobbyGlow', [Math.cos(a) * 6.66, y, Math.sin(a) * 6.66], [0, -a + Math.PI / 2, 0], 0.04); }
-    // climber berths: two climbers parked on the ribbon, above and below
-    for (const y of [64, -64]) {
-      b.cyl(3.1, 3.1, 4.4, 'hull', [0, y, 0], null, 36);
-      b.sphere(3.1, 'hull', [0, y + 2.2, 0], 32, [1, 0.42, 1]);
-      b.sphere(3.1, 'hull', [0, y - 2.2, 0], 32, [1, 0.42, 1]);
-      for (let k = 0; k < 20; k++) { const a = k / 20 * Math.PI * 2; b.box(0.7, 0.9, 0.2, 'windowLit', [Math.cos(a) * 3.12, y + 0.4, Math.sin(a) * 3.12], [0, -a + Math.PI / 2, 0], 0.05); }
-      b.torus(1.6, 0.14, 'gold', [0, y + 3.7, 0], [Math.PI / 2, 0, 0], 24);
-      b.torus(1.6, 0.14, 'gold', [0, y - 3.7, 0], [Math.PI / 2, 0, 0], 24);
-      cap([0, y - 4, 0], [0, y + 4, 0], 3.4);
-    }
-    cap([0, -56, 0], [0, 56, 0], 7.2);
+    cap([0, -48, 0], [0, 48, 0], 7.2);
   }
   // ---- the grand lobby (B-29's berth) and the service tube to the core under its floor
   const L = LOBBY_AT;

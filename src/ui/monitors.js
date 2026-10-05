@@ -384,6 +384,13 @@ export class Monitors {
     {
       const es = g.elevator.dmg ? g.elevator.dmg.status : 'ok';
       K.text('宇宙エレベーター：' + STATUS_JP[es], 12, H - 34, { size: 9, color: es === 'ok' ? COL.dim : es === 'damaged' ? COL.amber : COL.red });
+      // docked at a terminal on the ribbon: when the next climbers come in
+      const dk = g.docking;
+      if (dk && dk.state === 'docked' && dk.station && dk.station.tether && g.elevator.nextInfo && es !== 'failed' && es !== 'destroyed') {
+        const fm = (w) => (w < 60 ? 'まもなく' : w < 3600 ? Math.round(w / 60) + '分後' : (w / 3600).toFixed(1) + '時間後');
+        const txt = g.elevator.nextInfo(dk.station.id).map((i) => (i.up ? '↓' : '↑') + i.line + ' ' + fm(i.w)).join('   ');
+        K.text('次のクライマー到着  ' + txt, 12, H - 47, { size: 8, color: COL.cyan });
+      }
     }
     // right column
     const X = 300;

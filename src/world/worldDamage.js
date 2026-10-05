@@ -262,7 +262,7 @@ export class WorldDamage {
     D.hits.push(hit);
     if (D.hits.length > 20) D.hits.shift();
     D.lastHit = { sev, time: this.g.time };
-    if (this.isElevator(t)) D.hitH = hit.h;
+    if (this.isElevator(t)) { D.hitH = hit.h; if (t.impact) t.impact(hit.h, sev); }
     if (D.health <= 0 || sev >= 1) this.destroy(t);
     else this.dockedBreach(t, sev);
     D.dirty = true;

@@ -1,148 +1,116 @@
-// Space elevator "Ame-no-Mihashira": a ribbon anchored to an ocean platform on the equator
-// (0°, 146.5°E) reaching past geostationary orbit to a counterweight at 96,000 km. It turns with
-// the Earth. The ribbon is drawn as a screen-space line (bright where sunlit, so it shows as a thin
-// thread rising from the horizon), climbers crawl up and down it, red beacons blink along it, and
-// the anchor platform, climbers and counterweight are 3D models when close.
+// Space elevator "Ame-no-Mihashira": two carbon-nanotube ribbons anchored to an ocean platform on
+// the equator (0°, 146.5°E), through the low terminal Mihashira (420 km) and the geostationary port
+// Amaterasu, up to a captured rock at 96,000 km. It turns with the Earth.
+//  - the ribbons: a glinting thread from afar, real woven ribbons with lights up close
+//    (elevatorRibbon.js);
+//  - climber traffic on three lines, every climber on its timetable (elevatorTraffic.js), 3D
+//    climbers near the camera (elevatorClimber.js), light points far away;
+//  - berths with traversers and boarding bridges at every terminal, the anchor platform with its
+//    power-beaming domes and the counterweight station (elevatorPort.js);
+//  - effects: the climbers' headlights on the ribbon, approach lights chasing toward a berth, the
+//    power beam in the air above the anchor, waves along the ribbon, sparks when something hits
+//    it, a severed ribbon whipping as the break opens, the terminal's chime and rumble.
 import * as THREE from 'three';
-import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2.js';
-import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry.js';
-import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { R_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
-import { Builder } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR } from '../core/layers.js';
+import { ELEVATOR_H } from './elevatorConst.js';
+import { Traffic, LANE_X, berthStage } from './elevatorTraffic.js';
+import { NearRibbon, FarRibbon, NEAR_R } from './elevatorRibbon.js';
+import { ClimberModel } from './elevatorClimber.js';
+import { BerthRig, anchorModel, counterweightModel } from './elevatorPort.js';
+import { Particles } from '../fx/particles.js';
+import { SUN_E } from './space.js';
 
-export const ELEVATOR = { lat: 0, lon: 146.5 * Math.PI / 180, top: 96000e3, geo: 35786e3, climberSpeed: 55 };
+export const ELEVATOR = { lat: 0, lon: 146.5 * Math.PI / 180, top: ELEVATOR_H.top, geo: ELEVATOR_H.geo, climberSpeed: 70 };
+export { ELEVATOR_H };
 
 /** unit vector (ECI) of the elevator axis at time t (ms) */
 export function elevatorAxis(t, out = new THREE.Vector3()) {
   return ecefToEci(latLonToUnit(ELEVATOR.lat, ELEVATOR.lon), gmst(t), out).normalize();
 }
 
-function anchorModel(M) {
-  const b = new Builder();
-  // hexagonal floating platform, 170 m across, with the tether tower in the middle
-  const hex = new THREE.Shape();
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; const x = Math.cos(a) * 85, z = Math.sin(a) * 85; if (k === 0) hex.moveTo(x, z); else hex.lineTo(x, z); }
-  hex.closePath();
-  const deck = new THREE.ExtrudeGeometry(hex, { depth: 6, bevelEnabled: false });
-  deck.rotateX(-Math.PI / 2);
-  b.add(deck, 'hullDark', [0, -2, 0]);
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 6; b.cyl(9, 11, 14, 'hull', [Math.cos(a) * 62, -8, Math.sin(a) * 62], null, 24); }
-  b.cyl(14, 22, 60, 'hull', [0, 30, 0], null, 32);
-  b.cyl(10, 14, 30, 'hullDark', [0, 75, 0], null, 32);
-  b.torus(16, 1.2, 'plasticY', [0, 62, 0], [Math.PI / 2, 0, 0], 48);
-  for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2; b.box(26, 22, 18, 'hull', [Math.cos(a) * 45, 11, Math.sin(a) * 45], [0, -a, 0], 1.5); }
-  for (let k = 0; k < 40; k++) { const a = k / 40 * Math.PI * 2; b.box(1.6, 1.0, 0.4, 'windowLit', [Math.cos(a) * 22.3, 30 + (k % 2) * 8, Math.sin(a) * 22.3], [0, -a + Math.PI / 2, 0], 0.1); }
-  b.cyl(14, 14, 0.4, 'plasticY', [55, 4.2, 0], null, 32);
-  for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; b.sphere(0.9, 'navR', [Math.cos(a) * 84, 4.6, Math.sin(a) * 84], 8); }
-  b.sphere(1.6, 'strobe', [0, 92, 0], 10);
-  return b.build(M, { castShadow: false });
+/** the terminal stations' frame on the axis: ex across the ribbons (south), ax up, ez = west */
+export function elevatorBasis(ax, ex, ez) {
+  const n = Math.hypot(ax.x, ax.z) || 1;
+  ez.set(-ax.z / n, 0, ax.x / n);
+  ex.crossVectors(ax, ez).normalize();
+  return ex;
 }
 
-function counterweightModel(M) {
-  const b = new Builder();
-  // captured rock as the ballast mass + a small station clamped to it
-  const rock = new THREE.IcosahedronGeometry(160, 4);
-  const p = rock.attributes.position;
-  for (let i = 0; i < p.count; i++) {
-    const v = new THREE.Vector3().fromBufferAttribute(p, i);
-    const n = Math.sin(v.x * 0.021) * Math.sin(v.y * 0.017 + 1.3) * Math.sin(v.z * 0.019 + 0.7);
-    v.multiplyScalar(1 + 0.18 * n + 0.06 * Math.sin(v.x * 0.07 + v.z * 0.05));
-    p.setXYZ(i, v.x, v.y, v.z);
-  }
-  rock.computeVertexNormals();
-  b.add(rock, 'metalDark');
-  b.cyl(18, 18, 70, 'hull', [0, -190, 0], null, 32);
-  for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2; b.box(8, 60, 90, 'solarPanel', [Math.cos(a) * 60, -200, Math.sin(a) * 60], [0, -a, 0], 0); }
-  b.sphere(2, 'strobe', [0, -230, 0], 10);
-  return b.build(M, { castShadow: false });
-}
+const smooth = (a, b, x) => { const q = Math.min(1, Math.max(0, (x - a) / (b - a))); return q * q * (3 - 2 * q); };
 
-function climberModel(M) {
-  const g = new THREE.Group();
-  const b = new Builder();
-  // cabin around the ribbon (local +y = up the tether), window ring, drive housings, power receiver
-  b.cyl(3.1, 3.1, 4.4, 'hull', [0, 0, 0], null, 36, true);
-  b.sphere(3.1, 'hull', [0, 2.2, 0], 36, [1, 0.42, 1]);
-  b.sphere(3.1, 'hull', [0, -2.2, 0], 36, [1, 0.42, 1]);
-  for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; b.box(0.7, 0.9, 0.2, 'windowLit', [Math.cos(a) * 3.12, 0.5, Math.sin(a) * 3.12], [0, -a + Math.PI / 2, 0], 0.05); }
-  for (const y of [3.6, -3.6]) { b.box(2.2, 1.6, 2.2, 'hullDark', [0, y, 0], null, 0.2); b.torus(1.5, 0.12, 'gold', [0, y, 0], [Math.PI / 2, 0, 0], 24); }
-  const pts = [];
-  for (let i = 0; i <= 10; i++) { const x = 5 * i / 10; pts.push(new THREE.Vector2(Math.max(0.01, x), -(x * x) / 10)); }
-  b.push([0, -4.8, 0], [Math.PI, 0, 0]);
-  b.add(new THREE.LatheGeometry(pts, 32), 'dish');
-  b.pop();
-  b.sphere(0.4, 'strobe', [0, 4.7, 0], 8);
-  g.add(b.build(M, { castShadow: false }));
-  // drive rollers pinching the ribbon (spin while climbing)
-  const rollers = [];
-  for (const y of [3.6, -3.6]) for (const s of [-1, 1]) {
-    const r = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 1.2, 20), M.steel);
-    r.rotation.z = Math.PI / 2;
-    r.position.set(0, y, s * 0.6);
-    const hub = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.15, 0.15), M.plasticR);
-    r.add(hub);
-    g.add(r);
-    rollers.push({ m: r, s });
-  }
-  g.userData.rollers = rollers;
-  return g;
-}
+const ptVS = /* glsl */`
+  attribute float kind; attribute float phase; uniform float uTime; uniform float uScale; varying vec3 vC; varying float vA;
+  void main(){
+    vec4 mv = modelViewMatrix * vec4(position, 1.0);
+    gl_Position = projectionMatrix * mv;
+    float d = length(mv.xyz);
+    if (kind > 0.5) {
+      // red warning beacons along the ribbon
+      float blink = step(0.82, fract(uTime * 0.7 + kind * 3.0));
+      vC = vec3(1.0, 0.12, 0.06);
+      vA = blink * clamp(3.0e6 / d, 0.2, 1.0) * smoothstep(400.0, 2500.0, d);
+      gl_PointSize = (2.0 + 3.0 * blink) * uScale;
+    } else {
+      // climbers: cabin light, with the strobe's double flash; hidden up close (the model shows)
+      float f = fract(uTime / 1.5 + phase);
+      float strobe = max(step(f, 0.025), step(abs(f - 0.12), 0.012));
+      vC = kind > 0.2 ? vec3(1.0, 0.72, 0.42) : vec3(1.0, 0.88, 0.66);
+      vC = mix(vC, vec3(1.0), strobe);
+      vA = (0.8 + 2.2 * strobe) * clamp(3.0e6 / d, 0.15, 1.0) * smoothstep(900.0, 2600.0, d) * step(0.0, phase);
+      gl_PointSize = (2.6 + 1.6 * strobe) * uScale;
+    }
+  }`;
+const ptFS = /* glsl */`
+  varying vec3 vC; varying float vA;
+  void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float g = exp(-dot(p, p) * 3.0); gl_FragColor = vec4(vC * vA * g * 5.0, 1.0); }`;
+
+const beamVS = /* glsl */`
+  varying float vY; varying vec3 vW; varying vec3 vN;
+  void main(){ vY = uv.y; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vN = normalize(mat3(modelMatrix) * vec3(position.x, 0.0, position.z));
+    gl_Position = projectionMatrix * viewMatrix * w; }`;
+const beamFS = /* glsl */`
+  uniform float uK; uniform float uLen; varying float vY; varying vec3 vW; varying vec3 vN;
+  void main(){
+    vec3 V = normalize(cameraPosition - vW);
+    float rim = pow(max(0.0, abs(dot(normalize(vN), V))), 1.5);
+    // scattering falls off with the air: bright near the sea, gone by ~60 km
+    float h = vY * uLen;
+    float air = exp(-h / 7500.0);
+    gl_FragColor = vec4(vec3(0.35, 1.0, 0.7) * uK * air * rim * 0.9, 1.0);
+  }`;
 
 export class SpaceElevator {
-  constructor(engine, M) {
+  constructor(engine, M, stations = null, game = null) {
     this.engine = engine;
     this.scene = engine.scene;
     this.M = M;
-    // ribbon samples: exponential spacing (fine near the ground, coarse in deep space)
-    const N = 380;
-    this.N = N;
-    this.h = new Float64Array(N + 1);
-    for (let k = 0; k <= N; k++) this.h[k] = k === 0 ? 0 : 25 * Math.pow(ELEVATOR.top / 25, k / N);
-    this.seg = new Float32Array(N * 6);
-    this.col = new Float32Array(N * 6);
-    const geo = new LineSegmentsGeometry();
-    geo.setPositions(this.seg);
-    geo.setColors(this.col);
-    this.segAttr = geo.attributes.instanceStart.data;
-    this.colAttr = geo.attributes.instanceColorStart.data;
-    this.lineMat = new LineMaterial({ color: 0xffffff, linewidth: 1.7, vertexColors: true, worldUnits: false });
-    this.line = new LineSegments2(geo, this.lineMat);
-    this.line.frustumCulled = false;
-    this.line.matrixAutoUpdate = false;
-    this.line.layers.set(LAYER_FAR); this.line.layers.enable(LAYER_MID); this.line.layers.enable(LAYER_NEAR);
-    this.scene.add(this.line);
-    // climbers + beacons as light points
-    this.climbers = [];
-    for (let i = 0; i < 6; i++) this.climbers.push({ phase: i / 6 + 0.037 * i, h: 0, up: true });
+    this.game = game;
+    const E = ELEVATOR_H;
+    // far line samples: fine near the ground, coarse in deep space
+    const N = 380, hs = [];
+    for (let k = 0; k <= N; k++) hs.push(E.anchorTop + (k === 0 ? 0 : 25 * Math.pow((E.cwEnd - E.anchorTop) / 25, k / N)));
+    hs[N] = E.cwEnd;
+    this.far = new FarRibbon(this.scene, hs);
+    this.near = new NearRibbon(this.scene);
+    this.traffic = new Traffic();
+    // far light points: every climber + the red beacons on the axis
     this.beaconH = [];
-    for (let h = 2000e3; h < ELEVATOR.top; h *= 1.55) this.beaconH.push(h);
+    for (let h = 2000e3; h < E.top; h *= 1.55) this.beaconH.push(h);
     for (const h of [100e3, 400e3, 1000e3]) this.beaconH.push(h);
-    const NP = this.climbers.length + this.beaconH.length;
+    const NC = this.traffic.climbers.length, NP = NC + this.beaconH.length;
     this.ptPos = new Float32Array(NP * 3);
-    const kind = new Float32Array(NP);
-    for (let i = 0; i < this.climbers.length; i++) kind[i] = 0; // climber: warm steady
-    for (let j = 0; j < this.beaconH.length; j++) kind[this.climbers.length + j] = 1 + (j % 5) * 0.13; // beacon: red blink
+    const kind = new Float32Array(NP), phase = new Float32Array(NP);
+    this.traffic.climbers.forEach((c, i) => { kind[i] = c.kind === 'C' ? 0.25 : 0; phase[i] = (i * 0.618) % 1; });
+    for (let j = 0; j < this.beaconH.length; j++) kind[NC + j] = 1 + (j % 5) * 0.13;
     const pg = new THREE.BufferGeometry();
-    pg.setAttribute('position', new THREE.BufferAttribute(this.ptPos, 3));
+    pg.setAttribute('position', new THREE.BufferAttribute(this.ptPos, 3).setUsage(THREE.DynamicDrawUsage));
     pg.setAttribute('kind', new THREE.BufferAttribute(kind, 1));
+    this.ptPhase = new THREE.BufferAttribute(phase, 1);
+    pg.setAttribute('phase', this.ptPhase);
+    this.basePhase = phase.slice();
     this.ptMat = new THREE.ShaderMaterial({
-      uniforms: { uTime: { value: 0 }, uScale: { value: 1 } },
-      vertexShader: /* glsl */`
-        attribute float kind; uniform float uTime; uniform float uScale; varying vec3 vC; varying float vA;
-        void main(){
-          vec4 mv = modelViewMatrix * vec4(position, 1.0);
-          gl_Position = projectionMatrix * mv;
-          float d = length(mv.xyz);
-          float beacon = step(0.5, kind);
-          float blink = beacon > 0.5 ? step(0.82, fract(uTime * 0.7 + kind * 3.0)) : 1.0;
-          vC = beacon > 0.5 ? vec3(1.0, 0.12, 0.06) : vec3(1.0, 0.85, 0.6);
-          vA = blink * clamp(3.0e6 / d, 0.2, 1.0) * smoothstep(400.0, 2500.0, d);
-          gl_PointSize = (beacon > 0.5 ? 2.0 + 3.0 * blink : 3.2) * uScale;
-        }`,
-      fragmentShader: /* glsl */`
-        varying vec3 vC; varying float vA;
-        void main(){ vec2 p = gl_PointCoord * 2.0 - 1.0; float g = exp(-dot(p, p) * 3.0); gl_FragColor = vec4(vC * vA * g * 5.0, 1.0); }`,
+      uniforms: { uTime: { value: 0 }, uScale: { value: 1 } }, vertexShader: ptVS, fragmentShader: ptFS,
       transparent: true, depthWrite: false, blending: THREE.AdditiveBlending,
     });
     this.points = new THREE.Points(pg, this.ptMat);
@@ -150,14 +118,61 @@ export class SpaceElevator {
     this.points.matrixAutoUpdate = false;
     this.points.layers.set(LAYER_FAR); this.points.layers.enable(LAYER_MID);
     this.scene.add(this.points);
-    // near models
+    // the anchor platform and the counterweight (3D when close)
     this.anchor = anchorModel(M);
     this.counter = counterweightModel(M);
-    this.climber = climberModel(M);
-    for (const o of [this.anchor, this.counter, this.climber]) { o.matrixAutoUpdate = false; o.visible = false; this.scene.add(o); }
+    for (const o of [this.anchor, this.counter]) { o.matrixAutoUpdate = false; o.visible = false; this.scene.add(o); }
+    // berths: anchor top, counterweight keel and both ends of the two terminal towers
+    this.berths = [];
+    const addBerth = (parent, y, side, line, end, h, label, station = null) => {
+      const rig = new BerthRig(M, side, label);
+      rig.group.matrix.makeTranslation(0, y, 0);
+      parent.add(rig.group);
+      const L = this.traffic.lines.find((l) => l.id === line);
+      this.berths.push({ rig, parent, y, side, line: L, end, h, station, arrLane: end === 1 ? -1 : 1, depLane: end === 1 ? 1 : -1, near: false, was: null });
+    };
+    addBerth(this.anchor, E.anchorBerth, 1, 'G', 0, E.anchorBerth, '↑ 地上線  天の御柱 低軌道ステーション');
+    addBerth(this.counter, E.cwBerth - E.top, -1, 'O', 1, E.cwBerth, '外縁線 終点  COUNTERWEIGHT');
+    if (stations) {
+      const mih = stations.list.find((s) => s.id === 'mihashira');
+      const ama = stations.list.find((s) => s.id === 'amaterasu');
+      if (mih) {
+        addBerth(mih.model, -64, -1, 'G', 1, E.mih - 64, '↓ 地上線  ANCHOR', mih);
+        addBerth(mih.model, 64, 1, 'S', 0, E.mih + 64, '↑ 静止線  AMATERASU', mih);
+      }
+      if (ama) {
+        addBerth(ama.model, -64, -1, 'S', 1, E.geo - 64, '↓ 静止線  MIHASHIRA', ama);
+        addBerth(ama.model, 64, 1, 'O', 0, E.geo + 64, '↑ 外縁線  OUTER', ama);
+      }
+    }
+    // climber models, given to the nearest climbers
+    this.pool = [];
+    for (let i = 0; i < 4; i++) this.pool.push(new ClimberModel('P', M));
+    for (let i = 0; i < 3; i++) this.pool.push(new ClimberModel('C', M));
+    for (const m of this.pool) { m.group.visible = false; this.scene.add(m.group); }
+    // the power beam above the anchor (seen only where there is air to scatter it)
+    const bg = new THREE.CylinderGeometry(3.5, 1.2, 1, 20, 1, true);
+    bg.translate(0, 0.5, 0);
+    this.beamMat = new THREE.ShaderMaterial({ uniforms: { uK: { value: 0 }, uLen: { value: 1 } }, vertexShader: beamVS, fragmentShader: beamFS, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide });
+    this.beam = new THREE.Mesh(bg, this.beamMat);
+    this.beam.matrixAutoUpdate = false;
+    this.beam.frustumCulled = false;
+    this.beam.visible = false;
+    this.scene.add(this.beam);
+    // sparks and debris where the ribbon is hit (in a frame pinned to the hit point)
+    this.fxGroup = new THREE.Group();
+    this.fxGroup.matrixAutoUpdate = false;
+    this.scene.add(this.fxGroup);
+    this.fx = new Particles(this.fxGroup);
+    this.fxH = null;
     this.axis = new THREE.Vector3();
-    this._t = 0;
-    this._shadowT = 0;
+    this.ex = new THREE.Vector3(1, 0, 0);
+    this.ez = new THREE.Vector3(0, 0, 1);
+    this._ce = new THREE.Vector3();
+    this._p = new THREE.Vector3();
+    this._size = new THREE.Vector2();
+    this._m = new THREE.Matrix4();
+    this.t = 0;
   }
 
   /** ECI position of a point h metres above the anchor */
@@ -165,92 +180,339 @@ export class SpaceElevator {
     return elevatorAxis(t, out).multiplyScalar(R_EARTH + h);
   }
 
-  update(t, origin, camWorld, sunDir, dt) {
+  /** render-frame position of a ribbon point (lane -1 / 1, 0 = axis) */
+  rel(h, lane, origin, out) {
+    const r = R_EARTH + h, ax = this.axis;
+    return out.set(ax.x * r - origin.x + this.ex.x * lane * LANE_X, ax.y * r - origin.y + this.ex.y * lane * LANE_X, ax.z * r - origin.z + this.ex.z * lane * LANE_X);
+  }
+
+  /** an asteroid strike at height h (sev 0..1): waves along the ribbon, sparks if we are near */
+  impact(h, sev) {
+    const lane = Math.random() < 0.5 ? -1 : 1;
+    this.near.addWave(h, 1.5 + 9 * sev, lane, 1100, 320, 0.01);
+    this.near.addWave(h, 0.6 + 3 * sev, -lane, 900, 420, 0.008);
+    this.fxH = { h, lane, sev, t: 0 };
+    this.fxPending = true;
+  }
+
+  /** "地上線 4分後" etc. for a terminal station's monitor */
+  nextInfo(stationId, sec = this.clock / 1000) {
+    const out = [];
+    for (const B of this.berths) {
+      if (!B.station || B.station.id !== stationId) continue;
+      const w = this.traffic.nextArrival(B.line.id, B.end, sec);
+      out.push({ line: B.line.jp, up: B.side > 0, w });
+    }
+    return out;
+  }
+
+  update(t, origin, camWorld, sunDir, dt, space = null) {
+    const E = ELEVATOR_H;
     const ax = elevatorAxis(t, this.axis);
-    const camEci = camWorld.clone().add(origin);
-    // ribbon geometry relative to the floating origin
-    const N = this.N, h = this.h, seg = this.seg;
+    const ex = this.ex, ez = this.ez;
+    elevatorBasis(ax, ex, ez);
+    const camEci = this._ce.copy(camWorld).add(origin);
+    this.t += dt;
     const D = this.dmg, st = D ? D.status : 'ok';
-    const gap = D && D.destroyed ? [D.breakH * 0.985, D.breakH * 1.015] : null;   // severed ribbon
-    for (let k = 0; k < N; k++) {
-      let r0 = R_EARTH + h[k], r1 = R_EARTH + h[k + 1];
-      if (gap && h[k + 1] > gap[0] && h[k] < gap[1]) r1 = r0;
-      seg[k * 6] = ax.x * r0 - origin.x; seg[k * 6 + 1] = ax.y * r0 - origin.y; seg[k * 6 + 2] = ax.z * r0 - origin.z;
-      seg[k * 6 + 3] = ax.x * r1 - origin.x; seg[k * 6 + 4] = ax.y * r1 - origin.y; seg[k * 6 + 5] = ax.z * r1 - origin.z;
+    // a severed ribbon: the lower part falls back, the upper part flies out, the break opens
+    let gap = null, whipAmp = 0;
+    if (D && D.destroyed) {
+      const age = Math.max(0, (t - (D.destroyedAt ?? t)) / 1000);
+      const bh = D.breakH || 5e6;
+      gap = [bh - Math.min(bh - E.anchorTop, 40 + 0.8 * age * age), bh + Math.min(4e7, 40 + 0.45 * age * age)];
+      whipAmp = 4 + 60 * Math.exp(-age / 600);
     }
-    this.segAttr.needsUpdate = true;
-    // sunlit / shadowed shading (Earth's shadow cylinder), refreshed a few times a second
-    this._shadowT -= dt;
-    if (this._shadowT <= 0) {
-      this._shadowT = 0.25;
-      const col = this.col;
-      const sd = ax.dot(sunDir);
-      const perp = Math.sqrt(Math.max(0, 1 - sd * sd));
-      // glint: brighter when the sun is low against the ribbon (grazing reflection toward the viewer)
-      const view = camEci.clone().normalize();
-      const glint = 0.6 + 0.8 * Math.pow(Math.max(0, 1 - Math.abs(view.dot(ax))), 2);
-      for (let k = 0; k <= N; k++) {
-        const r = R_EARTH + h[k];
-        const lit = !(sd * r < 0 && perp * r < R_EARTH);
-        const b = (lit ? 1.6 * glint : 0.05) * (gap && h[k] > gap[0] ? 0.3 : 1);
-        const c0 = k < N ? k * 6 : -1, c1 = k > 0 ? (k - 1) * 6 + 3 : -1;
-        for (const c of [c0, c1]) if (c >= 0) { col[c] = b * 0.92; col[c + 1] = b * 0.95; col[c + 2] = b; }
-      }
-      this.colAttr.needsUpdate = true;
-    }
-    const size = this.engine.renderer.getDrawingBufferSize(new THREE.Vector2());
-    this.lineMat.resolution.set(size.x, size.y);
-    // climbers move up to GEO and back down; beacons blink along the ribbon
     // the climbers run on their own clock: slower when the elevator is damaged, stopped when it fails
     const sp = st === 'ok' ? 1 : st === 'damaged' ? 0.5 : st === 'critical' ? 0.12 : 0;
     if (this.clock === undefined) this.clock = t;
     this.clock += (t - (this.lastT ?? t)) * sp;
     this.lastT = t;
     const sec = this.clock / 1000;
-    const H = ELEVATOR.geo;
-    let nearest = null;
-    for (let i = 0; i < this.climbers.length; i++) {
-      const c = this.climbers[i];
-      const u = (sec * ELEVATOR.climberSpeed / (2 * H) + c.phase) % 1;
-      c.up = u < 0.5;
-      c.h = H * (c.up ? 2 * u : 2 - 2 * u);
-      const p = ax.clone().multiplyScalar(R_EARTH + c.h).sub(origin);
-      if (st === 'destroyed') p.set(1e15, 0, 0);
-      this.ptPos.set([p.x, p.y, p.z], i * 3);
-      const d = p.distanceTo(camWorld);
-      if (!nearest || d < nearest.d) nearest = { d, p, c };
+    this.traffic.update(sec);
+    // ---- where the camera is along the ribbon
+    const along = camEci.dot(ax);
+    const hcam = along - R_EARTH;
+    const px = camEci.x - ax.x * along, py = camEci.y - ax.y * along, pz = camEci.z - ax.z * along;
+    const dperp = Math.hypot(px, py, pz);
+    let F = null, cut = null;
+    if (dperp < NEAR_R * 0.98 && hcam > E.anchorTop - NEAR_R && hcam < E.cwEnd + NEAR_R) {
+      const hc = Math.min(E.cwEnd, Math.max(E.anchorTop, hcam));
+      const dc = Math.hypot(dperp, hcam - hc);
+      if (dc < NEAR_R * 0.98) {
+        const half = Math.sqrt(NEAR_R * NEAR_R - dc * dc);
+        const O = new THREE.Vector3(ax.x * (R_EARTH + hc) - origin.x, ax.y * (R_EARTH + hc) - origin.y, ax.z * (R_EARTH + hc) - origin.z);
+        F = {
+          O, ex, ey: ax, ez, hc, half, sMin: E.anchorTop - hc, sMax: E.cwEnd - hc,
+          gap: gap ? [gap[0] - hc, gap[1] - hc] : null,
+          whip: gap ? { a: gap[0] - hc, b: gap[1] - hc, amp: whipAmp } : null,
+        };
+        cut = [hc - half * 0.995, hc + half * 0.995];
+      }
+    }
+    // ---- far line
+    this.engine.renderer.getDrawingBufferSize(this._size);
+    this.far.update(ax, origin, camWorld, sunDir, cut, gap, this._size);
+    // ---- climbers: positions, far points, the nearest get models
+    const C = this.traffic.climbers;
+    const near = [];
+    const p = this._p;
+    for (let i = 0; i < C.length; i++) {
+      const c = C[i];
+      c.hidden = !!(gap && c.h > gap[0] - 20 && c.h < gap[1] + 20) || st === 'destroyed' && !gap;
+      this.rel(c.h, c.lane, origin, p);
+      c.rel = c.rel || new THREE.Vector3();
+      c.rel.copy(p);
+      c.d = p.distanceTo(camWorld);
+      if (c.hidden) p.set(1e15, 0, 0);
+      this.ptPos[i * 3] = p.x; this.ptPos[i * 3 + 1] = p.y; this.ptPos[i * 3 + 2] = p.z;
+      if (!c.hidden && c.d < 9000) near.push(c);
     }
     for (let j = 0; j < this.beaconH.length; j++) {
-      const p = ax.clone().multiplyScalar(R_EARTH + this.beaconH[j]).sub(origin);
-      if (st === 'failed' || (gap && this.beaconH[j] > gap[0])) p.set(1e15, 0, 0);
-      this.ptPos.set([p.x, p.y, p.z], (this.climbers.length + j) * 3);
+      const h = this.beaconH[j];
+      this.rel(h, 0, origin, p);
+      if (st === 'failed' || (gap && h > gap[0] && h < gap[1]) || (cut && h > cut[0] && h < cut[1])) p.set(1e15, 0, 0);
+      const k = C.length + j;
+      this.ptPos[k * 3] = p.x; this.ptPos[k * 3 + 1] = p.y; this.ptPos[k * 3 + 2] = p.z;
     }
+    // climbers without power show no strobe (phase < 0 hides their point too when the line is dead)
+    const ph = this.ptPhase.array;
+    for (let i = 0; i < C.length; i++) ph[i] = st === 'failed' || st === 'destroyed' ? -1 : this.basePhase[i];
+    this.ptPhase.needsUpdate = true;
     this.points.geometry.attributes.position.needsUpdate = true;
-    // warning: beacons blink fast while the elevator is in trouble
     this.ptMat.uniforms.uTime.value = (t / 1000 * (st === 'damaged' || st === 'critical' ? 4 : 1)) % 10000;
     this.ptMat.uniforms.uScale.value = this.engine.renderer.getPixelRatio();
-    // 3D models when close
-    const basis = (o, pos) => {
-      const up = ax;
-      const ref = Math.abs(up.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
-      const x = new THREE.Vector3().crossVectors(ref, up).normalize();
-      const z = new THREE.Vector3().crossVectors(x, up).normalize();
-      o.matrix.makeBasis(x, up, z).setPosition(pos);
-      o.matrixWorld.copy(o.matrix);
-      o.updateMatrixWorld(true);
-    };
-    const place = (o, pos, R, maxD) => {
-      const d = pos.distanceTo(camWorld);
-      o.visible = d < maxD;
-      if (!o.visible) return;
-      basis(o, pos);
-      o.traverse((m) => { if (m.isMesh) assignLayers(m, Math.max(0, d - R), d + R); });
-    };
-    place(this.anchor, ax.clone().multiplyScalar(R_EARTH).sub(origin), 120, 3.5e5);
-    place(this.counter, ax.clone().multiplyScalar(R_EARTH + ELEVATOR.top).sub(origin), 260, 6e5);
-    if (nearest && st !== 'destroyed') {
-      place(this.climber, nearest.p, 8, 4e4);
-      if (this.climber.visible) for (const r of this.climber.userData.rollers) r.m.rotation.x += dt * (nearest.c.up ? 1 : -1) * r.s * 100 * sp;
-    } else this.climber.visible = false;
+    near.sort((a, b) => a.d - b.d);
+    const free = { P: this.pool.filter((m) => m.kind === 'P'), C: this.pool.filter((m) => m.kind === 'C') };
+    const used = new Set();
+    const lights = [];
+    const tsec = this.t;
+    const power = st === 'ok' || st === 'damaged' ? 1 : st === 'critical' ? (Math.sin(tsec * 17) > 0.2 ? 0.8 : 0.25) : 0.12;
+    for (const c of near) {
+      // keep a climber's model if it already has one
+      let m = this.pool.find((q) => q.owner === c && !used.has(q));
+      if (!m) m = free[c.kind].find((q) => !used.has(q) && (!q.owner || !near.includes(q.owner) || q.owner.d > c.d));
+      if (!m) continue;
+      used.add(m);
+      if (m.owner !== c) { m.owner = c; m.setId(c.id); }
+      this.placeClimber(m, c, origin, camWorld, dt, power, st, F, lights);
+    }
+    for (const m of this.pool) if (!used.has(m)) { m.group.visible = false; m.owner = null; }
+    // the strike's flash on the ribbon
+    if (F && this.fxH && this.fxH.t < 1.5) {
+      const q = 1 - this.fxH.t / 1.5;
+      lights.push({ s: this.fxH.h - F.hc, lane: 0, dir: 0, range: 220, color: [1, 0.72, 0.45], k: 9 * q * q * (0.3 + this.fxH.sev) });
+    }
+    // ---- berths
+    const berthEnv = [];
+    for (const B of this.berths) this.updateBerth(B, F, lights, berthEnv, st, tsec, camWorld);
+    // ---- near ribbon
+    if (F) {
+      const sc = space;
+      const sunVis = this.sunVisibility(ax, F.hc, sunDir);
+      const sunC = new THREE.Vector3(SUN_E, SUN_E, SUN_E);
+      if (sc) sunC.set(sc.sunColor.r * SUN_E, sc.sunColor.g * SUN_E, sc.sunColor.b * SUN_E);
+      sunC.multiply(sunVis);
+      const earthC = new THREE.Vector3();
+      if (sc && sc.earthshine) earthC.set(sc.earthshine.color.r, sc.earthshine.color.g, sc.earthshine.color.b).multiplyScalar(sc.earthshine.intensity);
+      const earthL = sc && sc.toEarth ? sc.toEarth : ax.clone().negate();
+      const cam = this.engine.camera;
+      const pxAngle = 2 * Math.tan(cam.fov * Math.PI / 360) / Math.max(1, this._size.y);
+      this.near.update(F, { sunL: sunDir, sunC, earthL, earthC, pxAngle, pixelRatio: this.engine.renderer.getPixelRatio(), time: tsec, lights, berths: berthEnv }, dt);
+    } else this.near.update(null);
+    // ---- anchor, counterweight, beam
+    this.placeBig(this.anchor, E.anchorBerth * 0, origin, camWorld, 175, 3.5e5);
+    this.placeBig(this.counter, E.top, origin, camWorld, 300, 6e5);
+    this.updateBeam(origin, camWorld, st);
+    // ---- impact sparks
+    this.updateFx(origin, camWorld, dt);
+  }
+
+  /** sunlight reaching the ribbon at height h: Earth's shadow with a reddened penumbra */
+  sunVisibility(ax, h, sunDir) {
+    const r = R_EARTH + h;
+    const sd = ax.dot(sunDir) * r;
+    if (sd > 0) return new THREE.Vector3(1, 1, 1);
+    const q = Math.sqrt(Math.max(0, r * r - sd * sd));
+    const vis = smooth(R_EARTH - 12e3, R_EARTH + 18e3, q);
+    const red = smooth(R_EARTH, R_EARTH + 90e3, q);
+    return new THREE.Vector3(vis, vis * (0.42 + 0.58 * red), vis * (0.22 + 0.78 * red));
+  }
+
+  placeClimber(m, c, origin, camWorld, dt, power, st, F, lights) {
+    const g = m.group;
+    g.visible = true;
+    const p = c.rel;
+    g.matrix.makeBasis(this.ex, this.axis, this.ez).setPosition(p);
+    g.matrixWorld.copy(g.matrix);
+    g.updateMatrixWorld(true);
+    g.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, c.d - 9), c.d + 9); });
+    // animation state from the timetable
+    const L = c.line;
+    let grip = 1, fins = 1, door = 0, lightsK = 1, recv = 1, status = [1, 0.55, 0.1], statusK = 1.2, strobe = 0;
+    const tt = this.t;
+    if (c.stage === 'berth') {
+      const s = berthStage(c.dwellF, c.dwell);
+      grip = s.rollers; fins = 0; door = s.doors; lightsK = 0.25 + 0.75 * s.depart; recv = 0.12;
+      if (s.clamp > 0.95 && s.traverse < 0.01) { status = [0.15, 1, 0.3]; statusK = 2.2; }
+      else { status = [1, 0.55, 0.1]; statusK = 1 + 3 * Math.max(0, Math.sin(tt * 6)); }
+    } else {
+      const fromEnd = Math.min(c.h - L.h0, L.h1 - c.h);
+      fins = smooth(40, 120, fromEnd);
+      const f = (tt / 1.5 + c.i * 0.618) % 1;
+      strobe = f < 0.025 || Math.abs(f - 0.12) < 0.012 ? 1 : 0;
+      recv = 0.75 + 0.25 * Math.sin(tt * 2.1 + c.i);
+    }
+    let windows = 1;
+    if (power < 1) { windows = power; lightsK *= power; recv *= power; strobe *= power > 0.5 ? 1 : 0; status = [1, 0.08, 0.04]; statusK = 3 * (Math.sin(tt * 4) > 0 ? 1 : 0.1); }
+    m.animate({ v: c.v * (c.stage === 'down' ? 1 : 1), dt, grip, fins, door, lights: lightsK, windows, recv, status, statusK, strobe });
+    // its headlamps on the ribbon ahead (and a little behind)
+    if (F && lightsK > 0.05) {
+      const s = c.h - F.hc;
+      if (Math.abs(s) < F.half) {
+        const dir = c.stage === 'up' ? 1 : c.stage === 'down' ? -1 : 0;
+        if (dir) {
+          lights.push({ s: s + dir * 6.4, lane: c.lane, dir, range: 160, color: [1.0, 0.93, 0.8], k: 2.4 * lightsK });
+          lights.push({ s: s - dir * 6.4, lane: c.lane, dir: -dir, range: 30, color: [1.0, 0.25, 0.12], k: 0.3 * lightsK });
+        } else lights.push({ s, lane: Math.round(c.lane) || 0, dir: 0, range: 18, color: [1.0, 0.85, 0.6], k: 0.6 * lightsK });
+      }
+    }
+  }
+
+  updateBerth(B, F, lights, berthEnv, est, tsec, camWorld) {
+    const L = B.line;
+    // which climber is in (or coming into / leaving) this berth
+    let at = null, inbound = null, outbound = null;
+    for (const c of this.traffic.climbers) {
+      if (c.line !== L || c.hidden) continue;
+      if (c.stage === 'berth' && c.end === B.end) { at = c; continue; }
+      const d = Math.abs(c.h - B.h);
+      if (d > 3000) continue;
+      const towards = B.end === 1 ? c.stage === 'up' : c.stage === 'down';
+      if (towards) { if (!inbound || d < Math.abs(inbound.h - B.h)) inbound = c; }
+      else if (!outbound || d < Math.abs(outbound.h - B.h)) outbound = c;
+    }
+    const S = B.station;
+    const sst = S && S.dmg ? S.dmg.status : 'ok';
+    let power = sst === 'ok' || sst === 'damaged' ? 1 : sst === 'critical' ? (Math.sin(tsec * 13 + B.h) > 0.3 ? 0.9 : 0.2) : 0;
+    if (est === 'failed' || est === 'destroyed') power *= 0.3;
+    const state = { carX: B.arrLane, clamp: 0, bridge: [0, 0], occupied: [false, false], moving: false, warn: 0, power, t: tsec };
+    let chase = null;
+    if (at) {
+      const s = berthStage(at.dwellF, at.dwell);
+      state.carX = at.lane;
+      state.clamp = s.clamp;
+      const ai = B.arrLane < 0 ? 0 : 1, di = 1 - ai;
+      state.bridge[ai] = s.bridgeIn; state.bridge[di] = s.bridgeOut;
+      state.occupied[at.lane < 0 ? 0 : 1] = true;
+      state.moving = s.traverse > 0.001 && s.traverse < 0.999;
+      state.warn = Math.max(s.depart, state.moving ? 1 : 0, 1 - s.clamp);
+      if (s.depart > 0.5) chase = { lane: B.depLane, sense: -1 };
+    }
+    if (inbound) { state.warn = Math.max(state.warn, smooth(3000, 600, Math.abs(inbound.h - B.h))); chase = { lane: inbound.lane, sense: 1 }; }
+    if (outbound && Math.abs(outbound.h - B.h) < 1500) { state.warn = Math.max(state.warn, 1 - Math.abs(outbound.h - B.h) / 1500); chase = chase || { lane: outbound.lane, sense: -1 }; }
+    B.rig.animate(state);
+    B.rig.group.updateMatrixWorld(true);
+    // lights for the ribbon shader and the approach chasers
+    if (F) {
+      const s = B.h - F.hc;
+      if (Math.abs(s) < F.half + 2000) {
+        if (power > 0.05) lights.push({ s, lane: 0, dir: 0, range: 34, color: [0.85, 0.92, 1.0], k: 1.4 * power });
+        berthEnv.push({ h: B.h, side: -B.side, chase: power > 0.05 ? chase : null });
+      }
+    }
+    this.berthSound(B, at, inbound, tsec);
+  }
+
+  /** the terminal you are docked at: a chime and the announcement before a climber comes in, the
+   *  clamps' thud through the structure, a low rumble as one pulls out */
+  berthSound(B, at, inbound, tsec) {
+    const g = this.game;
+    if (!g || !g.audio || !g.docking || !B.station) return;
+    const here = g.docking.state === 'docked' && g.docking.station === B.station;
+    if (!here) { if (B.rumble) { g.audio.stopLoop && g.audio.stopLoop('elRumble' + B.h); B.rumble = false; } return; }
+    const A = g.audio;
+    const ev = (k) => { const was = B.ev || {}; if (was[k]) return false; was[k] = true; B.ev = was; return true; };
+    if (inbound && Math.abs(inbound.h - B.h) < 400 && ev('chime' + inbound.id)) {
+      A.chime && A.chime();
+      if (g.asphalt && Math.random() < 0.5) g.asphalt.say(B.side > 0 ? 'el_climber_down' : 'el_climber_up', { line: B.line.jp, id: inbound.id }, { minGap: 600 });
+    }
+    if (at) {
+      const s = berthStage(at.dwellF, at.dwell);
+      if (s.clamp > 0.6 && ev('clamp' + at.id + Math.floor(at.dwellF > 20 ? 1 : 0))) {
+        A.beep && A.beep(62, 0.35, 0.22, { direct: true, type: 'sine' });
+        A._burst && A._burst(null, { dur: 0.5, freq: 260, q: 0.6, gain: 0.18, type: 'brown', filter: 'lowpass', direct: true });
+      }
+      if (s.traverse > 0.02 && s.traverse < 0.98) {
+        if (!B.rumble && A.humLoop) { A.humLoop('elRumble' + B.h, { freq: 41, gain: 0.0, harm: [1, 0.6, 0.3, 0.15] }); B.rumble = true; }
+        A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0.035, 0.6);
+      } else if (s.depart > 0.4) {
+        if (!B.rumble && A.humLoop) { A.humLoop('elRumble' + B.h, { freq: 33, gain: 0.0, harm: [1, 0.7, 0.4, 0.2] }); B.rumble = true; }
+        A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0.05 * s.depart, 0.8);
+      } else if (B.rumble) A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0, 1.2);
+    } else if (B.rumble) A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0, 1.5);
+    if (B.ev && Object.keys(B.ev).length > 40) B.ev = {};
+  }
+
+  placeBig(o, h, origin, camWorld, R, maxD) {
+    const p = this.rel(h, 0, origin, this._p);
+    const d = p.distanceTo(camWorld);
+    o.visible = d < maxD;
+    if (!o.visible) return;
+    o.matrix.makeBasis(this.ex, this.axis, this.ez).setPosition(p);
+    o.matrixWorld.copy(o.matrix);
+    o.updateMatrixWorld(true);
+    o.traverse((m) => { if (m.isMesh) assignLayers(m, Math.max(0, d - R), d + R); });
+  }
+
+  /** the anchor's laser lights a ground-line climber on its way up through the air */
+  updateBeam(origin, camWorld, st) {
+    let target = null;
+    for (const c of this.traffic.climbers) if (c.line.id === 'G' && c.stage === 'up' && !c.hidden && c.h < 120e3 && c.h > 400) { if (!target || c.h < target.h) target = c; }
+    const on = target && (st === 'ok' || st === 'damaged');
+    this.beam.visible = !!on && this.rel(0, 0, origin, this._p).distanceTo(camWorld) < 2.5e6;
+    if (!this.beam.visible) return;
+    // from one of the three domes (78 m out on the deck) to the receiver ring under the climber
+    const a0 = this.rel(0, 0, origin, new THREE.Vector3());
+    const ang = (target.i % 3) / 3 * Math.PI * 2 + Math.PI / 6;
+    const base = a0.clone().addScaledVector(this.ex, Math.cos(ang) * 78).addScaledVector(this.axis, 35.4).addScaledVector(this.ez, Math.sin(ang) * 78);
+    const tgt = this.rel(target.h - 6.6, target.lane, origin, new THREE.Vector3());
+    const dir = tgt.sub(base);
+    const len = Math.max(10, dir.length());
+    dir.divideScalar(len);
+    this.beam.matrix.compose(base, new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir), new THREE.Vector3(1, len, 1));
+    this.beam.matrixWorld.copy(this.beam.matrix);
+    this.beamMat.uniforms.uLen.value = len;
+    this.beamMat.uniforms.uK.value = 2.2 * (0.85 + 0.15 * Math.sin(this.t * 3.1));
+    const d = base.distanceTo(camWorld);
+    assignLayers(this.beam, Math.max(0, d - len), d + len);
+    if (this.anchor.userData.beamGlow) this.anchor.userData.beamGlow.emissiveIntensity = 5 + 3 * Math.sin(this.t * 3.1);
+  }
+
+  updateFx(origin, camWorld, dt) {
+    const H = this.fxH;
+    if (!H) return;
+    H.t += dt;
+    const p = this.rel(H.h, H.lane, origin, this._p);
+    this.fxGroup.matrix.makeBasis(this.ex, this.axis, this.ez).setPosition(p);
+    this.fxGroup.matrixWorld.copy(this.fxGroup.matrix);
+    this.fxGroup.updateMatrixWorld(true);
+    const d = p.distanceTo(camWorld);
+    if (this.fxPending) {
+      this.fxPending = false;
+      if (d < 30000) {
+        const O = new THREE.Vector3();
+        // the flash, a hot fireball of ribbon fibre and rock, sparks, then tumbling fragments
+        this.fx.burst('plasma', O, new THREE.Vector3(0, 0, 1), 3, { spread: 0.3, speed: 2, size: 9 + 10 * H.sev, life: 0.45, grow: 2.5, color: [1, 0.85, 0.6] });
+        this.fx.burst('plasma', O, new THREE.Vector3(0, 0, -1), Math.round(8 + 20 * H.sev), { spread: 1.2, speed: 8 + 30 * H.sev, size: 3 + 4 * H.sev, life: 1.4 });
+        this.fx.burst('spark', O, new THREE.Vector3(0, 0, 1), Math.round(120 + 300 * H.sev), { spread: 1.6, speed: 60 + 220 * H.sev, size: 22, life: 1.8, drag: 0 });
+        this.fx.burst('debris', O, new THREE.Vector3(1, 0, 0), Math.round(30 + 90 * H.sev), { spread: 1.6, speed: 6 + 30 * H.sev, size: 18, drag: 0 });
+      }
+    }
+    const cam = this.engine.camera;
+    const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));
+    this.fx.add.pts.material.uniforms.uScale.value = sc;
+    this.fx.alpha.pts.material.uniforms.uScale.value = sc;
+    this.fx.update(Math.min(dt, 0.1));
+    if (H.t > 12) this.fxH = null;
   }
 }

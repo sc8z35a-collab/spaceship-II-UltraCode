@@ -258,6 +258,9 @@ export class Space {
 }
 
 function injectPassDiscard(mat) {
-  // fragments owned by another pass are discarded (prevents double blending in overlaps)
-  mat.fragmentShader = mat.fragmentShader.replace('void main(){', 'uniform vec2 uPassRange;\nvoid main(){\n  { float pd = length(vWorld - cameraPosition); if (pd < uPassRange.x || pd >= uPassRange.y) discard; }\n');
+  // fragments owned by another pass are discarded (prevents double blending in overlaps). The
+  // test is on view depth, like the passes' near / far planes: with the straight-line distance a
+  // fragment toward the screen's edge could be beyond the mid pass's share yet in front of the far
+  // pass's near plane, and the sky showed black wedges there when flying low
+  mat.fragmentShader = mat.fragmentShader.replace('void main(){', 'uniform vec2 uPassRange;\nvoid main(){\n  { float pd = -(viewMatrix * vec4(vWorld, 1.0)).z; if (pd < uPassRange.x || pd >= uPassRange.y) discard; }\n');
 }
