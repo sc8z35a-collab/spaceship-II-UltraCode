@@ -19,6 +19,7 @@ import { H8Display, fmtDist, altOf, FLOOR } from './h8Display.js';
 import { H8Tabs } from './h8Tabs.js';
 import { H8Zoom } from './h8Zoom.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
+import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
 import { Particles } from '../fx/particles.js';
 import { HachiPilot } from './h8Pilot.js';
@@ -146,6 +147,7 @@ export class H8Vessel {
     this.field = [];
     this.floorHatch = 0;         // the cockpit floor hatch 0 shut .. 1 open
     this.locker = { open: 0, target: 0, out: 0 };   // the suit locker's panel, and the suit on its rail
+    this.mind = new HachiMind(this);                 // what HACHI works out and acts on
   }
 
   // ==================================================================== construction helpers
@@ -449,6 +451,13 @@ export class H8Vessel {
     return { ok: true, d, why: null };
   }
 
+  /** the data link's quality 0..1 (weaker toward the edge of its range, and with the comms circuit cut) */
+  linkQuality() {
+    if (this.mode === 'docked') return 1;
+    if (!this.link.ok) return 0;
+    return Math.max(0.05, (1 - 0.55 * (this.link.d / LINK_RANGE) ** 2) * this.circ('comms', 0.4));
+  }
+
   /**
    * Propellant a ship needs to come over to the other one d metres away (kg): out to cruise speed
    * and back down again, plus what holding a level path at that speed takes against the orbit
@@ -700,6 +709,7 @@ export class H8Vessel {
       return;
     }
     if (this.pending) return;
+    this.mind.userPort();
     const open = this.hatch.target > 0.5;
     this.hatch.setTarget(open ? 0 : 1);
     this.neckTarget = open ? 0 : 1;
@@ -858,6 +868,7 @@ export class H8Vessel {
     this.updateAirlock(sdt);
     this.issueT = (this.issueT || 0) - sdt;
     if (this.issueT <= 0) { this.issueT = 0.4; this.updateFieldIssues(); }
+    this.mind.update(sdt);
     // a cabin with its hole open to B-29's: Asphalt hears it
     const lsx = g.lifeSupport;
     if (this.mode === 'docked' && this._leak && lsx.leaky.has('corridor') && lsx.leaky.has('h8')) this.asphalt('h8_leak_port', {}, { minGap: 90, force: false });
@@ -1796,11 +1807,14 @@ export class H8Vessel {
       for (const d of g.drones.list) {
         if (!d.alive) continue;
         const dist = d.pos.distanceTo(f.pos);
-        if (dist > 90e3 * this.circ('sensor', 0.15)) continue;
+        // what H8's own sensors see, and over the link what B-29's see
+        const own = dist <= 90e3 * this.circ('sensor', 0.15);
+        const shared = !own && this.mode !== 'docked' && this.link.ok && d.pos.distanceTo(g.flight.pos) < 80e3;
+        if (!own && !shared) continue;
         const hostile = d.state === 'hunt' || d.state === 'attack' || d.state === 'evade';
         out.push({
           id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d,
-          extra: d.state === 'evade' ? `損傷 ${Math.round(d.hp * 100)}%・後退中` : d.state === 'attack' ? (d.run ? '攻撃航過中' : '周回・攻撃中') + (d.hp < 1 ? `  損傷${Math.round((1 - d.hp) * 100)}%` : '') : hostile ? '接近中' : '巡回中',
+          extra: (d.state === 'evade' ? `損傷 ${Math.round(d.hp * 100)}%・後退中` : d.state === 'attack' ? (d.run ? '攻撃航過中' : '周回・攻撃中') + (d.hp < 1 ? `  損傷${Math.round((1 - d.hp) * 100)}%` : '') : hostile ? '接近中' : '巡回中') + (shared ? '・B-29経由' : ''),
         });
       }
     }
@@ -1926,10 +1940,17 @@ export class H8Vessel {
       y += 19;
     }
     if (!log.length) K.text('HACHI からの報告はまだありません', 14, y + 12, { size: 12.5, color: COL_DIM });
-    const bw = 158, by = H - 40;
-    K.button(10, by, bw, 32, 'H8 状況報告', () => this.reportH8(), { size: 12 });
-    K.button(10 + bw + 7, by, bw, 32, 'B-29 状況', () => this.reportB29(), { style: this.link.ok ? 'normal' : 'disabled', size: 12 });
-    K.button(10 + (bw + 7) * 2, by, bw, 32, 'タブ 初期化', () => this.tabs.resetLayout(), { size: 12 });
+    // what HACHI can be asked (it works the answers out from what it is watching)
+    const bw = 119, by = H - 76, M = this.mind;
+    K.button(10, by, bw, 30, '状況分析', () => M.ask('sitrep'), { size: 12 });
+    K.button(10 + (bw + 6), by, bw, 30, '敵情報', () => M.ask('threat'), { size: 12 });
+    K.button(10 + (bw + 6) * 2, by, bw, 30, '帰還計画', () => M.ask('plan'), { size: 12 });
+    K.button(10 + (bw + 6) * 3, by, bw, 30, 'どうする？', () => M.ask('advice'), { style: 'warn', size: 12 });
+    const bw2 = 160, by2 = H - 40;
+    K.button(10, by2, bw2, 30, 'H8 状況報告', () => this.reportH8(), { size: 12 });
+    K.button(10 + bw2 + 6, by2, bw2, 30, 'B-29 状況', () => this.reportB29(), { style: this.link.ok ? 'normal' : 'disabled', size: 12 });
+    K.button(10 + (bw2 + 6) * 2, by2, bw2, 30, 'タブ 初期化', () => this.tabs.resetLayout(), { size: 12 });
+    if (M.learn > 0.05) K.text(`攻撃パターン解析 ${Math.round(M.learn * 100)}%`, 498, H - 84, { size: 11, color: COL_DIM, align: 'right' });
   }
 
   /** the suit tab */
@@ -2001,6 +2022,7 @@ export class H8Vessel {
       met: !!this.metAsphalt, hits: this.hits,
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null,
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)),
+      learn: +this.mind.learn.toFixed(3),
     };
   }
 
@@ -2018,6 +2040,7 @@ export class H8Vessel {
     this.hull.restore(d.hull);
     if (d.air) this.air = { o2: d.air.o2, n2: d.air.n2 };
     if (d.circuits) Object.assign(this.circuits, d.circuits);
+    if (d.learn) this.mind.learn = d.learn;
     if (d.patched) for (const dd of this.hull.dents) if (dd.hole && d.patched.includes(+dd.seed.toFixed(5))) this.patchHole(dd);
     if (d.leak && !this._leak && this.g.lifeSupport.z.h8) this._leak = this.g.lifeSupport.addLeak('h8', 3e-4, 'h8armour');
     this.awake = this.wakeTarget;

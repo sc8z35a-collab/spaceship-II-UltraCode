@@ -237,7 +237,7 @@ export class H8Tabs {
       case 'b29': {
         if (docked) return { text: '結合中・ケーブル接続' };
         const L = v.link;
-        return { text: L.ok ? `${fmtDist(L.d)}  リンク良好` : `${fmtDist(L.d)}  通信圏外`, warn: !L.ok };
+        return { text: L.ok ? `${fmtDist(L.d)}  リンク ${Math.round(v.linkQuality() * 100)}%` : `${fmtDist(L.d)}  通信圏外`, warn: !L.ok };
       }
       case 'wpn': {
         const W = g.weapons;
@@ -328,7 +328,8 @@ export class H8Tabs {
     if (L.ok) {
       const integ = g.damage.integrityNow ?? g.damage.integrity();
       const pw = g.systems.power ?? 1;
-      K.text('状態  ' + v.b29State(), 14, y + 10, { size: 13, color: COL.text }); y += 22;
+      K.text('状態  ' + v.b29State(), 14, y + 10, { size: 13, color: COL.text });
+      K.text(`データリンク ${Math.round(v.linkQuality() * 100)}%  目標共有・射撃連携・警報中継`, 498, y + 10, { size: 11, color: COL.cyan, align: 'right' }); y += 22;
       const row = (label, val, txt, col, warn) => {
         K.text(label, 14, y + 10, { size: 13, color: COL.dim });
         K.bar(96, y + 3, 290, 8, val, warn ? COL.red : col);

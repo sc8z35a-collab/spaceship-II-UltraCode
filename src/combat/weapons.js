@@ -279,6 +279,9 @@ export class Weapons {
   /** for the AIs: the nearest drone within range, or a small rock on a collision course */
   autoTarget(which, range) {
     const T = this.targets(which);
+    // HACHI weighs the threats (and shares them out with B-29's gun over the link)
+    const M = this.g.h8 && this.g.h8.mind;
+    if (M) return M.pickTarget(which, range, T);
     return T.find((x) => x.kind === 'drone' && x.dist < range) || null;
   }
 
@@ -329,7 +332,9 @@ export class Weapons {
     m.flash = 0.05;
     const side = new THREE.Vector3().crossVectors(dir, W.n).normalize().multiplyScalar(m.kind === 'twin' ? (m.alt ? 0.075 : -0.075) : 0);
     const muzzle = W.pos.clone().addScaledVector(dir, 1.1).add(side);
-    this.combat.fire({ kind, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, spread: 0.0035 * (1 + 5 * (1 - fc)), byPlayer: true });
+    // (HACHI's fire control tightens as it reads the drones' pattern; B-29's gun gets its track)
+    const fcs = g.h8 && g.h8.mind ? g.h8.mind.spread(which) : 1;
+    this.combat.fire({ kind, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, spread: 0.0035 * (1 + 5 * (1 - fc)) * fcs, byPlayer: true });
     this.gunSound(which, kind);
   }
 
