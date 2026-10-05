@@ -18,7 +18,7 @@ export class StationAir {
     this.ringContains = null;
     // links between sections through the station doors
     this.links = [];
-    for (const d of lobby.doors) if (d.def.link) this.links.push({ a: d.def.link[0], b: d.def.link[1], door: d });
+    for (const d of lobby.doors) { d.air = this; if (d.def.link) this.links.push({ a: d.def.link[0], b: d.def.link[1], door: d }); }
     this.breaches = [];       // { sec, p, n, area, id }
     this.nextId = 1;
     this.events = [];

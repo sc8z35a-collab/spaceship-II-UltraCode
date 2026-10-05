@@ -581,7 +581,7 @@ export class Docking {
       this.air.update(dt, st, who);
       for (const e of this.air.events.splice(0)) if (e.type === 'recovered') g.asphalt.say('st_air_ok', { sec: this.air.sec[e.sec].name }, { minGap: 20 });
     }
-    for (const d of this.lobby.doors || []) d.update(dt, who, g.audio);
+    for (const d of this.lobby.doors || []) d.update(dt, who, g.audio, g.fx);
     this.emergencyLights(dt, st);
   }
 
