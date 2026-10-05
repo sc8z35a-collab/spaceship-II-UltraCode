@@ -2,7 +2,7 @@
 import { Engine } from './core/engine.js';
 import { loadEarthAssets } from './world/earth/earthAssets.js';
 import { Game } from './game.js';
-import { QUALITY, QUALITY_JP } from './core/quality.js';
+import { QUALITY, QUALITY_JP, saveQuality } from './core/quality.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -74,11 +74,12 @@ async function boot() {
   // graphics quality: high (full look) or low (about half the processing)
   const gfxLabel = () => {
     $('gfx-label').textContent = '画質：' + QUALITY_JP[QUALITY.level];
-    $('gfx-note').textContent = QUALITY.level === 'low' ? '解像度と描画を下げて処理を約半分に（軽い・電池にやさしい）' : 'いちばんきれいな表示（重い）';
+    $('gfx-note').textContent = QUALITY.level === 'low' ? '外装の細かな部品を省き、解像度と描画も下げて大幅に軽く（電池にやさしい）・切り替えると読み込み直します' : 'いちばんきれいな表示（重い）・切り替えると読み込み直します';
   };
   gfxLabel();
   $('boot-gfx').classList.remove('hidden');
-  $('btn-gfx').addEventListener('click', () => { game.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'); gfxLabel(); });
+  // (on the title screen the models are rebuilt for the new setting: the page loads again)
+  $('btn-gfx').addEventListener('click', () => { saveQuality(QUALITY.level === 'low' ? 'high' : 'low'); gfxLabel(); setTimeout(() => location.reload(), 120); });
   $('progress').classList.add('hidden');
   $('boot').classList.add('ready');   // the live 3D scene shows through behind the title
   game.startIdle();

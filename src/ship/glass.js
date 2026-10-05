@@ -14,6 +14,7 @@ export const glassUniforms = {
   uFrost: { value: 0 },
   uHeatGlass: { value: 0 },
   uTimeG: { value: 0 },
+  uHollow: { value: 0 },   // 1: the cabin behind is not drawn (seen from well outside): dark panes
 };
 
 const VERT = /* glsl */`
@@ -45,6 +46,7 @@ uniform float uFrost;
 uniform float uHeatGlass;
 uniform float uTimeG;
 uniform float uInner;
+uniform float uHollow;
 varying vec3 vWorld;
 varying vec3 vN;
 varying vec2 vUvW;
@@ -122,6 +124,12 @@ void main(){
   if (uHeatGlass > 0.0 && uInner < 0.5){
     col += vec3(1.0, 0.45, 0.12) * uHeatGlass * 2.0 * (0.6 + 0.4 * texture(tNoise3D, vec3(vUvW * 3.0, uTimeG * 0.3)).g);
     alpha = max(alpha, uHeatGlass * 0.4);
+  }
+  // the cabin is not drawn from far outside: the pane shows a dim, faintly lit inside instead of
+  // whatever lies behind the ship
+  if (uHollow > 0.0 && uInner < 0.5 && sideOK > 0.5){
+    col += vec3(0.010, 0.011, 0.013) * (1.0 - F);
+    alpha = mix(alpha, 0.93, uHollow);
   }
   gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
 }

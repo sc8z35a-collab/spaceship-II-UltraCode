@@ -6,9 +6,12 @@
 // latches, the high-voltage power coupling, a radar under its dome, star trackers, a high-gain dish,
 // a laser terminal, handrails, lights and stencilled markings — and a simple stand-in for distance.
 import * as THREE from 'three';
+import { QUALITY } from '../core/quality.js';
 import { Builder, rng } from '../ship/geom.js';
 import { H8, CAMERAS, RCS, exclusions } from './h8Spec.js';
 import { decalUV } from './h8Materials.js';
+
+const LOWQ = () => QUALITY.level === 'low';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0);
@@ -76,7 +79,7 @@ function armourTiles(b, R0) {
       const cLat = chamfer / R0, cLon = chamfer / (R0 * Math.cos(lam));
       const A0 = [la0 + gLat, la1 - gLat, lo0 + gLon, lo1 - gLon];
       const A1 = [A0[0] + cLat, A0[1] - cLat, A0[2] + cLon, A0[3] - cLon];
-      const NU = 5, NV = 4;
+      const NU = LOWQ() ? 3 : 5, NV = LOWQ() ? 2 : 4;
       const pos = [], col = [], idx = [];
       // tile tint: graphite with variation; a few replaced (lighter) plates; the orange belt
       const k = R();
@@ -143,32 +146,34 @@ function cameraPod(b, cam, R0) {
   // armoured boss let into the plates, a bolt ring
   b.cyl(0.46, 0.52, 0.16, 'metalDark', [0, 0.08, 0], null, 40);
   b.torus(0.47, 0.025, 'metal', [0, 0.165, 0], [Math.PI / 2, 0, 0], 40);
-  for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; b.cyl(0.018, 0.02, 0.022, 'bolt', [Math.cos(a) * 0.41, 0.17, Math.sin(a) * 0.41], null, 6); }
+  b.fine(() => { for (let k = 0; k < 12; k++) { const a = k / 12 * Math.PI * 2; b.cyl(0.018, 0.02, 0.022, 'bolt', [Math.cos(a) * 0.41, 0.17, Math.sin(a) * 0.41], null, 6); } });
   // turntable and yoke
   b.cyl(0.3, 0.32, 0.07, 'metal', [0, 0.2, 0], null, 32);
   for (const s of [-1, 1]) {
     b.box(0.06, 0.42, 0.22, 'armorPlain', [s * 0.27, 0.42, 0], null, 0.02);
     b.cyl(0.07, 0.07, 0.05, 'steel', [s * 0.3, 0.55, 0], [0, 0, Math.PI / 2], 16);     // elevation bearing
-    b.cyl(0.03, 0.03, 0.08, 'bolt', [s * 0.335, 0.55, 0], [0, 0, Math.PI / 2], 8);
+    b.fine(() => b.cyl(0.03, 0.03, 0.08, 'bolt', [s * 0.335, 0.55, 0], [0, 0, Math.PI / 2], 8));
   }
   // housing on its elevation axis, looking out along +y (the camera's axis)
   b.push([0, 0.55, 0]);
   b.cyl(0.21, 0.21, 0.46, 'armorPlain', [0, 0.06, 0], null, 32);
-  for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; b.box(0.012, 0.3, 0.05, 'metalDark', [Math.cos(a) * 0.215, -0.02, Math.sin(a) * 0.215], [0, -a, 0], 0.004); }   // cooling fins
+  b.fine(() => { for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; b.box(0.012, 0.3, 0.05, 'metalDark', [Math.cos(a) * 0.215, -0.02, Math.sin(a) * 0.215], [0, -a, 0], 0.004); } });   // cooling fins
   b.cyl(0.22, 0.22, 0.025, 'trim', [0, 0.22, 0], null, 32);                       // orange ring
   // optics: hood (flared), front rings, a stack of coated elements, aperture iris
   b.lathe([[0.165, 0.29], [0.175, 0.33], [0.2, 0.4], [0.205, 0.405], [0.19, 0.405], [0.185, 0.4], [0.16, 0.33], [0.15, 0.29]], 'lensRing', [0, 0, 0], null, 40);
   b.torus(0.155, 0.014, 'steel', [0, 0.288, 0], [Math.PI / 2, 0, 0], 32);
   b.add(new THREE.SphereGeometry(0.15, 32, 10, 0, Math.PI * 2, 0, 0.55), 'lens', [0, 0.17, 0]);
   b.cyl(0.11, 0.11, 0.005, 'lens', [0, 0.25, 0], null, 32);
-  for (let k = 0; k < 9; k++) { const a = k / 9 * Math.PI * 2; b.box(0.06, 0.004, 0.02, 'lensRing', [Math.cos(a) * 0.12, 0.258, Math.sin(a) * 0.12], [0, -a + 0.6, 0], 0); }
-  // IR illuminators round the lens, the tally LED, a wiper arm parked at the side
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + 0.3; b.sphere(0.012, 'ledR', [Math.cos(a) * 0.178, 0.296, Math.sin(a) * 0.178], 8); }
-  b.sphere(0.016, 'ledG', [0.14, 0.24, 0.14], 8);
-  b.box(0.012, 0.012, 0.2, 'steel', [0.19, 0.31, 0.02], [0.2, 0, 0], 0.003);
+  b.fine(() => {
+    for (let k = 0; k < 9; k++) { const a = k / 9 * Math.PI * 2; b.box(0.06, 0.004, 0.02, 'lensRing', [Math.cos(a) * 0.12, 0.258, Math.sin(a) * 0.12], [0, -a + 0.6, 0], 0); }
+    // IR illuminators round the lens, the tally LED, a wiper arm parked at the side
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + 0.3; b.sphere(0.012, 'ledR', [Math.cos(a) * 0.178, 0.296, Math.sin(a) * 0.178], 8); }
+    b.sphere(0.016, 'ledG', [0.14, 0.24, 0.14], 8);
+    b.box(0.012, 0.012, 0.2, 'steel', [0.19, 0.31, 0.02], [0.2, 0, 0], 0.003);
+  });
   b.pop();
   // cable conduit from the housing into the armour
-  b.tube([V(-0.18, 0.5, 0.12), V(-0.36, 0.28, 0.2), V(-0.44, 0.1, 0.24)], 0.022, 'cable', { radial: 6 });
+  b.fine(() => b.tube([V(-0.18, 0.5, 0.12), V(-0.36, 0.28, 0.2), V(-0.44, 0.1, 0.24)], 0.022, 'cable', { radial: 6 }));
   b.pop();
   // stencilled label beside the boss
   const lab = cam.dir.clone().addScaledVector(f.x, 0.17).normalize();
@@ -182,10 +187,10 @@ function rcsQuad(b, d, R0, spots) {
   b.box(0.3, 0.02, 0.3, 'trim', [0, 0.19, 0], null, 0.01);
   for (const [dx, dz, rx, rz] of [[0.22, 0, 0, -Math.PI / 2], [-0.22, 0, 0, Math.PI / 2], [0, 0.22, Math.PI / 2, 0], [0, -0.22, -Math.PI / 2, 0]]) {
     b.cyl(0.028, 0.06, 0.12, 'nozzle', [dx, 0.1, dz], [rx, 0, rz], 12, true);
-    b.cyl(0.03, 0.03, 0.02, 'metal', [dx * 0.8, 0.1, dz * 0.8], [rx, 0, rz], 10);
+    b.fine(() => b.cyl(0.03, 0.03, 0.02, 'metal', [dx * 0.8, 0.1, dz * 0.8], [rx, 0, rz], 10));
   }
   b.cyl(0.028, 0.065, 0.12, 'nozzle', [0, 0.26, 0], null, 12, true);
-  for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2 + Math.PI / 4; b.cyl(0.012, 0.012, 0.012, 'bolt', [Math.cos(a) * 0.15, 0.2, Math.sin(a) * 0.15], null, 6); }
+  b.fine(() => { for (let k = 0; k < 4; k++) { const a = k / 4 * Math.PI * 2 + Math.PI / 4; b.cyl(0.012, 0.012, 0.012, 'bolt', [Math.cos(a) * 0.15, 0.2, Math.sin(a) * 0.15], null, 6); } });
   b.pop();
   spots.push({ p: d.clone().multiplyScalar(R0 + 0.25), n: d.clone() });
 }
@@ -195,7 +200,7 @@ function mainDrive(b, parts) {
   // mounting plate and thrust ring welded into the stern, struts to the armour
   b.cyl(1.45, 1.52, 0.16, 'metalDark', [0, 0, z0], [Math.PI / 2, 0, 0], 48);
   b.torus(1.38, 0.08, 'metal', [0, 0, z0 + 0.14], [0, 0, 0], 48);
-  for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; b.cyl(0.03, 0.034, 0.03, 'bolt', [Math.cos(a) * 1.3, Math.sin(a) * 1.3, z0 + 0.1], [Math.PI / 2, 0, 0], 6); }
+  b.fine(() => { for (let k = 0; k < 16; k++) { const a = k / 16 * Math.PI * 2; b.cyl(0.03, 0.034, 0.03, 'bolt', [Math.cos(a) * 1.3, Math.sin(a) * 1.3, z0 + 0.1], [Math.PI / 2, 0, 0], 6); } });
   // magnetic nozzle: outer shell + inner liner (lathed along +y, laid along +z)
   const prof = [];
   for (let i = 0; i <= 22; i++) { const t = i / 22; prof.push([0.3 + 0.68 * Math.pow(t, 0.7), t * 1.75]); }
@@ -203,16 +208,18 @@ function mainDrive(b, parts) {
   b.lathe(prof, 'nozzle', [0, 0, 0], null, 64);
   b.lathe(prof.map(([r, y]) => [r - 0.03, y]).reverse(), 'nozzle', [0, 0, 0], null, 64);
   // cooling channels running down the bell
-  for (let k = 0; k < 56; k++) {
-    const a = k / 56 * Math.PI * 2;
-    const pts = prof.filter((_, i) => i % 3 === 0).map(([r, y]) => V(Math.cos(a) * (r + 0.012), y, Math.sin(a) * (r + 0.012)));
-    b.tube(pts, 0.01, 'nozzle', { radial: 4, seg: 16 });
-  }
+  b.fine(() => {
+    for (let k = 0; k < 56; k++) {
+      const a = k / 56 * Math.PI * 2;
+      const pts = prof.filter((_, i) => i % 3 === 0).map(([r, y]) => V(Math.cos(a) * (r + 0.012), y, Math.sin(a) * (r + 0.012)));
+      b.tube(pts, 0.01, 'nozzle', { radial: 4, seg: 16 });
+    }
+  });
   // three superconducting coils round the bell (they glow with the drive)
   for (const t of [0.25, 0.55, 0.85]) {
     const r = 0.3 + 0.68 * Math.pow(t, 0.7) + 0.07;
     b.torus(r, 0.075, 'coil', [0, t * 1.75, 0], [Math.PI / 2, 0, 0], 64);
-    b.torus(r + 0.06, 0.018, 'metalDark', [0, t * 1.75 + 0.06, 0], [Math.PI / 2, 0, 0], 64);
+    b.fine(() => b.torus(r + 0.06, 0.018, 'metalDark', [0, t * 1.75 + 0.06, 0], [Math.PI / 2, 0, 0], 64));
   }
   // the throat: a glowing ring deep in the bell
   b.cyl(0.28, 0.28, 0.04, 'throat', [0, 0.06, 0], null, 40);
@@ -248,16 +255,18 @@ function radiatorWing(side, M) {
   b.cyl(0.11, 0.11, D + 0.2, 'steel', [0, 0, 0], [Math.PI / 2, 0, 0], 16);          // hinge
   b.box(0.3, 0.12, 0.3, 'metalDark', [side * 0.18, 0, 0], null, 0.03);
   b.box(W, 0.045, D, 'radiator', [side * (0.35 + W / 2), 0, 0], null, 0.008);
-  for (let k = 0; k < 11; k++) {
-    const z = -D / 2 + 0.1 + k * (D - 0.2) / 10;
-    for (const yy of [0.03, -0.03]) b.cyl(0.018, 0.018, W - 0.1, 'mli', [side * (0.35 + W / 2), yy, z], [0, 0, Math.PI / 2], 6);
-  }
+  b.fine(() => {
+    for (let k = 0; k < 11; k++) {
+      const z = -D / 2 + 0.1 + k * (D - 0.2) / 10;
+      for (const yy of [0.03, -0.03]) b.cyl(0.018, 0.018, W - 0.1, 'mli', [side * (0.35 + W / 2), yy, z], [0, 0, Math.PI / 2], 6);
+    }
+  });
   for (let k = 0; k <= 5; k++) b.box(0.05, 0.07, D + 0.02, 'metalDark', [side * (0.35 + k * W / 5), 0, 0], null, 0.01);
   b.box(W, 0.06, 0.05, 'metalDark', [side * (0.35 + W / 2), 0, D / 2], null, 0.01);
   b.box(W, 0.06, 0.05, 'metalDark', [side * (0.35 + W / 2), 0, -D / 2], null, 0.01);
   // coolant manifold along the root, flex hoses into the hinge
   b.cyl(0.05, 0.05, D, 'metal', [side * 0.38, 0.05, 0], [Math.PI / 2, 0, 0], 12);
-  for (const z of [-0.5, 0, 0.5]) b.tube([V(side * 0.38, 0.06, z), V(side * 0.22, 0.14, z), V(side * 0.05, 0.08, z)], 0.025, 'cable', { radial: 6 });
+  b.fine(() => { for (const z of [-0.5, 0, 0.5]) b.tube([V(side * 0.38, 0.06, z), V(side * 0.22, 0.14, z), V(side * 0.05, 0.08, z)], 0.025, 'cable', { radial: 6 }); });
   // tip light and the NO STEP warning
   b.sphere(0.035, side < 0 ? 'navR' : 'navG', [side * (0.35 + W + 0.04), 0, -D / 2 + 0.1], 10);
   const grp = b.build(M, { castShadow: false });
@@ -297,7 +306,7 @@ function sensors(b, parts) {
     b.cyl(0.045, 0.045, 0.4, 'steel', [0, 0.2, 0], null, 12);
     b.push([0, 0.42, 0], [-0.6, 0, 0]);
     b.lathe([[0.02, 0], [0.12, 0.012], [0.24, 0.045], [0.35, 0.1], [0.36, 0.105], [0.355, 0.11], [0.235, 0.055], [0.115, 0.022], [0.02, 0.01]], 'radarDish', [0, 0, 0], null, 40);
-    for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2; b.pipe(V(Math.cos(a) * 0.3, 0.09, Math.sin(a) * 0.3), V(0, 0.32, 0), 0.008, 'steel', 6); }
+    b.fine(() => { for (let k = 0; k < 3; k++) { const a = k / 3 * Math.PI * 2; b.pipe(V(Math.cos(a) * 0.3, 0.09, Math.sin(a) * 0.3), V(0, 0.32, 0), 0.008, 'steel', 6); } });
     b.cyl(0.035, 0.03, 0.06, 'metalDark', [0, 0.34, 0], null, 12);
     b.pop(); b.pop(); b.pop();
   }
@@ -318,9 +327,9 @@ function sensors(b, parts) {
     const p = d.clone().multiplyScalar(R0);
     b.cyl(0.05, 0.06, 0.06, 'metalDark', p.toArray(), null, 10);
     b.pipe(p, p.clone().addScaledVector(d, L), 0.009, 'steel', 6);
-    b.sphere(0.022, 'rubber', p.clone().addScaledVector(d, L).toArray(), 8);
+    b.fine(() => b.sphere(0.022, 'rubber', p.clone().addScaledVector(d, L).toArray(), 8));
   }
-  for (const [x, y, z] of [[0.6, 0.6, -0.5], [-0.6, 0.6, -0.5], [0, 0.2, -0.98]]) {
+  if (!LOWQ()) for (const [x, y, z] of [[0.6, 0.6, -0.5], [-0.6, 0.6, -0.5], [0, 0.2, -0.98]]) {
     const d = V(x, y, z).normalize();
     b.pushM(mBasis(frameAt(d), d.clone().multiplyScalar(R0 + 0.005)));
     b.cyl(0.08, 0.09, 0.03, 'metalDark', [0, 0.015, 0], null, 16);
@@ -341,7 +350,7 @@ function dockingNeckAt(b, parts) {
   const yTop = -Math.sqrt(R0 * R0 - (rN + 0.35) ** 2) + 0.05;
   // collar plate on the sphere round the neck, a heavy bolt ring
   b.lathe([[rN, 0], [rN + 0.38, 0.02], [rN + 0.42, 0.06], [rN + 0.4, 0.1], [rN, 0.11]], 'metalDark', [0, yTop - 0.06, 0], [Math.PI, 0, 0], 48);
-  for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; b.cyl(0.02, 0.022, 0.025, 'bolt', [Math.cos(a) * (rN + 0.24), yTop - 0.085, Math.sin(a) * (rN + 0.24)], [Math.PI, 0, 0], 6); }
+  b.fine(() => { for (let k = 0; k < 24; k++) { const a = k / 24 * Math.PI * 2; b.cyl(0.02, 0.022, 0.025, 'bolt', [Math.cos(a) * (rN + 0.24), yTop - 0.085, Math.sin(a) * (rN + 0.24)], [Math.PI, 0, 0], 6); } });
   // the neck (hollow: the access shaft runs through it), ribs, hazard band
   const yB = H8.neckBottom + 0.18;
   b.cyl(rN, rN, yTop - yB, 'armorPlain', [0, (yTop + yB) / 2, 0], null, 48, true);
@@ -360,19 +369,21 @@ function dockingNeckAt(b, parts) {
     b.extrude(sh, 0.03, 'metal', [0, 0, 0], [Math.PI + 0.35, 0, 0], 0.006);
     b.pop();
   }
-  for (let k = 0; k < 12; k++) {
-    const a = k / 12 * Math.PI * 2;
-    b.box(0.07, 0.1, 0.05, 'steel', [Math.cos(a) * (rN + 0.05), yR + 0.06, Math.sin(a) * (rN + 0.05)], [0, -a, 0], 0.01);
-    b.box(0.03, 0.05, 0.06, 'metalDark', [Math.cos(a) * (rN - 0.01), yR - 0.01, Math.sin(a) * (rN - 0.01)], [0, -a, 0], 0.005);
-  }
-  for (const a of [0.3, 0.3 + Math.PI]) b.cyl(0.02, 0.012, 0.12, 'steel', [Math.cos(a) * (rN - 0.12), yR - 0.06, Math.sin(a) * (rN - 0.12)], null, 10);
+  b.fine(() => {
+    for (let k = 0; k < 12; k++) {
+      const a = k / 12 * Math.PI * 2;
+      b.box(0.07, 0.1, 0.05, 'steel', [Math.cos(a) * (rN + 0.05), yR + 0.06, Math.sin(a) * (rN + 0.05)], [0, -a, 0], 0.01);
+      b.box(0.03, 0.05, 0.06, 'metalDark', [Math.cos(a) * (rN - 0.01), yR - 0.01, Math.sin(a) * (rN - 0.01)], [0, -a, 0], 0.005);
+    }
+    for (const a of [0.3, 0.3 + Math.PI]) b.cyl(0.02, 0.012, 0.12, 'steel', [Math.cos(a) * (rN - 0.12), yR - 0.06, Math.sin(a) * (rN - 0.12)], null, 10);
+  });
   // H8's own hatch at the foot of the neck slides sideways into a pocket on the neck's port side
   // (the hatch itself is a separate, moving part); the pocket's armoured fairing, its guide rails
   const yh = H8.neckHatchY;
   b.box(1.08, 0.13, 1.02, 'armorPlain', [-(H8.shaftR + 0.56), yh, 0], null, 0.03);
   b.box(1.0, 0.02, 0.94, 'trim', [-(H8.shaftR + 0.58), yh + 0.07, 0], null, 0.008);
   for (const s of [-1, 1]) b.box(1.0, 0.03, 0.03, 'steel', [-(H8.shaftR + 0.5), yh - 0.075, s * 0.42], null, 0.006);
-  for (let k = 0; k < 6; k++) b.cyl(0.016, 0.018, 0.02, 'bolt', [-(H8.shaftR + 0.18 + k * 0.17), yh + 0.075, 0.44], null, 6);
+  b.fine(() => { for (let k = 0; k < 6; k++) b.cyl(0.016, 0.018, 0.02, 'bolt', [-(H8.shaftR + 0.18 + k * 0.17), yh + 0.075, 0.44], null, 6); });
   // docking floods and a target camera round the ring
   parts.dockFloods = [];
   for (let k = 0; k < 4; k++) {
@@ -398,8 +409,10 @@ function powerCoupling(b, parts) {
   b.box(0.56, 0.03, 0.44, 'warnStripe', [0, 0.215, 0], null, 0.008);
   b.cyl(0.16, 0.18, 0.12, 'steel', [0, 0.27, 0], null, 32);
   b.cyl(0.11, 0.11, 0.02, 'metalDark', [0, 0.335, 0], null, 32);
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; b.cyl(0.018, 0.018, 0.03, 'coil', [Math.cos(a) * 0.065, 0.345, Math.sin(a) * 0.065], null, 8); }
-  for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; b.cyl(0.014, 0.016, 0.02, 'bolt', [Math.cos(a) * 0.26 * 1.1, 0.225, Math.sin(a) * 0.2], null, 6); }
+  b.fine(() => {
+    for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; b.cyl(0.018, 0.018, 0.03, 'coil', [Math.cos(a) * 0.065, 0.345, Math.sin(a) * 0.065], null, 8); }
+    for (let k = 0; k < 8; k++) { const a = k / 8 * Math.PI * 2; b.cyl(0.014, 0.016, 0.02, 'bolt', [Math.cos(a) * 0.26 * 1.1, 0.225, Math.sin(a) * 0.2], null, 6); }
+  });
   b.box(0.05, 0.05, 0.05, 'ledA', [0.25, 0.23, 0.17], null, 0.01);
   b.pop();
   sphereDecal(b, 'hv', d.clone().addScaledVector(f.z, -0.12).normalize(), 0.3, 0.3, 0);
@@ -413,7 +426,7 @@ function railsAndLights(b, parts) {
     const pts = [];
     for (let la = 0.12; la < 1.05; la += 0.08) pts.push(V(Math.cos(la) * Math.sin(lon), Math.sin(la), -Math.cos(la) * Math.cos(lon)).multiplyScalar(R0 + 0.13));
     b.tube(pts, 0.02, 'handrail', { radial: 8, seg: 40 });
-    for (let i = 0; i < pts.length; i += 3) b.pipe(pts[i], pts[i].clone().setLength(R0 - 0.01), 0.013, 'steel', 6);
+    b.fine(() => { for (let i = 0; i < pts.length; i += 3) b.pipe(pts[i], pts[i].clone().setLength(R0 - 0.01), 0.013, 'steel', 6); });
   }
   // nav lights (equator, forward), strobes top and bottom, two forward floods
   parts.nav = { port: V(-R0 * 0.94, 0.2, -R0 * 0.33), star: V(R0 * 0.94, 0.2, -R0 * 0.33) };
@@ -456,8 +469,9 @@ function servicePanels(b) {
     b.pushM(mBasis(f, d.clone().multiplyScalar(H8.R + 0.002)));
     const w = 0.24 + R() * 0.2, h = 0.18 + R() * 0.16;
     b.box(w, 0.016, h, R() < 0.5 ? 'metalDark' : 'armorPlain', [0, 0.008, 0], null, 0.006);
-    for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.012, 0.012, 0.012, 'bolt', [x * (w / 2 - 0.03), 0.02, z * (h / 2 - 0.03)], null, 6);
-    if (R() < 0.4) for (let i = 0; i < 5; i++) b.box(w * 0.7, 0.008, 0.012, 'substrate', [0, 0.018, -h / 3 + i * h / 6], null, 0.002);
+    b.fine(() => { for (const [x, z] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.012, 0.012, 0.012, 'bolt', [x * (w / 2 - 0.03), 0.02, z * (h / 2 - 0.03)], null, 6); });
+    const vent = R() < 0.4;
+    b.fine(() => { if (vent) for (let i = 0; i < 5; i++) b.box(w * 0.7, 0.008, 0.012, 'substrate', [0, 0.018, -h / 3 + i * h / 6], null, 0.002); });
     b.pop();
   }
 }
@@ -471,7 +485,7 @@ export function buildH8Exterior(M) {
   const b = new Builder();
   const parts = { rcs: [] };
   // substrate under the plates (shows in the seams), the plates, their bolts
-  b.sphere(H8.R - 0.065, 'substrate', [0, 0, 0], 64);
+  b.sphere(H8.R - 0.065, 'substrate', [0, 0, 0], LOWQ() ? 32 : 64);
   const bolts = armourTiles(b, H8.R);
   // equatorial belt seam
   b.torus(H8.R + 0.004, 0.03, 'metalDark', [0, 0, 0], [Math.PI / 2, 0, 0], 128);
@@ -490,18 +504,21 @@ export function buildH8Exterior(M) {
   M.warnStripe = M.warnStripe || M.trim;
   const group = b.build(M, { castShadow: false });
   group.name = 'h8Exterior';
-  // bolts (instanced)
-  const boltGeo = new THREE.CylinderGeometry(0.016, 0.019, 0.016, 6);
-  const im = new THREE.InstancedMesh(boltGeo, M.bolt, bolts.length);
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion();
-  bolts.forEach((bt, i) => {
-    q.setFromUnitVectors(Y, bt.n);
-    m.compose(bt.p.clone().addScaledVector(bt.n, 0.008), q, new THREE.Vector3(1, 1, 1));
-    im.setMatrixAt(i, m);
-  });
-  im.instanceMatrix.needsUpdate = true;
-  im.computeBoundingSphere();
-  group.add(im);
+  // bolts (instanced; fine detail: none on low quality)
+  if (!LOWQ()) {
+    const boltGeo = new THREE.CylinderGeometry(0.016, 0.019, 0.016, 6);
+    const im = new THREE.InstancedMesh(boltGeo, M.bolt, bolts.length);
+    const m = new THREE.Matrix4(), q = new THREE.Quaternion();
+    bolts.forEach((bt, i) => {
+      q.setFromUnitVectors(Y, bt.n);
+      m.compose(bt.p.clone().addScaledVector(bt.n, 0.008), q, new THREE.Vector3(1, 1, 1));
+      im.setMatrixAt(i, m);
+    });
+    im.instanceMatrix.needsUpdate = true;
+    im.computeBoundingSphere();
+    im.userData.fine = true;
+    group.add(im);
+  }
   parts.boltCount = bolts.length;
   // radiator wings on their hinges
   parts.radiators = [];

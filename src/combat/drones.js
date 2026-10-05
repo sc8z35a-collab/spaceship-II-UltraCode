@@ -7,7 +7,8 @@
 // a couple of hours later. The stations' point-defence guns fire on any that come too close.
 // Everything flies in ECI with gravity, like the ships.
 import * as THREE from 'three';
-import { Builder } from '../ship/geom.js';
+import { droneMaterials, droneHi, droneMid, droneLo } from './droneModel.js';
+import { QUALITY } from '../core/quality.js';
 import { MU_EARTH } from '../core/astro.js';
 import { assignLayers, LAYER_FAR, LAYER_MID } from '../core/layers.js';
 import { Particles } from '../fx/particles.js';
@@ -28,75 +29,34 @@ const Z = new THREE.Vector3(0, 0, -1);
 function grav(p, out) { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); }
 const rand = (a, b) => a + Math.random() * (b - a);
 
-function droneMaterials() {
-  const S = (o) => new THREE.MeshStandardMaterial(o);
-  return {
-    hull: S({ color: 0x2c3036, metalness: 0.72, roughness: 0.42 }),
-    plate: S({ color: 0x3b4048, metalness: 0.6, roughness: 0.5 }),
-    dark: S({ color: 0x121417, metalness: 0.5, roughness: 0.55 }),
-    steel: S({ color: 0x8d949c, metalness: 0.95, roughness: 0.3 }),
-    stripe: S({ color: 0xc9a227, metalness: 0.2, roughness: 0.6 }),
-    eye: S({ color: 0x000000, emissive: new THREE.Color(1, 0.08, 0.04), emissiveIntensity: 6 }),
-    jet: S({ color: 0x000000, emissive: new THREE.Color(0.55, 0.75, 1.0), emissiveIntensity: 0 }),
-    lamp: S({ color: 0x000000, emissive: new THREE.Color(1, 0.12, 0.05), emissiveIntensity: 0 }),
-  };
-}
-
-/** one drone (local frame: -z forward, +y up), about 2.2 m across the thruster pods */
-function droneModel(M) {
-  const b = new Builder();
-  // faceted body: an octagonal hull tapering to the sensor nose
-  const prof = [[0.05, 0.75], [0.22, 0.62], [0.33, 0.35], [0.36, 0.0], [0.33, -0.4], [0.24, -0.66], [0.12, -0.8]];
-  b.push([0, 0, 0], [Math.PI / 2, 0, 0], [1, 1, 0.7]);
-  b.lathe(prof, 'hull', [0, 0, 0], null, 8);
-  b.pop();
-  // armour plates on the back and the belly, a spine
-  b.box(0.42, 0.06, 0.9, 'plate', [0, 0.25, 0.05], [0.04, 0, 0], 0.02);
-  b.box(0.36, 0.05, 0.7, 'plate', [0, -0.24, 0.1], [-0.05, 0, 0], 0.02);
-  b.box(0.08, 0.1, 0.8, 'dark', [0, 0.3, 0.1], null, 0.02);
-  // sensor head: a black visor ring with the red eye in it
-  b.cyl(0.13, 0.15, 0.08, 'dark', [0, 0.02, -0.8], [Math.PI / 2, 0, 0], 12);
-  b.sphere(0.075, 'eye', [0, 0.02, -0.84], 12, [1, 1, 0.6]);
-  b.box(0.3, 0.03, 0.05, 'eye', [0, 0.1, -0.7], null, 0.01);
-  // the gun under the nose: receiver, barrel, muzzle brake, ammunition drum
-  b.box(0.14, 0.12, 0.34, 'dark', [0, -0.27, -0.42], null, 0.02);
-  b.cyl(0.032, 0.032, 0.62, 'steel', [0, -0.28, -0.86], [Math.PI / 2, 0, 0], 10);
-  b.cyl(0.05, 0.05, 0.1, 'dark', [0, -0.28, -1.17], [Math.PI / 2, 0, 0], 10);
-  b.cyl(0.11, 0.11, 0.16, 'plate', [0, -0.3, -0.12], [0, 0, Math.PI / 2], 14);
-  // the X of arms with four thruster pods, glowing nozzles at the back
-  for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
-    const x = sx * 0.82, y = sy * 0.34;
-    b.pipe([sx * 0.25, sy * 0.08, 0.15], [x, y, 0.28], 0.045, 'hull', 8);
-    b.box(0.06, 0.04, 0.3, 'stripe', [(sx * 0.25 + x) / 2, (sy * 0.08 + y) / 2 + 0.04, 0.2], null, 0.005);
-    b.cyl(0.13, 0.15, 0.5, 'hull', [x, y, 0.28], [Math.PI / 2, 0, 0], 12);
-    b.cyl(0.11, 0.13, 0.06, 'dark', [x, y, 0.56], [Math.PI / 2, 0, 0], 12);
-    b.cyl(0.085, 0.085, 0.02, 'jet', [x, y, 0.59], [Math.PI / 2, 0, 0], 12);
-    b.box(0.02, 0.18, 0.2, 'plate', [x, y + sy * 0.15, 0.3], null, 0.005);
-  }
-  // fins, antennas, the warning lamp on top
-  for (const sx of [-1, 1]) b.box(0.02, 0.22, 0.28, 'plate', [sx * 0.18, 0.36, 0.38], [0, 0, sx * 0.25], 0.005);
-  b.pipe([0.06, 0.28, 0.5], [0.06, 0.62, 0.62], 0.008, 'steel', 6);
-  b.sphere(0.04, 'lamp', [0, 0.36, 0.2], 8);
-  return b.build(M, { castShadow: false });
-}
-
 export class Drones {
   constructor(game, combat) {
     this.g = game;
     this.combat = combat;
     this.M = droneMaterials();
-    this.template = droneModel(this.M);
+    // levels of detail: the close-up model and the plain one only when starting on high quality;
+    // the light one always (low quality, and far away)
+    const low = QUALITY.level === 'low';
+    const T = { lo: droneLo(this.M) };
+    if (!low) { T.hi = droneHi(this.M); T.mid = droneMid(this.M); }
+    this.templates = T;
+    this.template = T.mid || T.lo;     // (the pieces a kill leaves)
+    this.low = low;
     this.list = [];
     for (let i = 0; i < N; i++) {
-      const grp = this.template.clone();
-      // each one its own lights (eye, jets, lamp)
+      // each one its own lights (eye, jets, lamp), shared by its levels of detail
       const own = { eye: this.M.eye.clone(), jet: this.M.jet.clone(), lamp: this.M.lamp.clone() };
-      grp.traverse((o) => { if (o.isMesh) { if (o.material === this.M.eye) o.material = own.eye; else if (o.material === this.M.jet) o.material = own.jet; else if (o.material === this.M.lamp) o.material = own.lamp; o.frustumCulled = false; } });
-      grp.matrixAutoUpdate = false;
-      grp.visible = false;
-      game.engine.scene.add(grp);
+      const lods = {};
+      for (const [k, t] of Object.entries(T)) {
+        const grp = t.clone();
+        grp.traverse((o) => { if (o.isMesh) { if (o.material === this.M.eye) o.material = own.eye; else if (o.material === this.M.jet) o.material = own.jet; else if (o.material === this.M.lamp) o.material = own.lamp; o.frustumCulled = false; } });
+        grp.matrixAutoUpdate = false;
+        grp.visible = false;
+        game.engine.scene.add(grp);
+        lods[k] = grp;
+      }
       this.list.push({
-        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, mesh: grp, own,
+        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, lods, lod: null, own,
         pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(), thrust: new THREE.Vector3(),
         alive: false, hp: 1, state: 'patrol', t: 0, burst: 0, shotT: 0, cool: rand(1, 3), respawnT: 0,
         slot: { r: rand(650, 1150), ph: rand(0, Math.PI * 2), w: rand(0.12, 0.22) * (Math.random() < 0.5 ? -1 : 1), tilt: rand(-0.7, 0.7) },
@@ -160,7 +120,7 @@ export class Drones {
     d.alive = true; d.hp = 1; d.state = 'patrol'; d.t = 0; d.burst = 0; d.cool = rand(1, 3); d.run = null; d.evadeT = 0;
     d.ammo = AMMO; d.reloadT = 0; d.search = rand(800e3, 1400e3); d.wp = null; d.wpT = 0;
     d.q.setFromUnitVectors(Z, d.vel.clone().normalize());
-    d.mesh.visible = false;
+    this.showLod(d, null);
   }
 
   start() {
@@ -327,7 +287,7 @@ export class Drones {
     const g = this.g, C = this.combat;
     d.alive = false;
     d.respawnT = RESPAWN * rand(0.8, 1.3);
-    d.mesh.visible = false;
+    this.showLod(d, null);
     C.explode(d.pos, d.vel, 1.1, true);
     // the pieces: the body breaks in two, a thruster pod spins off
     const parts = this.template.children.filter((m) => m.isMesh);
@@ -387,26 +347,45 @@ export class Drones {
   }
 
   // ------------------------------------------------------------------ per render frame
+  /** one level of detail on show (or none) */
+  showLod(d, k) {
+    if (d.lod === k) return;
+    for (const [kk, grp] of Object.entries(d.lods)) grp.visible = kk === k;
+    d.lod = k;
+  }
+
+  /** the quality switch: low draws the light model only */
+  setQuality(low) { this.low = low; }
+
   updateVisual(dt, origin, camWorld) {
     const g = this.g;
     const T = this.target();
     const t = performance.now() / 1000;
+    // how big things look: a zoomed view (H8's) brings them closer
+    const cam = g.engine.camera, base = g.engine.baseVFov ? g.engine.baseVFov() : cam.fov;
+    const zoomK = Math.tan(cam.fov * Math.PI / 360) / Math.tan(base * Math.PI / 360);
     for (const d of this.list) {
       const i = d.i;
-      if (!d.alive) { d.mesh.visible = false; this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
+      if (!d.alive) { this.showLod(d, null); this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
       const rel = d.pos.clone().sub(origin);
       const dist = rel.distanceTo(camWorld);
+      const eff = dist * zoomK;
       const thrustK = Math.min(1, d.thrust.length() / A_MAX);
       this.ptPos.set([rel.x, rel.y, rel.z], i * 3);
       this.ptK[i] = 0.35 + 0.65 * thrustK;
-      d.mesh.visible = dist < 25000;
-      if (d.mesh.visible) {
-        d.mesh.matrix.compose(rel, d.q, _v2.set(1, 1, 1));
-        d.mesh.matrixWorld.copy(d.mesh.matrix);
-        d.mesh.updateMatrixWorld(true);
-        d.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dist - 2), dist + 2); });
+      const L = d.lods;
+      const k = this.low || !L.hi ? (eff < 9000 && dist < 25000 ? 'lo' : null)
+        : eff < 60 ? 'hi' : eff < 1200 ? 'mid' : eff < 25000 && dist < 25000 ? 'lo' : null;
+      this.showLod(d, k);
+      const mesh = k && L[k];
+      if (mesh) {
+        mesh.matrix.compose(rel, d.q, _v2.set(1, 1, 1));
+        mesh.matrixWorld.copy(mesh.matrix);
+        mesh.updateMatrixWorld(true);
+        mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dist - 2), dist + 2); });
         d.own.jet.emissiveIntensity = 0.8 + 5 * thrustK;
-        d.own.eye.emissiveIntensity = 5 + 3 * Math.sin(t * 9 + i) * (d.state === 'attack' ? 1 : 0.2);
+        // (a deep red: brighter, it bloomed out into a pale disc)
+        d.own.eye.emissiveIntensity = (k === 'hi' ? 2.6 : 4.5) + (k === 'hi' ? 1.4 : 2.5) * Math.sin(t * 9 + i) * (d.state === 'attack' ? 1 : 0.2);
         d.own.lamp.emissiveIntensity = (t * 1.3 + i * 0.37) % 1 < 0.07 ? 12 : 0;
       }
       // a hurt drone trails smoke

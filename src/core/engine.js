@@ -22,6 +22,9 @@ class MultiFrustumPass extends Pass {
     }
     this.onBeforePass = null;
     this.frames = 0;
+    // the sun's shadow map is centred on the ship and hardly changes from one frame to the next:
+    // low quality redraws it every few frames only
+    this.shadowEvery = 1;
   }
 
   syncCam(c, range) {
@@ -45,7 +48,7 @@ class MultiFrustumPass extends Pass {
       this.syncCam(c, RANGES[k]);
       passRange.value.set(OWN[k][0], OWN[k][1]);
       if (this.onBeforePass) this.onBeforePass(k, c);
-      sm.needsUpdate = k === 'near' || this.frames < 2;
+      sm.needsUpdate = (k === 'near' && this.frames % this.shadowEvery === 0) || this.frames < 2;
       renderer.render(this.scene, c);
       if (k !== 'near') renderer.clearDepth();
     }
@@ -389,6 +392,7 @@ export class Engine {
     this.frameTimes.length = 0;
     this.smaa.applyPreset(this.low ? SMAAPreset.LOW : SMAAPreset.HIGH);
     this.bloom.mipmapBlurPass.levels = this.low ? 5 : 8;
+    if (this.mfPass) this.mfPass.shadowEvery = this.low ? 3 : 1;
     this.resize();
   }
 

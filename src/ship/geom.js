@@ -10,6 +10,16 @@ import { QUALITY } from '../core/quality.js';
 const lowQ = () => QUALITY.level === 'low';
 const half = (n, min) => (lowQ() ? Math.max(min, Math.ceil(n * 0.5)) : n);
 
+// small surface detail (bolts, greebles, clamps, cooling tubes...) goes into meshes of its own,
+// marked userData.fine: hidden at once when the quality is turned down, and not built at all
+// when the game starts on low
+const FINE = '~fine';
+
+/** show / hide the fine detail under root (the quality switch) */
+export function setFineVisible(root, on) {
+  root.traverse((o) => { if (o.userData && o.userData.fine) o.visible = on; });
+}
+
 const _m = new THREE.Matrix4();
 const _q = new THREE.Quaternion();
 const _e = new THREE.Euler();
@@ -69,7 +79,19 @@ export class Builder {
 
   pop() { this.stack.pop(); return this; }
 
+  /**
+   * Detail nobody looks at closely: built inside fn into meshes of their own (marked fine);
+   * skipped altogether on low quality
+   */
+  fine(fn) {
+    if (lowQ()) return this;
+    this.fineN = (this.fineN || 0) + 1;
+    try { fn(); } finally { this.fineN--; }
+    return this;
+  }
+
   add(geo, key, pos, rot, scl) {
+    if (this.fineN > 0) key += FINE;
     let g = clean(geo);
     const m = this.top.clone();
     if (pos || rot || scl) m.multiply(mat4(pos, rot, scl));
@@ -188,13 +210,16 @@ export class Builder {
     const group = new THREE.Group();
     for (const [key, list] of this.parts) {
       if (!list.length) continue;
-      const mat = materials[key];
-      if (!mat) { console.warn('missing material', key); continue; }
+      const fine = key.endsWith(FINE);
+      const base = fine ? key.slice(0, -FINE.length) : key;
+      const mat = materials[base];
+      if (!mat) { console.warn('missing material', base); continue; }
       const merged = mergeGeometries(list, false);
       if (!merged) continue;
       merged.computeBoundingSphere();
       const mesh = new THREE.Mesh(merged, mat);
-      mesh.name = key;
+      mesh.name = base;
+      if (fine) { mesh.userData.fine = true; mesh.visible = !lowQ(); }
       mesh.castShadow = castShadow && !mat.transparent;
       mesh.receiveShadow = receiveShadow;
       if (mat.userData && mat.userData.depthMat) mesh.customDepthMaterial = mat.userData.depthMat;

@@ -1,6 +1,7 @@
 // Interior shell of B-29: inner pressure-hull wall, ribs, deck, partitions with door openings,
 // corridor, ceiling trays and light fixtures. Rooms' furniture is added by rooms.js.
 import * as THREE from 'three';
+import { QUALITY } from '../core/quality.js';
 import { Builder, roundedRectPath, panelGeometry, rng } from './geom.js';
 import { HULL, hullAt, sectionPoint, halfWidthAt, heightRangeAt, DECK_Y, LOWER_Y, Z_COCKPIT_BULK, Z_ENG_BULK, Z_REACTOR_BULK, CORRIDOR_X } from './hullShape.js';
 import { loftGeometry, cutOpeningTris } from './exterior.js';
@@ -95,7 +96,9 @@ export function buildInteriorShell(M) {
   const R = rng(29);
   // ---------- inner hull wall (whole cabin + underfloor) ----------
   const z0 = HULL.zTip + 0.02, z1 = Z_REACTOR_BULK + 0.02;
-  const inner = loftGeometry(z0, z1, 230, 140, INSET, true);
+  // (low quality: a coarser inner skin; it is smooth and plain, nothing rides on its vertices)
+  const lowQ = QUALITY.level === 'low';
+  const inner = loftGeometry(z0, z1, lowQ ? 120 : 230, lowQ ? 80 : 140, INSET, true);
   b.add(inner, 'wall');
   // collision shell: lower resolution, open at the airlock hatch so EVA is possible
   // (and at the dorsal port, so Kaito can float up into a docked H8)

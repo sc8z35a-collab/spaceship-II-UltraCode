@@ -1,6 +1,7 @@
 // Exterior of B-29: lofted skin, window frames + glass, reactor module, radiators, engine,
 // RCS quads, antennas, handrails, lights, lettering.
 import * as THREE from 'three';
+import { QUALITY } from '../core/quality.js';
 import { Builder, roundedRectShape, rng, fixNormals } from './geom.js';
 import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, CANOPY, inCanopy, onMullion, canopyZ } from './hullShape.js';
 import { createGlassMaterial } from './glass.js';
@@ -116,7 +117,9 @@ function buildFrame(b, o, matTunnel, matLip) {
 export function buildExterior(M) {
   const b = new Builder();
   // ---------- main skin ----------
-  const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 260, 160, 0, false);
+  // (low quality: a coarser skin, still smooth at every distance it is seen from)
+  const lowQ = QUALITY.level === 'low';
+  const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, lowQ ? 150 : 260, lowQ ? 100 : 160, 0, false);
   b.add(skin, 'hull');
   // aft closing ring/neck
   b.cyl(1.72, 1.72, 0.5, 'hullDark', [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0], 48);
@@ -157,11 +160,13 @@ export function buildExterior(M) {
     const W = 6.4, D = 3.4;
     b.box(W, 0.05, D, 'radiator', [side * (0.4 + W / 2), 0, 0], null, 0.01);
     // heat pipes
-    for (let k = 0; k < 9; k++) {
-      const z = -D / 2 + 0.2 + (k / 8) * (D - 0.4);
-      b.cyl(0.03, 0.03, W, 'copper', [side * (0.4 + W / 2), 0.04, z], [0, 0, Math.PI / 2], 6);
-      b.cyl(0.03, 0.03, W, 'copper', [side * (0.4 + W / 2), -0.04, z], [0, 0, Math.PI / 2], 6);
-    }
+    b.fine(() => {
+      for (let k = 0; k < 9; k++) {
+        const z = -D / 2 + 0.2 + (k / 8) * (D - 0.4);
+        b.cyl(0.03, 0.03, W, 'copper', [side * (0.4 + W / 2), 0.04, z], [0, 0, Math.PI / 2], 6);
+        b.cyl(0.03, 0.03, W, 'copper', [side * (0.4 + W / 2), -0.04, z], [0, 0, Math.PI / 2], 6);
+      }
+    });
     // stiffener ribs
     for (let k = 0; k <= 4; k++) {
       b.box(0.06, 0.09, D, 'metal', [side * (0.4 + (k / 4) * W), 0, 0], null, 0.01);
@@ -207,9 +212,11 @@ export function buildExterior(M) {
       b.push([0, 0, 0], [e.x, e.y, e.z]);
       b.box(0.34, 0.22, 0.34, 'hullDark', [0, 0.08, 0], null, 0.04);
       // 4 small nozzles pointing in 4 directions
-      for (const [dx, dz, rx, rz] of [[0.2, 0, 0, -Math.PI / 2], [-0.2, 0, 0, Math.PI / 2], [0, 0.2, Math.PI / 2, 0], [0, -0.2, -Math.PI / 2, 0]]) {
-        b.cyl(0.03, 0.055, 0.1, 'nozzle', [dx, 0.1, dz], [rx, 0, rz], 10, true);
-      }
+      b.fine(() => {
+        for (const [dx, dz, rx, rz] of [[0.2, 0, 0, -Math.PI / 2], [-0.2, 0, 0, Math.PI / 2], [0, 0.2, Math.PI / 2, 0], [0, -0.2, -Math.PI / 2, 0]]) {
+          b.cyl(0.03, 0.055, 0.1, 'nozzle', [dx, 0.1, dz], [rx, 0, rz], 10, true);
+        }
+      });
       b.cyl(0.03, 0.06, 0.1, 'nozzle', [0, 0.24, 0], [0, 0, 0], 10, true);
       b.pop(); b.pop();
     }
@@ -222,12 +229,12 @@ export function buildExterior(M) {
   // phased array panel (5G)
   const pa = sectionPoint(-2.8, Math.PI / 2, 0);
   b.box(1.3, 0.1, 0.9, 'hullDark', [pa.x, pa.y + 0.06, pa.z], null, 0.03);
-  for (let i = 0; i < 6; i++) for (let j = 0; j < 4; j++) b.box(0.16, 0.025, 0.16, 'metal', [pa.x - 0.5 + i * 0.2, pa.y + 0.12, pa.z - 0.3 + j * 0.2], null, 0.005);
+  b.fine(() => { for (let i = 0; i < 6; i++) for (let j = 0; j < 4; j++) b.box(0.16, 0.025, 0.16, 'metal', [pa.x - 0.5 + i * 0.2, pa.y + 0.12, pa.z - 0.3 + j * 0.2], null, 0.005); });
   // whip antennas
   for (const [z, t] of [[-6.5, Math.PI / 2 + 0.5], [4.0, Math.PI / 2 - 0.6], [-9.5, Math.PI / 2 + 0.9]]) {
     const p = sectionPoint(z, t, 0), n = sectionNormal(z, t, 0);
     b.pipe(p, p.clone().addScaledVector(n, 1.1), 0.012, 'metal', 6);
-    b.sphere(0.03, 'plasticK', p.clone().addScaledVector(n, 1.1).toArray(), 8);
+    b.fine(() => b.sphere(0.03, 'plasticK', p.clone().addScaledVector(n, 1.1).toArray(), 8));
   }
   // dorsal docking port (H8's berth) with its collar, and H8's power receptacle beside it
   buildPortExterior(b);
@@ -239,7 +246,7 @@ export function buildExterior(M) {
   for (const [x, z] of [[-1.6, -6], [1.6, -6], [-1.6, 4], [1.6, 4]]) {
     const yb = sectionPoint(z, x > 0 ? -Math.PI / 2 + 0.6 : -Math.PI / 2 - 0.6, 0);
     b.box(0.5, 0.12, 0.9, 'metalDark', [yb.x * 0.9, yb.y - 0.03, z], null, 0.04);
-    b.cyl(0.07, 0.07, 0.35, 'steel', [yb.x * 0.9, yb.y + 0.1, z - 0.3], null, 8);
+    b.fine(() => b.cyl(0.07, 0.07, 0.35, 'steel', [yb.x * 0.9, yb.y + 0.1, z - 0.3], null, 8));
   }
   // EVA handrails along the hull (top + lower flanks), kept clear of windows and the hatch
   const rails = [];
@@ -344,7 +351,7 @@ export function buildExterior(M) {
 
   // ---------- surface detail: greebles, conduit runs, engine bell cooling tubes ----------
   hullGreebles(b);
-  {
+  b.fine(() => {
     const zE2 = 15.4;
     const prof = [];
     for (let i = 0; i <= 18; i++) { const f = i / 18; prof.push([0.28 + 0.92 * Math.pow(f, 0.62), f * 2.1]); }
@@ -356,7 +363,7 @@ export function buildExterior(M) {
     }
     for (const f of [0.25, 0.55, 0.85]) { const r = 0.28 + 0.92 * Math.pow(f, 0.62); b.torus(r + 0.03, 0.025, 'metalDark', [0, f * 2.1, 0], [Math.PI / 2, 0, 0], 48); }
     b.pop();
-  }
+  });
 
   // ---------- collision: outer skin (hatch cut out) + main external modules ----------
   b.colMesh(cutOpeningTris(cutOpeningTris(loftGeometry(HULL.zTip + 0.002, HULL.zTail1, 110, 72, 0, false), hatch, 0.06), OPENINGS.find((o) => o.kind === 'port'), 0.03));
@@ -405,7 +412,7 @@ function hullGreebles(b) {
   };
   const keys = ['hullDark', 'hullDark', 'metal', 'mli', 'hull', 'metalDark'];
   let placed = 0, tries = 0;
-  while (placed < 230 && tries < 4000) {
+  b.fine(() => { while (placed < 230 && tries < 4000) {
     tries++;
     const z = -9.8 + R() * 19.4, t = R() * Math.PI * 2 - Math.PI / 2;
     if (!clear(z, t, 0.22)) continue;
@@ -448,15 +455,18 @@ function hullGreebles(b) {
     }
     b.pop();
     placed++;
-  }
-  // conduit runs along the flanks (broken around openings), clamped every 0.55 m
+  } });
+  // conduit runs along the flanks (broken around openings), clamped every 0.55 m (on low only the
+  // thick one, without clamps)
   for (const t of [0.95, Math.PI - 0.95, -0.38, Math.PI + 0.38, Math.PI / 2 + 0.32, Math.PI / 2 - 0.32]) {
     for (const [r, key, off] of [[0.035, 'hullDark', 0.06], [0.022, 'mli', 0.11]]) {
       let run = [];
       const flush = () => {
         if (run.length > 3) {
-          b.tube(run.map((q) => q.p), r, key, { radial: 8, seg: run.length * 3 });
-          for (let i = 0; i < run.length; i += 2) b.box(0.07, 0.03, 0.04, 'metalDark', run[i].c.toArray(), null, 0.006);
+          const pts = run.map((q) => q.p), cs = run.filter((_, i) => i % 2 === 0).map((q) => q.c);
+          const tube = () => b.tube(pts, r, key, { radial: 8, seg: pts.length * 3 });
+          if (r < 0.03) b.fine(tube); else tube();
+          b.fine(() => { for (const c of cs) b.box(0.07, 0.03, 0.04, 'metalDark', c.toArray(), null, 0.006); });
         }
         run = [];
       };

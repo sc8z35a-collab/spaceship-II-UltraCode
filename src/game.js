@@ -39,6 +39,9 @@ import { Combat } from './combat/combat.js';
 import { Drones } from './combat/drones.js';
 import { Weapons } from './combat/weapons.js';
 import { springVec, springQuat } from './core/spring.js';
+import { setFineVisible } from './ship/geom.js';
+import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullShape.js';
+import { glassUniforms } from './ship/glass.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -316,6 +319,42 @@ export class Game {
     this.hud.update(dt);
   }
 
+  /**
+   * B-29's cabin (rooms, machines, loose things, doors: most of the ship's triangles) is drawn only
+   * when it can be seen: from inside the hull, or from in front of a window, the canopy or an open
+   * hatch / port not too far off. Otherwise the outer panes show a dim inside of their own.
+   */
+  updateCabinVisibility() {
+    const S = this.shipVis;
+    if (!this._cabin) this._cabin = [S.interior, this.machines && this.machines.root, this.loose && this.loose.group, ...Object.values(this.doors || {}).map((d) => d.group)].filter(Boolean);
+    const c = this._cabC || (this._cabC = new THREE.Vector3());
+    const inv = this._cabM || (this._cabM = new THREE.Matrix4());
+    c.copy(this.camWorld).applyMatrix4(inv.copy(S.root.matrixWorld).invert());
+    let vis = false;
+    if (c.z > HULL.zTip - 0.1 && c.z < HULL.zTail1 + 0.2) {
+      const [bot, top] = heightRangeAt(c.z, c.x, 0);
+      vis = c.y > bot - 0.05 && c.y < top + 0.05 && Math.abs(c.x) < halfWidthAt(c.z, c.y, 0) + 0.05;
+    }
+    if (!vis) {
+      const d = this._cabD || (this._cabD = new THREE.Vector3());
+      if (d.copy(c).sub(CANOPY.P0).dot(CANOPY.N) > -0.1 && d.lengthSq() < 26 * 26) vis = true;
+      for (const o of OPENINGS) {
+        if (vis) break;
+        if (o.kind === 'hatch' && !(this.hatch && this.hatch.open > 0.01)) continue;
+        if (o.kind === 'port' && !(this.h8 && this.h8.hatch && this.h8.hatch.open > 0.01)) continue;
+        d.copy(c).sub(o.center);
+        if (d.dot(o.normal) > -0.05 && d.lengthSq() < 14 * 14) vis = true;
+      }
+    }
+    // (inside the station's lobby or ring while docked the cabin is just through the hatch)
+    if (!vis && this.docking && this.docking.state === 'docked' && this.hatch && this.hatch.open > 0.01) vis = c.length() < 40;
+    if (vis !== this._cabVis) {
+      this._cabVis = vis;
+      for (const gr of this._cabin) gr.visible = vis;
+      glassUniforms.uHollow.value = vis ? 0 : 1;
+    }
+  }
+
   /** lean in to a monitor so it fills the view (taps then go to its buttons) */
   enterFocus(m) {
     if (this.mode === 'camera' || this.player.state === 'dead') return;
@@ -423,6 +462,9 @@ export class Game {
     if (this.shafts) this.shafts.enabled = !low;
     if (this.stations) this.stations.visRange = low ? 1.6e5 : 4.0e5;
     if (this.monitors && this.monitors.setQuality) this.monitors.setQuality(low);
+    if (this.drones) this.drones.setQuality(low);
+    // the small surface detail (bolts, greebles, clamps...) goes at once; built only on a high start
+    setFineVisible(this.engine.scene, !low);
     this.engine.scene.traverse((o) => {
       if (!o.material) return;
       for (const m of Array.isArray(o.material) ? o.material : [o.material]) if (m.userData && m.userData.shipPatched) m.needsUpdate = true;
@@ -492,6 +534,7 @@ export class Game {
     }
     this.camWorld.copy(eyeLocal).applyQuaternion(frameQ).add(frameP);
     this.camQuat.copy(frameQ).multiply(viewQ).multiply(shakeQ);
+    this.updateCabinVisibility();
     const cam = this.engine.camera;
     cam.matrix.compose(this.camWorld, this.camQuat, new THREE.Vector3(1, 1, 1));
     // world

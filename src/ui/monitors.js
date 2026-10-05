@@ -560,7 +560,7 @@ export class Monitors {
     }
     const al = g.systems.alarm;
     // graphics quality (low: about half the processing)
-    K.button(X, H - 124, 170, 26, '画質  ' + QUALITY_JP[QUALITY.level] + (QUALITY.level === 'low' ? '（軽い）' : '（きれい）'), () => g.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'), { style: QUALITY.level === 'low' ? 'warn' : 'normal', size: 11 });
+    K.button(X, H - 124, 170, 26, '画質  ' + QUALITY_JP[QUALITY.level] + (QUALITY.level === 'low' ? '（軽い）' : QUALITY.builtLow ? '（細部は次回起動から）' : '（きれい）'), () => g.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'), { style: QUALITY.level === 'low' ? 'warn' : 'normal', size: 11 });
     K.button(X, H - 92, 170, 26, al.active && !al.silenced ? '警報 消音' : '警報 消音済', () => g.systems.silenceAlarm(), { style: al.active && !al.silenced ? 'danger' : 'disabled', size: 12 });
     K.button(X, H - 62, 82, 24, ls.lockdown ? '隔壁 解除' : '隔壁 閉鎖', () => g.systems.toggleLockdown(), { style: ls.lockdown ? 'warn' : 'normal', size: 10 });
     K.button(X + 88, H - 62, 82, 24, '照明 ' + { normal: '通常', dim: '暗め', night: '夜間', off: '消灯' }[g.systems.lightMode], () => g.systems.cycleLights(), { size: 10 });

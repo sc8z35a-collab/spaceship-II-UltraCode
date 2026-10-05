@@ -131,7 +131,11 @@ export class ShipVisual {
       this.interiorCubeCam.position.copy(camWorld);
       this.interiorCubeCam.updateMatrixWorld();
       const vis = this.glassOuter.visible;
+      // (the cabin may be switched off while the camera is outside: it is what this captures)
+      const cabin = this.interior.visible;
+      this.interior.visible = true;
       this.interiorCubeCam.update(r, scene);
+      this.interior.visible = cabin;
       this._clean(this.interiorCubeRT, this.interiorClean, 128);
       const env = this.pmrem.fromCubemap(this.interiorClean.texture);
       if (this.envInterior) this.envInterior.dispose();
