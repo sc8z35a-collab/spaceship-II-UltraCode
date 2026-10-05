@@ -282,7 +282,7 @@ export class H8Display {
     this.sphere = add(sphereGeometry(), this.mat, 20);
     this.floor = add(floorGeometry(), this.matFloor, 20);
     // the hatch cover: a disc of the same glass; it slides away sideways under the floor
-    const hg = new THREE.CircleGeometry(FLOOR.hatchR + 0.03, 48);
+    const hg = new THREE.CircleGeometry(FLOOR.hatchR + 0.002, 48);
     hg.rotateX(-Math.PI / 2);
     this.hatchMesh = add(hg, this.matFloor, 19);
     this.hatchOpen = 0;

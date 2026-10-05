@@ -86,8 +86,9 @@ export class Game {
     this.engine.scene.add(this.frameRoot);
     this.origin = new THREE.Vector3();
     P(0.35);
-    this.phys.addColliders(this.shipVis.colliders);
-    this.phys.addColliders(this.shipVis.extColliders);
+    // B-29's own walls and hull (switched off while Kaito is away with H8: the physics frame then
+    // rides with H8, and B-29 is not really there)
+    this.b29Static = [...this.phys.addColliders(this.shipVis.colliders), ...this.phys.addColliders(this.shipVis.extColliders)];
     this.flight = new Flight();
     this.player = new Player(this.phys);
     this.input = new Input(this.engine.renderer.domElement);

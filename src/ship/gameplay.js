@@ -388,17 +388,21 @@ export class Gameplay {
     const [bot, top] = heightRangeAt(p.z, p.x, 0);
     const hw = halfWidthAt(p.z, p.y, 0);
     const h8 = g.h8;
-    const insideHull = (p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || g.docking.contains(p) ||
+    // (away with H8, B-29 is not where its hull would be in this frame)
+    const awayInH8 = !!(h8 && h8.solo);
+    const insideHull = (!awayInH8 && p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || (!awayInH8 && g.docking.contains(p)) ||
       !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p)));
     const wasOut = pl.outside;
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {
       if (pl.state === 'float' || pl.state === 'walk') pl.state = g.gLocal.length() > 2 ? 'evaWalk' : 'eva';
       if (pl.vel.length() > 0.5) pl.vel.setLength(0.5);   // a gentle push off the hatch rim
-      if (!g.flight.landed) g.asphalt.say('eva_out', {}, { minGap: 120 });
+      if (awayInH8 || pl.suitH8) { if (h8) h8.say('hachi_eva_out', {}, { minGap: 120 }); }
+      else if (!g.flight.landed) g.asphalt.say('eva_out', {}, { minGap: 120 });
     } else if (!pl.outside && wasOut) {
       if (pl.state === 'eva' || pl.state === 'evaWalk') pl.state = 'float';
-      g.asphalt.say('eva_back', {}, { minGap: 60 });
+      if (awayInH8) { if (h8) h8.say('hachi_eva_back', {}, { minGap: 60 }); }
+      else g.asphalt.say('eva_back', {}, { minGap: 60 });
     }
     if (pl.suit) {
       pl.suitO2 = Math.max(0, pl.suitO2 - dt / (8 * 3600));
@@ -408,7 +412,7 @@ export class Gameplay {
       g.audio.noiseLoop('suitfan', { type: 'pink', freq: 600, q: 0.6, gain: 0.03, direct: true });
     } else { g.audio.breath(false); g.audio.stopLoop('suitfan'); }
     if (pl.outside && !g.flight.landed) {
-      const d = p.length();
+      const d = awayInH8 ? p.distanceTo(h8.seat.dock) : p.length();
       if (d > this.evaWarnD) { g.asphalt.say('eva_far', { m: Math.round(d) }, { minGap: 30 }); this.evaWarnD = d + 60; }
       if (d < 40) this.evaWarnD = 60;
       if (pl.thrusting && g.fx && Math.random() < dt * 25) {
@@ -439,6 +443,7 @@ export class Gameplay {
 
   startRepair(it) {
     const g = this.g;
+    if (it.h8) { this.startH8Repair(it); return; }
     if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); return; }
     if (it.state !== 'active') { g.asphalt.say('repair_patch', {}, { minGap: 15 }); return; }
     if (!it.repairable) { g.asphalt.say('repair_cannot', {}, { minGap: 20 }); return; }
@@ -447,11 +452,41 @@ export class Gameplay {
     this.repairing = { it, t: 0, dur: it.kind === 'equip' ? 7 : 4.5, need, pos: it.pos.clone() };
   }
 
+  /**
+   * First aid on H8 from outside (a hole in its armour, a circuit, a camera): with B-29's repair kit
+   * in hand, or with the tools built into H8's suit (HACHI guides it)
+   */
+  startH8Repair(it) {
+    const g = this.g, pl = g.player, h8 = g.h8;
+    if (!pl.suit) { h8.say('hachi_eva_nosuit', {}, { minGap: 8 }); return; }
+    const kit = this.held === 'kit' ? this.kit : pl.suitH8 ? (pl.suitKit || (pl.suitKit = { patches: 4, parts: 6 })) : null;
+    if (!kit) { g.asphalt.say('need_kit', {}, { minGap: 15 }); return; }
+    if ((kit[it.need] || 0) <= 0) { h8.say('hachi_kit_empty', { what: it.need === 'patches' ? 'パッチ' : '部品' }, { minGap: 10 }); return; }
+    this.repairing = { it, t: 0, dur: it.dur || 6, need: it.need, pos: it.pos.clone(), kit };
+    h8.say(it.kind === 'hole' ? 'hachi_fix_hole' : it.kind === 'camera' ? 'hachi_fix_cam' : 'hachi_fix_circuit', { name: it.name }, { minGap: 4 });
+  }
+
   updateRepair(dt) {
     const r = this.repairing, g = this.g;
     const ring = document.getElementById('hold-ring');
     if (!r) { ring.classList.remove('on'); return; }
-    if (g.player.eyeLocal.distanceTo(r.pos) > 2.5 || this.held !== 'kit') { this.repairing = null; ring.classList.remove('on'); return; }
+    if (g.player.eyeLocal.distanceTo(r.pos) > 2.5 || (!r.it.h8 && this.held !== 'kit') || (r.it.h8 && !g.player.suit)) { this.repairing = null; ring.classList.remove('on'); return; }
+    if (r.it.h8) {
+      r.t += dt;
+      ring.classList.add('on');
+      ring.style.left = '50%'; ring.style.top = '50%';
+      ring.style.setProperty('--p', Math.round((r.t / r.dur) * 100) + '%');
+      if (Math.random() < dt * 8) { g.audio.click(r.pos, 0.14); if (g.h8 && g.h8.fx) g.h8.fx.burst(r.it.kind === 'hole' ? 'spark' : 'spark', r.it.local.clone(), r.it.dir.clone(), 3, { speed: 1.2 }); }
+      if (r.t >= r.dur) {
+        r.kit[r.need]--;
+        r.it.apply();
+        g.audio.beep(1200, 0.1, 0.1, { pos: r.pos }); g.audio.beep(1600, 0.12, 0.1, { pos: r.pos, when: 0.12 });
+        g.h8.say(r.it.kind === 'hole' ? 'hachi_fixed_hole' : 'hachi_fixed', { name: r.it.name }, { force: true });
+        this.repairing = null;
+        ring.classList.remove('on');
+      }
+      return;
+    }
     r.t += dt;
     ring.classList.add('on');
     ring.style.left = '50%'; ring.style.top = '50%';
@@ -721,7 +756,9 @@ export class Gameplay {
     let lvl = 0;
     const openHole = dmg.breaches.some((b) => !b.patched) || dmg.cracks.some((c) => c && c.broken);
     if (integ < 0.8 || openHole || dmg.issues.some((i) => i.state === 'active' && i.sev > 0.5)) lvl = 1;
-    if (integ < 0.5 || (dmg.reactorTemp || 0) > 820 || (this.herePressure ?? 101) < 70) lvl = 2;
+    // (the air where Kaito is counts only inside: out on a walk in his suit there is none anyway)
+    const lowAir = !g.player.outside && (this.herePressure ?? 101) < 70;
+    if (integ < 0.5 || (dmg.reactorTemp || 0) > 820 || lowAir) lvl = 2;
     if (integ < 0.22) lvl = 3;
     // the station we are docked to (or right next to) in trouble
     const st = g.docking && g.docking.station;
@@ -729,8 +766,9 @@ export class Gameplay {
     const prev = this.dangerLvl || 0;
     if (lvl > prev) {
       this.raise(0.45 + 0.2 * lvl);
-      const key = ['', 'danger1', 'danger2', 'danger3'][lvl];
-      setTimeout(() => g.asphalt.say(key, { pct: Math.round(integ * 100) }, { force: lvl >= 2, minGap: 60 }), 1200);
+      // (danger from the air, not the frame: say so)
+      const key = lvl === 2 && integ >= 0.5 && lowAir ? 'danger2_air' : ['', 'danger1', 'danger2', 'danger3'][lvl];
+      setTimeout(() => g.asphalt.say(key, { pct: Math.round(integ * 100), kpa: Math.round(this.herePressure ?? 0) }, { force: lvl >= 2, minGap: 60 }), 1200);
     }
     this.dangerLvl = lvl;
     g.systems.danger = lvl;
@@ -838,6 +876,11 @@ export class Gameplay {
         if (g.h8._leak) { g.lifeSupport.removeLeak(g.h8._leak); g.h8._leak = null; }
         g.h8.hull.repairAll();
         g.h8.flight.tank.kg = g.h8.flight.tank.cap;
+        g.h8.air = { o2: 650, n2: 1500 };
+        for (const k of Object.keys(g.h8.circuits)) g.h8.circuits[k] = 1;
+        for (const pg of g.h8.patchGroups || []) { pg.removeFromParent(); pg.traverse((o) => { if (o.isMesh) { const i = g.h8.extMeshes.indexOf(o); if (i >= 0) g.h8.extMeshes.splice(i, 1); } }); }
+        g.h8.patchGroups = [];
+        g.player.suitKit = { patches: 4, parts: 6 };
       }
       if (g.weapons) g.weapons.rearm(!!(g.h8 && g.h8.docked));
       const ls = g.lifeSupport;

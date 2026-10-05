@@ -319,6 +319,9 @@ export class Weapons {
     if (this.blocked(which, W.pos, dir, dist)) return;
     if (kind === 'cannon' && this.ammo.cannon <= 0) { this.dry(which); return; }
     if (kind === 'pd' && this.ammo.pd <= 0) { this.dry(which); return; }
+    // H8's fire control cut: the turrets shoot wide (and not at all once it is gone)
+    const fc = which === 'h8' && g.h8 ? g.h8.circuits.fire : 1;
+    if (fc < 0.12) { m.aim = null; return; }
     m.cool = kind === 'pd' ? 1 / 8 : 1 / 12;
     m.alt = 1 - m.alt;
     this.ammo[kind]--;
@@ -326,7 +329,7 @@ export class Weapons {
     m.flash = 0.05;
     const side = new THREE.Vector3().crossVectors(dir, W.n).normalize().multiplyScalar(m.kind === 'twin' ? (m.alt ? 0.075 : -0.075) : 0);
     const muzzle = W.pos.clone().addScaledVector(dir, 1.1).add(side);
-    this.combat.fire({ kind, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, spread: 0.0035, byPlayer: true });
+    this.combat.fire({ kind, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, spread: 0.0035 * (1 + 5 * (1 - fc)), byPlayer: true });
     this.gunSound(which, kind);
   }
 

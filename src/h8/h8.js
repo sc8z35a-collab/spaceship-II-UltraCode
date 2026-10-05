@@ -45,6 +45,16 @@ const Y = new THREE.Vector3(0, 1, 0);
 
 /** H8 and B-29 hear each other within this distance (m) */
 export const LINK_RANGE = 1.5e6;
+
+/** junction boxes under the armour (H8-local directions): the circuits hits can cut, and a suit
+ * can splice from outside */
+export const JUNCTIONS = {
+  drive: { name: '推進制御回路', dir: V(0.32, -0.2, 0.93).normalize() },
+  power: { name: '電力バス', dir: V(0.48, -0.6, 0.64).normalize() },
+  sensor: { name: 'センサー回路', dir: V(-0.3, 0.78, -0.55).normalize() },
+  comms: { name: '通信回路', dir: V(0.66, 0.6, -0.45).normalize() },
+  fire: { name: '射撃管制回路', dir: V(-0.55, -0.08, -0.83).normalize() },
+};
 // the outer materials that dent (the plates themselves can be torn through); lights, glass and
 // the drive's glow do not
 const PLATES = new Set(['armor', 'armorPlain', 'trim', 'decal']);
@@ -130,6 +140,10 @@ export class H8Vessel {
     this.flickT = 0;
     this.cands = [];
     this.rockSeq = 0;
+    this.circuits = { drive: 1, power: 1, sensor: 1, comms: 1, fire: 1 };
+    this.airlock = { mode: 'idle' };   // the shaft as an airlock (away from B-29)
+    this.issueProxies = new Map();
+    this.field = [];
     this.floorHatch = 0;         // the cockpit floor hatch 0 shut .. 1 open
     this.locker = { open: 0, target: 0, out: 0 };   // the suit locker's panel, and the suit on its rail
   }
@@ -187,13 +201,32 @@ export class H8Vessel {
       const m = new THREE.Matrix4().makeRotationY(-a).setPosition(Math.cos(a) * (PORT.r + 0.04), (2.36 + PORT.yCollar) / 2, PORT.z + Math.sin(a) * (PORT.r + 0.04));
       well.push({ type: 'box', hx: 0.03, hy: (PORT.yCollar - 2.36) / 2, hz: 0.1, m });
     }
-    g.phys.addColliders(well);
+    const wellCols = g.phys.addColliders(well);
+    if (g.b29Static) g.b29Static.push(...wellCols);
     this.buildUmbilical();
     // ---- H8 interior in the physics frame (enabled while it can be reached)
     const off = new THREE.Matrix4().makeTranslation(DOCK.x, DOCK.y, DOCK.z);
     const cols = this.int.colliders.map((c) => (c.type === 'mesh' ? { type: 'mesh', geo: c.geo.clone().applyMatrix4(off) } : Object.assign({}, c, { m: off.clone().multiply(c.m) })));
     this.cols = g.phys.addColliders(cols);
     this.neckCol = g.phys.addKinematicBox(H8.shaftR * 0.92, 0.04, H8.shaftR * 0.92, NECK_HATCH.clone().add(DOCK));
+    // ---- the outer hull, for anyone outside: a hollow shell (inside it the cabin's own colliders
+    // hold) with the docking neck's tube through its bottom
+    {
+      // a UV sphere with its pole on the neck's axis, cut off just outside the neck tube (so the
+      // shaft stays clear and nothing slips in round the tube)
+      const RS = H8.R + 0.05, rt = H8.neckR + 0.03;
+      const holeDir = V(0, -Math.sqrt(RS * RS - H8.shaftZ * H8.shaftZ), H8.shaftZ).normalize();
+      const shell = new THREE.SphereGeometry(RS, 64, 32, 0, Math.PI * 2, 0, Math.PI - Math.asin((rt + 0.02) / RS));
+      shell.applyQuaternion(new THREE.Quaternion().setFromUnitVectors(V(0, -1, 0), holeDir));
+      shell.translate(DOCK.x, DOCK.y, DOCK.z);
+      const nTop = -H8.R * 0.97, nBot = H8.neckBottom;
+      const neck = new THREE.CylinderGeometry(H8.neckR + 0.03, H8.neckR + 0.03, nTop - nBot, 24, 1, true);
+      neck.translate(DOCK.x, DOCK.y + (nTop + nBot) / 2, DOCK.z + H8.shaftZ);
+      this.extCols = g.phys.addColliders([{ type: 'mesh', geo: shell }, { type: 'mesh', geo: neck }]);
+      for (const c of this.extCols) c.setEnabled(false);
+      this._extOn = false;
+    }
+    this.buildJunctions();
     this.colsOn = true;
     this.setColliders(false);
     // ---- lamps (physics frame), the seat, taps
@@ -232,6 +265,29 @@ export class H8Vessel {
     // ---- a new game: H8 waits right above B-29, on standby
     if (!this.park) this.initAbove();
     this.placeParked(g.time);
+  }
+
+  /** the access panels over the junction boxes (a status lamp each: red and blinking when cut) */
+  buildJunctions() {
+    const M = this.M;
+    this.jLamps = {};
+    for (const [k, J] of Object.entries(JUNCTIONS)) {
+      const f = new THREE.Matrix4().lookAt(V(0, 0, 0), J.dir.clone().negate(), Math.abs(J.dir.y) > 0.9 ? V(1, 0, 0) : V(0, 1, 0));
+      const q = new THREE.Quaternion().setFromRotationMatrix(f);
+      const at = J.dir.clone().multiplyScalar(H8.R + 0.035);
+      const g = new THREE.Group();
+      g.position.copy(at); g.quaternion.copy(q);
+      const add = (geo, mat, p) => { const m = new THREE.Mesh(geo, mat); if (p) m.position.set(...p); g.add(m); return m; };
+      add(new THREE.BoxGeometry(0.44, 0.3, 0.045), M.metalDark);
+      add(new THREE.BoxGeometry(0.4, 0.26, 0.012), M.trim, [0, 0, 0.026]);
+      for (const [x, y] of [[-0.17, -0.11], [0.17, -0.11], [-0.17, 0.11], [0.17, 0.11]]) add(new THREE.CylinderGeometry(0.012, 0.012, 0.01, 8), M.steel, [x, y, 0.034]).rotation.x = Math.PI / 2;
+      const lampMat = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.2, 1.0, 0.4), emissiveIntensity: 2 });
+      add(new THREE.SphereGeometry(0.018, 10, 8), lampMat, [0.15, 0.1, 0.04]);
+      g.updateMatrixWorld(true);
+      g.traverse((o) => { if (o.isMesh) { o.layers.set(LAYER_NEAR); this.extMeshes.push(o); } });
+      this.ext.group.add(g);
+      this.jLamps[k] = lampMat;
+    }
   }
 
   /** park H8 just above B-29's back (60 m up), on the circular orbit through that point */
@@ -306,6 +362,16 @@ export class H8Vessel {
     return false;
   }
 
+  /** in the cockpit's air (above the floor hatch), as opposed to the shaft's */
+  inCockpitAir(p) {
+    const C = H8.cockpitC;
+    const x = p.x - DOCK.x, y = p.y - DOCK.y, z = p.z - DOCK.z;
+    return y > H8.floorY - 0.02 && (x - C.x) ** 2 + (y - C.y) ** 2 + (z - C.z) ** 2 < (H8.cockpitR + 0.1) ** 2;
+  }
+
+  /** the opening between the shaft and the cockpit (the floor hatch) */
+  floorFlowArea() { return this.floorHatch > 0.01 ? Math.PI * H8.shaftR * H8.shaftR * Math.min(1, this.floorHatch * 1.4) : 0; }
+
   /** the vestibule between B-29's hatch and H8's (the port tunnel) */
   inVestibule(p) {
     return Math.hypot(p.x, p.z - PORT.z) < PORT.r + 0.05 && p.y > PORT.hatchY + 0.03 && p.y < DOCK.y + H8.neckHatchY;
@@ -379,7 +445,7 @@ export class H8Vessel {
     if (this.mode === 'docked') return { ok: true, d: 0, why: null };
     const dm = g.damage ? g.damage.health : null;
     if (dm && dm.servers < 0.2) return { ok: false, d, why: 'b29' };
-    if (d > LINK_RANGE) return { ok: false, d, why: 'range' };
+    if (d > LINK_RANGE * this.circ('comms', 0.25)) return { ok: false, d, why: 'range' };
     return { ok: true, d, why: null };
   }
 
@@ -627,6 +693,7 @@ export class H8Vessel {
   /** the port button (B-29's corridor panel or the hatch wheel in H8's shaft) */
   portTapped() {
     const g = this.g;
+    if (this.mode !== 'docked' && this.crew) { this.lockTapped(); return; }
     if (this.mode !== 'docked') {
       g.audio.denied(PORT.panel);
       this.asphalt('h8_port_none', {}, { minGap: 6, force: false });
@@ -684,7 +751,7 @@ export class H8Vessel {
     return this.mode === 'docked' && this.power.feedOn && this.umb > 0.98 && (g.systems.power ?? 1) > 0.45;
   }
 
-  driveHealth() { return Math.max(0, Math.min(1, 0.2 + 0.8 * this.armour.inner)) * (this.awake > 0.5 ? 1 : 0); }
+  driveHealth() { return Math.max(0, Math.min(1, 0.2 + 0.8 * this.armour.inner)) * (this.awake > 0.5 ? 1 : 0) * this.circ('drive', 0.35); }
 
   syncDocked() {
     const fb = this.g.flight, f = this.flight;
@@ -780,6 +847,20 @@ export class H8Vessel {
       if (!dk || dk.state === 'free') { this.b29Pending = null; if (this.mode !== 'docked') this.b29Go(); }
       else if (g.time - this.b29Pending > 120000) this.b29Pending = null;
     }
+    // ---- outside: the hull to bump into; B-29's walls are not there while Kaito is away with H8
+    const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
+    if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
+    const away = this.solo;
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    // Kaito outside while away from B-29: HACHI keeps H8 still beside him
+    if (this.solo && g.player.outside && this.pilot.goal) { this.goal('hold'); this.say('hachi_eva_hold', {}, { minGap: 30 }); }
+    // ---- H8's own airlock (the shaft), the circuits' sparks, first aid from outside
+    this.updateAirlock(sdt);
+    this.issueT = (this.issueT || 0) - sdt;
+    if (this.issueT <= 0) { this.issueT = 0.4; this.updateFieldIssues(); }
+    // a cabin with its hole open to B-29's: Asphalt hears it
+    const lsx = g.lifeSupport;
+    if (this.mode === 'docked' && this._leak && lsx.leaky.has('corridor') && lsx.leaky.has('h8')) this.asphalt('h8_leak_port', {}, { minGap: 90, force: false });
     // ---- fresh craters cool down
     this.hull.update(sdt);
     // ---- a hole through both armours: the cabin air streams out of it
@@ -845,7 +926,7 @@ export class H8Vessel {
     // supply: the reactor follows the load, the feed fills in, the SMES buffers the rest
     P.feed = this.feedOK();
     const feedAvail = P.feed ? H8.feedMW : 0;
-    const reactorMax = H8.reactorMW * (this.awake > 0.1 ? 1 : 0.15);
+    const reactorMax = H8.reactorMW * (this.awake > 0.1 ? 1 : 0.15) * this.circ('power', 0.4);
     const want = Math.min(reactorMax, Math.max(0, P.loadMW - feedAvail * 0.5));
     P.reactor += (want / H8.reactorMW - P.reactor) * Math.min(1, dt * 0.4);
     P.reactor = Math.max(0.04, P.reactor);
@@ -859,7 +940,7 @@ export class H8Vessel {
 
   updateHatches(dt) {
     const docked = this.mode === 'docked';
-    if (!docked) { this.hatch.setTarget(0); this.neckTarget = 0; }
+    if (!docked) { this.hatch.setTarget(0); if (this.airlock.mode !== 'open') this.neckTarget = 0; }
     const pv = this.neckOpen;
     const sp = dt / 1.8;
     if (this.neckTarget > this.neckOpen) this.neckOpen = Math.min(this.neckTarget, this.neckOpen + sp);
@@ -881,9 +962,17 @@ export class H8Vessel {
     const reach = (this.mode === 'docked' || this.crew) && pl.state !== 'dead' && pl.state !== 'seated';
     const below = reach && dxz < FLOOR.hatchR + 0.2 && pl.pos.y < hy && pl.pos.y > hy - 1.6;
     const near = reach && dxz < FLOOR.hatchR + 0.55 && pl.pos.y > hy - 3.8 && pl.pos.y < hy + 1.9;
-    if (below) this.floorHatchT = 1;
-    if (!near) this.floorHatchT = 0;
-    const want = this.floorHatchT || 0;
+    // (1: opened for Kaito, shuts again behind him; 2: opened by hand, stays open until tapped)
+    if (below && this.floorHatchT !== 2) this.floorHatchT = 1;
+    if (!near && this.floorHatchT === 1) this.floorHatchT = 0;
+    // it will not open against a pressure difference, nor while the shaft works as an airlock
+    const LSZ = this.g.lifeSupport;
+    if (this.floorHatchT && this.floorHatch < 0.02 && (this.airlock.mode !== 'idle' || Math.abs(LSZ.pressure('h8') - LSZ.pressure('h8shaft')) > 8)) {
+      this.floorHatchT = 0;
+      this.g.audio.denied && this.g.audio.denied(V(FLOOR.hatch.x, FLOOR.y, FLOOR.hatch.z).add(DOCK));
+      this.say('hachi_hatch_pressure', {}, { minGap: 8 });
+    }
+    const want = this.floorHatchT ? 1 : 0;
     const fh0 = this.floorHatch;
     this.floorHatch = Math.max(0, Math.min(1, this.floorHatch + (want > this.floorHatch ? 1 : want < this.floorHatch ? -1 : 0) * dt / 0.9));
     if (this.floorHatch !== fh0) {
@@ -899,9 +988,162 @@ export class H8Vessel {
     LK.out = Math.max(0, Math.min(1, LK.out + (tOut > LK.out ? 1 : tOut < LK.out ? -1 : 0) * dt / 1.2));
   }
 
+  /** away from B-29 the shaft is an airlock: the neck hatch wheel cycles it (suit required) */
+  lockTapped() {
+    const g = this.g, pl = g.player, A = this.airlock;
+    const at = NECK_HATCH.clone().add(DOCK);
+    if (A.mode === 'idle') {
+      if (!pl.suit) { g.audio.denied(at); this.say('hachi_eva_nosuit', {}, { minGap: 6 }); return; }
+      A.mode = 'dep';
+      this.say('hachi_lock_dep', {}, { force: true });
+    } else if (A.mode === 'open' || A.mode === 'dep') {
+      A.mode = 'rep';
+      this.say('hachi_lock_rep', {}, { force: true });
+    }
+    g.audio.beep(880, 0.08, 0.06, { pos: at });
+  }
+
+  /**
+   * The shaft as an airlock (away from B-29): the floor hatch shuts, the pumps take the shaft's air
+   * into H8's tanks, the neck hatch opens onto space; back in, the neck shuts and the tanks fill the
+   * shaft again. With the neck open the shaft vents through it.
+   */
+  updateAirlock(dt) {
+    const A = this.airlock, g = this.g, ls = g.lifeSupport, z = ls.z.h8shaft;
+    if (!z) return;
+    const docked = this.mode === 'docked';
+    const area = !docked && this.neckOpen > 0.02 ? Math.PI * H8.shaftR * H8.shaftR * this.neckOpen : 0;
+    if (area > 0 && !this.neckLeak) this.neckLeak = ls.addLeak('h8shaft', area, 'h8neck');
+    if (this.neckLeak) { if (area <= 0) { ls.removeLeak(this.neckLeak); this.neckLeak = null; } else this.neckLeak.area = area; }
+    if (docked) { A.mode = 'idle'; return; }
+    const p = z.n2 + z.o2 + z.co2;
+    const T = this.air || (this.air = { o2: 650, n2: 1500 });
+    const at = NECK_HATCH.clone().add(DOCK).add(V(0, 0.6, 0));
+    if (A.mode === 'dep') {
+      this.floorHatchT = 0;
+      if (this.floorHatch > 0.01) return;
+      if (p > 0.6) {
+        const k = Math.min(1, dt * 0.22);
+        const dn = z.n2 * k, dO = z.o2 * k;
+        z.n2 -= dn; z.o2 -= dO; z.co2 *= 1 - k;
+        T.n2 = Math.min(3000, T.n2 + dn * z.vol * 0.9); T.o2 = Math.min(1300, T.o2 + dO * z.vol * 0.9);
+        if (g.audio.ready) g.audio.humLoop('h8pump', { pos: at, freq: 72, gain: 0.07 });
+      } else {
+        z.n2 = z.o2 = z.co2 = 0;
+        A.mode = 'open';
+        this.neckTarget = 1;
+        g.audio.stopLoop && g.audio.stopLoop('h8pump');
+        g.audio.beep(660, 0.25, 0.08, { pos: at });
+        this.say('hachi_lock_open', {}, { force: true });
+      }
+    } else if (A.mode === 'rep') {
+      this.neckTarget = 0;
+      if (this.neckOpen > 0.01) return;
+      if (p < 100.3 && T.n2 > 1) {
+        const k = Math.min(100.6 - p, dt * 7);
+        z.n2 += k * 0.79; z.o2 += k * 0.21;
+        T.n2 = Math.max(0, T.n2 - k * 0.79 * z.vol); T.o2 = Math.max(0, T.o2 - k * 0.21 * z.vol);
+        if (g.audio.ready) g.audio.noiseLoop('h8rep', { pos: at, type: 'pink', freq: 1500, q: 0.6, gain: 0.08 });
+      } else {
+        A.mode = 'idle';
+        g.audio.stopLoop && g.audio.stopLoop('h8rep');
+        g.audio.beep(880, 0.2, 0.08, { pos: at });
+        this.say('hachi_lock_closed', {}, { force: true });
+      }
+    }
+  }
+
+  // ==================================================================== first aid from outside
+  /** what a suit can patch from outside: holes in the armour, cut circuits, blinded cameras */
+  fieldIssues() {
+    const out = [];
+    for (const [k, J] of Object.entries(JUNCTIONS)) {
+      if (this.circuits[k] < 0.9) out.push({ id: 'c:' + k, kind: 'circuit', name: J.name, dir: J.dir, need: 'parts', dur: 6, apply: () => { this.circuits[k] = Math.max(this.circuits[k], 0.8); } });
+    }
+    CAMERAS.forEach((c, i) => {
+      if (this.hull.cams[i] < 0.6) out.push({ id: 'cam' + i, kind: 'camera', name: c.name.split(' ')[0] + ' カメラ回路', dir: c.dir, need: 'parts', dur: 5, apply: () => { this.hull.cams[i] = Math.max(this.hull.cams[i], 0.72); this.hull.sync(); } });
+    });
+    for (const d of this.hull.dents) {
+      if (d.hole && !d.patched) out.push({ id: 'h:' + d.seed.toFixed(5), kind: 'hole', name: '装甲の穴', dir: d.dir, need: 'patches', dur: 7, apply: () => this.patchHole(d) });
+    }
+    if (this._leak && !this.hull.dents.some((d) => d.hole && !d.patched)) {
+      const worst = this.hull.dents.reduce((a, b) => (!a || b.E > a.E ? b : a), null);
+      out.push({ id: 'leak', kind: 'hole', name: '内部装甲の亀裂', dir: worst ? worst.dir : V(0.3, -0.2, 0.93).normalize(), need: 'patches', dur: 8, apply: () => this.sealLeak() });
+    }
+    for (const it of out) { it.h8 = true; it.local = it.dir.clone().multiplyScalar(H8.R + 0.14); it.pos = it.local.clone().add(DOCK); }
+    return out;
+  }
+
+  /** the spots Kaito can tap from outside (with a suit on) */
+  updateFieldIssues() {
+    const g = this.g, pl = g.player;
+    const want = pl.outside && pl.suit && (this.mode === 'docked' || this.crew) ? this.fieldIssues() : [];
+    const ids = new Set(want.map((x) => x.id));
+    for (const [id, P] of this.issueProxies) {
+      if (ids.has(id)) continue;
+      g.interact.remove(P.h);
+      P.mesh.removeFromParent();
+      this.issueProxies.delete(id);
+    }
+    for (const it of want) {
+      const P = this.issueProxies.get(it.id);
+      if (P) { P.it = it; continue; }
+      const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.42, 8, 6), g.interact.proxyMat);
+      mesh.position.copy(it.local);
+      mesh.layers.set(LAYER_PROXY);
+      this.root.add(mesh);
+      mesh.updateMatrixWorld(true);
+      const rec = { it, mesh };
+      rec.h = g.interact.addMesh(mesh, () => g.gameplay.startRepair(rec.it), { maxDist: 2.6 });
+      this.issueProxies.set(it.id, rec);
+    }
+    this.field = want;
+    // HACHI talks Kaito to the nearest one (in its own suit)
+    if (want.length && pl.suitH8) {
+      const eyeL = pl.eyeLocal.clone().sub(DOCK);
+      const n = want.reduce((a, b) => (a.local.distanceTo(eyeL) < b.local.distanceTo(eyeL) ? a : b));
+      const d = n.local.distanceTo(eyeL);
+      if (d > 3 && (!this._guided || this._guided !== n.id)) { this._guided = n.id; this.say('hachi_guide', { name: n.name, m: d.toFixed(0) }, { minGap: 25, force: false }); }
+    }
+  }
+
+  /** a patch plate riveted over a torn hole */
+  patchHole(d) {
+    d.patched = true;
+    const at = d.dir.clone().multiplyScalar(H8.R + 0.03);
+    const r = Math.max(0.22, d.a * H8.R * (d.hole * 1.15 + 0.12));
+    const q = new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), d.dir);
+    const g = new THREE.Group();
+    g.position.copy(at); g.quaternion.copy(q);
+    if (!this.patchMat) {
+      this.patchMat = new THREE.MeshStandardMaterial({ color: 0x9aa1a8, metalness: 0.7, roughness: 0.38 });
+      this.patchTape = new THREE.MeshStandardMaterial({ color: 0xd8a01c, metalness: 0.1, roughness: 0.7 });
+    }
+    const plate = new THREE.Mesh(new THREE.CylinderGeometry(r, r * 1.02, 0.03, 20).rotateX(Math.PI / 2), this.patchMat);
+    const tape = new THREE.Mesh(new THREE.TorusGeometry(r * 0.97, 0.022, 6, 28), this.patchTape);
+    g.add(plate, tape);
+    for (let k = 0; k < 10; k++) { const a = k / 10 * Math.PI * 2; const b = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 0.022, 6).rotateX(Math.PI / 2), this.patchMat); b.position.set(Math.cos(a) * r * 0.85, Math.sin(a) * r * 0.85, 0.02); g.add(b); }
+    g.updateMatrixWorld(true);
+    g.traverse((o) => { if (o.isMesh) { o.layers.set(LAYER_NEAR); this.extMeshes.push(o); } });
+    this.ext.group.add(g);
+    (this.patchGroups || (this.patchGroups = [])).push(g);
+    // the hole that let the air out is closed (the cracked inner armour behind holds again)
+    if (this._leak && !this.hull.dents.some((x) => x.hole && !x.patched)) this.sealLeak();
+  }
+
+  sealLeak() {
+    if (this._leak) { this.g.lifeSupport.removeLeak(this._leak); this._leak = null; }
+    this.armour.inner = Math.max(this.armour.inner, 0.18);
+    this.hull.vent(false);
+  }
+
+  /** a circuit's health effect (0..1 -> the share of the system that still works) */
+  circ(k, floor = 0.3) { return floor + (1 - floor) * (this.circuits ? this.circuits[k] : 1); }
+  circuitHealth() { const c = this.circuits; return (c.drive + c.power + c.sensor + c.comms + c.fire) / 5; }
+
   /** the floor hatch, tapped from the cockpit */
   floorHatchTapped() {
-    this.floorHatchT = this.floorHatchT ? 0 : 1;
+    this.floorHatchT = this.floorHatch > 0.5 || this.floorHatchT ? 0 : 2;
     this.g.audio.beep && this.g.audio.beep(this.floorHatchT ? 990 : 660, 0.06, 0.05, { pos: V(FLOOR.hatch.x, FLOOR.y, FLOOR.hatch.z).add(DOCK) });
   }
 
@@ -919,7 +1161,7 @@ export class H8Vessel {
       const kPa = z ? z.n2 + z.o2 + z.co2 : 0;
       if (kPa < 60) { g.audio.denied(pl.eyeLocal); this.say('hachi_suit_keep', {}, { minGap: 6 }); return; }
       LK.target = 1; this.lockerSound();
-      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1800); });
+      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; pl.suitKit = { patches: 4, parts: 6 }; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1800); });
       return;
     }
     if (pl.suit) { g.audio.denied(pl.eyeLocal); return; }      // already in B-29's suit
@@ -934,17 +1176,38 @@ export class H8Vessel {
     });
   }
 
-  /** H8's own life support (cabin air), and the air shared through the open port */
+  /**
+   * H8's own life support: CO2 scrubbers, an electrolyser for O2 (on the reactor's power) and a pair
+   * of small N2 / O2 tanks that top the cabin up. The tanks do not feed a cabin that is open to a
+   * leak (its own hole, or B-29's through the open port); docked with the umbilical on, they fill
+   * from B-29's reserves.
+   */
   updateAir(dt) {
     const ls = this.g.lifeSupport;
-    const z = ls.z.h8;
-    if (!z) return;
+    const T = this.air || (this.air = { o2: 650, n2: 1500 });     // kPa*m^3
     const ok = this.awake > 0.2 || this.mode === 'docked';
-    if (ok && !z.leaks.some((l) => l.area > 2e-4)) {
-      // regulate: O2 to 21.3, N2 to 79.2, scrub CO2 (its own tanks)
-      z.o2 += (21.3 - z.o2) * Math.min(1, dt * 0.03);
-      z.n2 += (79.2 - z.n2) * Math.min(1, dt * 0.02);
+    if (!ok) return;
+    if (this.mode === 'docked' && this.umb > 0.98) {
+      const R = ls.reserve;
+      const dn = Math.min(1500 - T.n2, 2 * dt, R.n2 * 0.5), dO = Math.min(650 - T.o2, 1 * dt, R.o2 * 0.5);
+      if (dn > 0) { T.n2 += dn; R.n2 -= dn; }
+      if (dO > 0) { T.o2 += dO; R.o2 -= dO; }
+    }
+    for (const id of ['h8', 'h8shaft']) {
+      const z = ls.z[id];
+      if (!z) continue;
       z.co2 += (0.03 - z.co2) * Math.min(1, dt * 0.01);
+      if (this.power.reactor > 0.05 && z.o2 < 21.3) z.o2 += Math.min(21.3 - z.o2, 0.004 * dt);
+      if (ls.leaky.has(id) && !(ls.boost > 0)) continue;
+      // (the shaft is left alone while it is pumped down for a walk outside)
+      if (id === 'h8shaft' && this.airlock && this.airlock.mode !== 'idle') continue;
+      const p = z.n2 + z.o2 + z.co2;
+      if (p < 99) {
+        const dn = Math.min(0.06 * dt, Math.max(0, 79.2 - z.n2) * 0.02 * dt, T.n2 / z.vol);
+        if (dn > 0) { z.n2 += dn; T.n2 -= dn * z.vol; }
+        const dO = Math.min(0.025 * dt, Math.max(0, 21.3 - z.o2) * 0.02 * dt, T.o2 / z.vol);
+        if (dO > 0) { z.o2 += dO; T.o2 -= dO * z.vol; }
+      }
     }
   }
 
@@ -1044,6 +1307,17 @@ export class H8Vessel {
     this.hits++;
     // the hull itself: a dent (or a hole) where it was hit, sparks, a blinded camera
     const res = this.hull.hit(dirLocal, E, { outer: outerBefore, shot: !!opts.shot });
+    // the circuits under the plates near the blow
+    const dl = dirLocal.clone().normalize();
+    for (const [k, J] of Object.entries(JUNCTIONS)) {
+      const ang = J.dir.angleTo(dl);
+      if (ang > 0.65) continue;
+      const before = this.circuits[k];
+      const dmg = Math.min(1, (E / 1.4e7 + (outerBefore < 0.35 ? 0.12 : 0)) * (1 - ang / 0.65));
+      if (dmg < 0.01) continue;
+      this.circuits[k] = Math.max(0, before - dmg);
+      if (before >= 0.5 && this.circuits[k] < 0.5) setTimeout(() => this.say('hachi_circuit', { name: J.name }, { force: true }), 1400);
+    }
     if (res.blinded >= 0) setTimeout(() => this.say('hachi_cam_lost', { cam: CAMERAS[res.blinded].name }), 1800);
     // inside: the lights stutter, the display drops out for a moment, a console spits sparks
     const inside = this.crew || this.mode === 'docked';
@@ -1284,6 +1558,18 @@ export class H8Vessel {
     this.flickT = Math.max(0, this.flickT - dt);
     const stut = this.flickT > 0 ? (Math.random() < 0.35 ? 0.15 : 0.6 + Math.random() * 0.4) : 1;
     for (const l of this.lamps) l.intensity = l.locker ? 0.9 * this.locker.open * aw : l.base * (0.25 + 0.75 * aw) * stut;
+    // the junction panels: green when sound, red and blinking when cut; a cut one spits sparks
+    if (this.jLamps) {
+      for (const [k, mat] of Object.entries(this.jLamps)) {
+        const c = this.circuits[k];
+        if (c > 0.9) { mat.emissive.setRGB(0.2, 1.0, 0.4); mat.emissiveIntensity = 1.6 * aw; continue; }
+        mat.emissive.setRGB(1.0, c > 0.5 ? 0.55 : 0.1, 0.05);
+        mat.emissiveIntensity = (Math.sin(t * (c > 0.5 ? 4 : 9)) > 0 ? 4 : 0.3) * Math.max(0.3, aw);
+        if (c < 0.5 && showExt && Math.random() < dt * (1 - c) * 6) this.fx.burst('spark', JUNCTIONS[k].dir.clone().multiplyScalar(H8.R + 0.06), JUNCTIONS[k].dir, 6, { speed: 2.2, spread: 0.8 });
+      }
+    }
+    // the suit's link with HACHI: the spots to patch, marked in Kaito's visor
+    this.drawSuitHud(origin);
     // ---- laser beams: from the terminal to the rock, a flash where it hits
     if (this.pd.beams.length) {
       this.root.updateMatrixWorld(true);
@@ -1357,6 +1643,55 @@ export class H8Vessel {
         if (first) m.needsUpdate = true;
       }
     }
+  }
+
+  /** in H8's suit outside: HACHI marks the spots to patch on the visor */
+  drawSuitHud(origin) {
+    const g = this.g, pl = g.player;
+    const cv = this._suitCv || (this._suitCv = document.getElementById('hud-suit'));
+    if (!cv) return;
+    const ctx = this._suitCtx || (this._suitCtx = cv.getContext('2d'));
+    // (in B-29's suit Asphalt relays HACHI's list over the link)
+    const show = pl.suit && pl.outside && this.field.length && g.mode === 'walk';
+    if (!show) { if (this._suitOn) { ctx.clearRect(0, 0, cv.width, cv.height); cv.style.display = 'none'; this._suitOn = false; } return; }
+    if (!this._suitOn) { cv.style.display = 'block'; this._suitOn = true; }
+    const W = cv.clientWidth, H = cv.clientHeight, pr = Math.min(2, window.devicePixelRatio || 1);
+    if (cv.width !== Math.round(W * pr) || cv.height !== Math.round(H * pr)) { cv.width = Math.round(W * pr); cv.height = Math.round(H * pr); }
+    ctx.setTransform(pr, 0, 0, pr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+    const cam = g.engine.camera;
+    const view = new THREE.Matrix4().compose(g.camWorld, g.camQuat, _v.set(1, 1, 1)).invert();
+    const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, view);
+    const rootW = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
+    const eyeL = pl.eyeLocal.clone().sub(DOCK);
+    ctx.font = '600 12px "Hiragino Sans","Noto Sans JP",sans-serif';
+    ctx.textAlign = 'center';
+    for (const it of this.field) {
+      const w = it.local.clone().applyMatrix4(rootW);
+      const v = new THREE.Vector4(w.x, w.y, w.z, 1).applyMatrix4(vp);
+      const d = it.local.distanceTo(eyeL);
+      let x, y, off = false;
+      if (v.w > 0) { x = (v.x / v.w * 0.5 + 0.5) * W; y = (1 - (v.y / v.w * 0.5 + 0.5)) * H; off = x < 20 || x > W - 20 || y < 20 || y > H - 20; }
+      else off = true;
+      const col = it.kind === 'hole' ? 'rgba(255,120,80,0.95)' : 'rgba(255,200,90,0.95)';
+      ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.6;
+      if (off) {
+        // at the edge, pointing the way
+        const a = Math.atan2(v.w > 0 ? (y - H / 2) : -(y || 0) + H / 2, v.w > 0 ? (x - W / 2) : -(x || 0) + W / 2);
+        x = W / 2 + Math.cos(a) * (W / 2 - 30); y = H / 2 + Math.sin(a) * (H / 2 - 30);
+        ctx.beginPath(); ctx.moveTo(x + Math.cos(a) * 10, y + Math.sin(a) * 10); ctx.lineTo(x + Math.cos(a + 2.5) * 9, y + Math.sin(a + 2.5) * 9); ctx.lineTo(x + Math.cos(a - 2.5) * 9, y + Math.sin(a - 2.5) * 9); ctx.closePath(); ctx.fill();
+        continue;
+      }
+      ctx.beginPath(); ctx.arc(x, y, 14, 0, Math.PI * 2); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x - 20, y); ctx.lineTo(x - 16, y); ctx.moveTo(x + 16, y); ctx.lineTo(x + 20, y); ctx.moveTo(x, y - 20); ctx.lineTo(x, y - 16); ctx.moveTo(x, y + 16); ctx.lineTo(x, y + 20); ctx.stroke();
+      ctx.fillText(`${it.name}  ${d.toFixed(1)} m`, x, y - 24);
+    }
+    ctx.textAlign = 'left';
+    ctx.fillStyle = 'rgba(255,208,140,0.9)';
+    const GP = g.gameplay;
+    if (GP.held === 'kit') ctx.fillText(`H8 応急処置 ${this.field.length} 件（HACHI→アスファルト中継）  修理キット: パッチ ${GP.kit.patches}  部品 ${GP.kit.parts}`, 16, H - 16);
+    else if (pl.suitH8) { const kit = pl.suitKit || { patches: 4, parts: 6 }; ctx.fillText(`HACHI リンク  応急処置 ${this.field.length} 件  パッチ ${kit.patches}  部品 ${kit.parts}`, 16, H - 16); }
+    else ctx.fillText(`H8 応急処置 ${this.field.length} 件（HACHI→アスファルト中継）  修理キットを持ってきてください`, 16, H - 16);
   }
 
   inCockpit(pPF) {
@@ -1442,7 +1777,7 @@ export class H8Vessel {
       if (a.dead || a.hit) continue;
       const rel = a.pos.clone().sub(f.pos);
       const d = rel.length();
-      if (d > 8000) continue;
+      if (d > 8000 * this.circ('sensor', 0.25)) continue;
       if (!a.h8id) a.h8id = ++this.rockSeq;
       const rv = a.vel.clone().sub(f.vel);
       const tca = -rel.dot(rv) / Math.max(1e-6, rv.lengthSq());
@@ -1458,7 +1793,7 @@ export class H8Vessel {
       for (const d of g.drones.list) {
         if (!d.alive) continue;
         const dist = d.pos.distanceTo(f.pos);
-        if (dist > 90e3) continue;
+        if (dist > 90e3 * this.circ('sensor', 0.15)) continue;
         const hostile = d.state === 'hunt' || d.state === 'attack' || d.state === 'evade';
         out.push({
           id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d,
@@ -1661,7 +1996,8 @@ export class H8Vessel {
       armour: { outer: this.armour.outer, inner: this.armour.inner },
       hatch: this.hatch ? this.hatch.target : 0,
       met: !!this.metAsphalt, hits: this.hits,
-      hull: this.hull.serialize(), leak: !!this._leak, v2: 1,
+      hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null,
+      circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)),
     };
   }
 
@@ -1677,6 +2013,9 @@ export class H8Vessel {
     this.metAsphalt = !!d.met;
     this.hits = d.hits || 0;
     this.hull.restore(d.hull);
+    if (d.air) this.air = { o2: d.air.o2, n2: d.air.n2 };
+    if (d.circuits) Object.assign(this.circuits, d.circuits);
+    if (d.patched) for (const dd of this.hull.dents) if (dd.hole && d.patched.includes(+dd.seed.toFixed(5))) this.patchHole(dd);
     if (d.leak && !this._leak && this.g.lifeSupport.z.h8) this._leak = this.g.lifeSupport.addLeak('h8', 3e-4, 'h8armour');
     this.awake = this.wakeTarget;
     if (d.flight) this.flight.restore(d.flight);
