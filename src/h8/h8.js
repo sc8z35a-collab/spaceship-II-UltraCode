@@ -143,6 +143,7 @@ export class H8Vessel {
     this.hits = 0;
     this.link = { ok: false, d: 0, known: false, t: 0 };
     this.xfer = null;            // propellant transfer while docked: 'toH8' (automatic) | 'toB29'
+    this.driveMode = 'normal';   // normal | ultra (x4 the old ULTRA) | max (x2 that)
     this.fuelSaid = 0;
     this.flickT = 0;
     this.cands = [];
@@ -634,6 +635,7 @@ export class H8Vessel {
   unlatch(after) {
     const g = this.g;
     this.pending = null;
+    this.resetDrive();
     this.mode = 'free';
     this.umbTarget = 0;
     // H8 starts from where it is on B-29's back, with B-29's motion
@@ -657,6 +659,7 @@ export class H8Vessel {
   /** the pilot's final approach touched down: latches close */
   latch() {
     const g = this.g;
+    this.resetDrive();
     this.mode = 'docked';
     this.pilot.setGoal(null);
     this.goalKind = null;
@@ -693,7 +696,61 @@ export class H8Vessel {
 
   /** HACHI's speed and braking (H8's drive, on its own reactor or with the storage boost) */
   maxSpeed() { return this.flight.vUltra * Math.max(0.2, this.driveHealth()); }
-  brakeAccel() { return 14 * Math.max(0.3, this.driveHealth()) * (this.flight.mul > 1 ? 1.4 : 1); }
+  brakeAccel() { return 14 * Math.max(0.3, this.driveHealth()) * (this.flight.mul > 1 ? 1.4 : 1) * this.flight.aK; }
+
+  // ==================================================================== drive modes
+  /** the flight H8's drive is pushing: its own, or the pair's while docked */
+  driveFlight() { return this.mode === 'docked' ? this.g.flight : this.flight; }
+
+  /** the speed it can reach now (m/s) */
+  maxSpeedNow() { const f = this.driveFlight(); return (f.ultra ? f.vUltra : f.vNormal) * Math.max(0.2, f.driveHealth); }
+
+  driveModeName() { return { normal: '通常', ultra: 'ULTRA', max: 'MAX' }[this.driveMode] || '通常'; }
+
+  /** what can be chosen now: [{ id, label, on, ok, why }] */
+  driveModes() {
+    const f = this.driveFlight(), P = this.power;
+    const health = this.driveHealth(), smes = P.smes / H8.smesMJ;
+    const fuel = f === this.flight ? f.fuel : Math.max(f.fuel, this.flight.fuel);
+    const why = (need) => (this.awake < 0.5 ? 'H8 休止中' : health < 0.45 ? '推進系損傷' : fuel < 0.02 ? '推進剤なし' : smes < need ? '蓄電不足' : null);
+    const wU = why(0.1), wM = why(0.2);
+    return [
+      { id: 'normal', label: '通常', on: this.driveMode === 'normal', ok: true },
+      { id: 'ultra', label: 'ULTRA ×4', on: this.driveMode === 'ultra', ok: !wU, why: wU },
+      { id: 'max', label: 'MAX ×8', on: this.driveMode === 'max', ok: !wM, why: wM },
+    ];
+  }
+
+  /**
+   * normal / ultra / max: ULTRA reaches four times the old ULTRA speed, MAX twice that again with
+   * the drive pushed to its limit (more thrust, a faster exhaust) — both draw far more power, the
+   * storage runs down in minutes and the drive falls back by itself when it is nearly empty
+   */
+  setDriveMode(id, quiet = false, force = false) {
+    const f = this.driveFlight();
+    if (id !== 'normal' && !force) {
+      const m = this.driveModes().find((x) => x.id === id);
+      if (m && !m.ok) { if (!quiet) this.say('hachi_drive_denied', { why: m.why }, { minGap: 3 }); return false; }
+    }
+    const K = { normal: [1, 1, 1], ultra: [4, 2, 2.4], max: [8, 3.5, 4.8] }[id] || [1, 1, 1];
+    [f.ultraK, f.aK, f.veK] = K;
+    f.maxMode = id === 'max';
+    this.driveMode = id;
+    if (id === 'normal') { if (f.ultra) f.setUltra(false); }
+    else if (!f.ultra) f.setUltra(true);
+    if (!quiet) {
+      const v = f.vUltra * Math.max(0.2, f.driveHealth);
+      if (id === 'normal') this.say('hachi_drive_normal', {}, { minGap: 2 });
+      else this.say(id === 'max' ? 'hachi_max_on' : 'hachi_ultra_on', { v: v > 9500 ? (v / 1000).toFixed(1) + ' km/s' : Math.round(v) + ' m/s' }, { minGap: 2 });
+    }
+    return true;
+  }
+
+  /** both flights back to their plain drive (docking, undocking) */
+  resetDrive() {
+    for (const f of [this.flight, this.g.flight]) { f.ultraK = 1; f.aK = 1; f.veK = 1; f.maxMode = false; }
+    this.driveMode = 'normal';
+  }
 
   /** test / restore helper: H8 straight onto B-29's back */
   forceDock() {
@@ -954,12 +1011,20 @@ export class H8Vessel {
       thrustFrac = Math.min(1, this.flight.thrustAcc.length() / this.flight.spec.aMax);
     }
     const boosting = this.mode === 'docked' ? g.flight.mul > H8.speedMulInternal : this.flight.mul > 1;
-    P.driveMW = thrustFrac * (boosting ? H8.driveMW.boost : H8.driveMW.cruise);
+    // ULTRA / MAX: the drive pushes harder (thrustFrac goes past 1) and less efficiently, and its
+    // field draws power just to be kept up
+    const DM = { normal: [1, 0], ultra: [1.0, 20], max: [1.2, 60] }[this.driveMode] || [1, 0];
+    const df = this.driveFlight();
+    const fr = this.mode === 'docked' ? Math.min(df.aK, df.thrustAcc.length() / Math.max(1, df.spec.aMax + df.aExtra)) : Math.min(df.aK, this.flight.thrustAcc.length() / this.flight.spec.aMax);
+    if (this.driveMode !== 'normal' && this.mode !== 'parked') thrustFrac = fr;
+    P.driveMW = thrustFrac * (boosting ? H8.driveMW.boost : H8.driveMW.cruise) * DM[0] + (this.mode !== 'parked' && this.driveMode !== 'normal' ? DM[1] : 0);
     P.loadMW = (2.5 + 1.5 * this.awake) + P.driveMW + (this.pd.cool > 0 ? 6 : 0);
     // supply: the reactor follows the load, the feed fills in, the SMES buffers the rest
     P.feed = this.feedOK();
     const feedAvail = P.feed ? H8.feedMW : 0;
-    const reactorMax = H8.reactorMW * (this.awake > 0.1 ? 1 : 0.15) * this.circ('power', 0.4);
+    // (ULTRA and MAX run the reactor past its rating: 130 / 180 per cent)
+    const over = this.driveMode === 'max' ? 1.8 : this.driveMode === 'ultra' ? 1.3 : 1;
+    const reactorMax = H8.reactorMW * over * (this.awake > 0.1 ? 1 : 0.15) * this.circ('power', 0.4);
     const want = Math.min(reactorMax, Math.max(0, P.loadMW - feedAvail * 0.5));
     P.reactor += (want / H8.reactorMW - P.reactor) * Math.min(1, dt * 0.4);
     P.reactor = Math.max(0.04, P.reactor);
@@ -967,6 +1032,13 @@ export class H8Vessel {
     P.feedMW = P.feed ? Math.min(feedAvail, Math.max(0, P.loadMW - supply) + (P.smes < H8.smesMJ * 0.98 ? 40 : 0)) : 0;
     const net = supply + P.feedMW - P.loadMW;   // MW = MJ/s
     P.smes = Math.max(0, Math.min(H8.smesMJ, P.smes + net * dt));
+    // nearly empty: the drive steps down by itself (MAX to ULTRA to normal)
+    if (this.driveMode !== 'normal' && P.smes < H8.smesMJ * (this.driveMode === 'max' ? 0.06 : 0.03)) {
+      const was = this.driveModeName();
+      // (MAX steps down to ULTRA only while there is still something to run it on)
+      this.setDriveMode(this.driveMode === 'max' && P.smes > H8.smesMJ * 0.04 ? 'ultra' : 'normal', true, true);
+      this.say('hachi_drive_power', { mode: was }, { minGap: 5 });
+    }
     // solo boost runs on the storage
     if (this.mode === 'free') this.flight.mul = (this.crew || this.pilot.goal) && P.boost && P.smes > H8.smesMJ * 0.03 ? 2 : 1;
   }
@@ -2141,7 +2213,7 @@ export class H8Vessel {
       hatch: this.hatch ? this.hatch.target : 0,
       met: !!this.metAsphalt, hits: this.hits,
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
-      circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)),
+      circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)), drive: this.driveMode,
       learn: +this.mind.learn.toFixed(3),
     };
   }
@@ -2180,6 +2252,7 @@ export class H8Vessel {
       else if (d.goal) this.goal(d.goal);
     }
     this.crew = !!d.crew && this.mode === 'free';
+    this.driveMode = ['ultra', 'max'].includes(d.drive) ? d.drive : 'normal';
     // saved before H8 waited above B-29 on a new game, and never woken: it does now
     if (!d.v2 && this.mode === 'parked' && !this.metAsphalt) this.relocate = true;
   }

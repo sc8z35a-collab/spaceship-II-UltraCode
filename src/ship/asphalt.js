@@ -203,6 +203,11 @@ const HACHI = {
   hachi_parked: ['停泊。省電力。'],
   hachi_arrived: ['{name}に到着。'],
   hachi_goto: ['{name}へ向かう。'],
+  hachi_ultra_on: ['ULTRA。最高{v}。'],
+  hachi_max_on: ['MAX。最高{v}。蓄電は長くもたない。'],
+  hachi_drive_normal: ['通常推進に戻す。'],
+  hachi_drive_power: ['蓄電が尽きる。{mode}を落とした。'],
+  hachi_drive_denied: ['出せない。{why}。'],
   hachi_goto_far: ['{name}は遠すぎる。'],
   hachi_goto_docked: ['結合中は行けない。'],
   hachi_hatch_closing: ['ハッチを閉める。'],
@@ -325,7 +330,7 @@ const VOICE = new Set([
   // HACHI: refusals
   'hachi_no_link', 'hachi_vestibule', 'hachi_busy', 'hachi_eva_nosuit', 'hachi_suit_keep', 'hachi_no_target', 'hachi_rail_blocked',
   'hachi_hatch_pressure', 'hachi_follow_none', 'hachi_b29_nofuel', 'hachi_b29_landed', 'hachi_kit_empty', 'hachi_ammo_out',
-  'hachi_out_of_range', 'hachi_friendly', 'hachi_goto_far', 'hachi_goto_docked',
+  'hachi_out_of_range', 'hachi_friendly', 'hachi_goto_far', 'hachi_goto_docked', 'hachi_drive_denied', 'hachi_drive_power',
   // HACHI: asked
   'hachi_free', 'hachi_report',
 ]);

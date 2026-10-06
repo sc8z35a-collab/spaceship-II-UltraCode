@@ -56,7 +56,7 @@ export class Autopilot {
     // (a wreck is surrounded by a field of flying debris: hold well clear of it)
     const standoff = s.dmg && s.dmg.destroyed ? 1800 : s.standoff || (s.kind === 'dock' ? 120 : 320);
     // braking profile (the ULTRA drive can shed speed much faster; with H8 pushing, faster still)
-    const a = (f.ultra ? 2.2 : 0.55) * Math.min(8, f.mul);
+    const a = (f.ultra ? 2.2 : 0.55) * Math.min(8, f.mul) * (f.ultra ? f.aK : 1);
     const vRefHere = f.refVelocity(f.pos, new THREE.Vector3());
     let v, moveDir;
     const rShip = f.pos.length(), rTgt = s.pos.length();
