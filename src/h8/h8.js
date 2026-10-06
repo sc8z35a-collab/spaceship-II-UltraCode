@@ -31,6 +31,7 @@ import { LAYER_NEAR, LAYER_MID, LAYER_FAR, assignLayers } from '../core/layers.j
 import { LAYER_PROXY } from '../player/interact.js';
 import { MU_EARTH, R_EARTH } from '../core/astro.js';
 import { STATUS_JP } from '../world/worldDamage.js';
+import { rockId } from '../combat/combat.js';
 
 function fmtEta(sec) {
   if (!sec || sec < 1) return '';
@@ -1829,13 +1830,13 @@ export class H8Vessel {
       const rel = a.pos.clone().sub(f.pos);
       const d = rel.length();
       if (d > 8000 * this.circ('sensor', 0.25)) continue;
-      if (!a.h8id) a.h8id = ++this.rockSeq;
+
       const rv = a.vel.clone().sub(f.vel);
       const tca = -rel.dot(rv) / Math.max(1e-6, rv.lengthSq());
       const miss = rel.clone().addScaledVector(rv, Math.max(0, tca)).length();
       const threat = tca > 0 && tca < 150 && miss < R0 + a.radius * 2 + 12;
       out.push({
-        id: 'rk' + a.h8id, kind: 'rock', name: `岩塊 ${(a.radius * 2).toFixed(1)} m`, short: '岩塊', pos: a.pos, vel: a.vel, threat, ref: a, R: a.radius,
+        id: rockId(a), kind: 'rock', name: `岩塊 ${(a.radius * 2).toFixed(1)} m`, short: '岩塊', pos: a.pos, vel: a.vel, threat, ref: a, R: a.radius,
         extra: threat ? `衝突まで ${Math.max(0, tca).toFixed(0)} 秒・${a.radius <= 0.8 ? '迎撃' : '回避'}` : `最接近 ${fmtDist(miss)}`, tca,
       });
     }
