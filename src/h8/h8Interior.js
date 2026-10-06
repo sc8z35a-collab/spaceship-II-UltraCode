@@ -84,6 +84,8 @@ function suitModel(M) {
 export function buildH8Interior(M) {
   const b = new Builder();     // the cockpit
   const bs = new Builder();    // the shaft
+  const hb = new Builder();    // the floor hatch's ring
+  let hatchLed0 = 0;
   const C = H8.cockpitC, RC = H8.cockpitR;
   const lamps = [];
   const lamp = (p, color, intensity, range) => lamps.push({ pos: p.clone(), color, intensity, range, room: 'h8' });
@@ -130,7 +132,10 @@ export function buildH8Interior(M) {
     // the floor glass sits on a thin rim where it meets the sphere; the hatch has its own ring
     b.torus(FLOOR.r - 0.012, 0.014, 'frameIn', [C.x, FLOOR.y, C.z], [Math.PI / 2, 0, 0], 96);
     b.torus(FLOOR.r - 0.035, 0.004, 'amberLamp', [C.x, FLOOR.y + 0.004, C.z], [Math.PI / 2, 0, 0], 96);
-    b.torus(FLOOR.hatchR + 0.012, 0.012, 'trim', [FLOOR.hatch.x, FLOOR.y + 0.004, FLOOR.hatch.z], [Math.PI / 2, 0, 0], 48);
+    // (the hatch's trim ring and its LEDs are a group of their own: hidden while Kaito sits with
+    // the hatch shut, so the floor reads as one sheet of display)
+    hb.torus(FLOOR.hatchR + 0.012, 0.012, 'trim', [FLOOR.hatch.x, FLOOR.y + 0.004, FLOOR.hatch.z], [Math.PI / 2, 0, 0], 48);
+    hatchLed0 = ledList.length;
     for (let k = 0; k < 12; k++) {
       const a = k / 12 * Math.PI * 2;
       ledList.push({ p: V(FLOOR.hatch.x + Math.cos(a) * (FLOOR.hatchR + 0.035), FLOOR.y + 0.008, FLOOR.hatch.z + Math.sin(a) * (FLOOR.hatchR + 0.035)), color: 1 });
@@ -209,6 +214,9 @@ export function buildH8Interior(M) {
   const shaft = bs.build(M, { castShadow: false });
   shaft.name = 'h8Shaft';
   group.add(shaft);
+  const hatchRing = hb.build(M, { castShadow: false });
+  hatchRing.name = 'h8HatchRing';
+  group.add(hatchRing);
   group.add(locker);
   // status LEDs (instanced: per-instance colour, blinked by the controller)
   const ledGeo = new THREE.SphereGeometry(0.006, 6, 4);
@@ -227,5 +235,5 @@ export function buildH8Interior(M) {
   // the seat record (for the seat system): it swivels round its column and tips on its yoke; the
   // eye rides on it (h8Seat.js works it out every frame)
   const seat = { id: 'h8pilot', kind: 'pilot', eye: SEAT.G.clone().add(SEAT.eye), fwd: V(0, -0.08, -1).normalize(), exit: V(0, H8.floorY, sz - 0.05), h8: true, swivel: true, gimbal: true, axis: V(SEAT.G.x, 0, SEAT.G.z), yawSeat: 0, pitchSeat: 0 };
-  return { group, shaft, colliders: [...b.colliders, ...bs.colliders], lamps, seat, seatParts, leds, locker };
+  return { group, shaft, hatchRing, hatchLeds: [hatchLed0, hatchLed0 + 12], colliders: [...b.colliders, ...bs.colliders], lamps, seat, seatParts, leds, locker };
 }

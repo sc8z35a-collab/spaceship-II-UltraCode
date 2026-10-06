@@ -105,15 +105,15 @@ export function ratesToward(q, qT, maxRate, gain = 0.7, out = new THREE.Vector3(
   return { w: out.copy(ax).multiplyScalar(Math.min(maxRate, ang * gain)), ang };
 }
 
-/** rates that point the nose (-z) along dir (ECI) */
-export function ratesNose(q, dir, maxRate, out = new THREE.Vector3()) {
+/** rates that point the nose (-z) along dir (ECI); gain: rad/s per rad of error */
+export function ratesNose(q, dir, maxRate, out = new THREE.Vector3(), gain = 0.35) {
   const fwd = new THREE.Vector3(0, 0, -1).applyQuaternion(q);
   const axisW = new THREE.Vector3().crossVectors(fwd, dir);
   const s = Math.min(1, axisW.length());
   const ang = fwd.dot(dir) < 0 ? Math.PI - Math.asin(s) : Math.asin(s);
   if (axisW.lengthSq() < 1e-10) return out.set(0, 0, 0);
   axisW.normalize().applyQuaternion(q.clone().invert());
-  return out.copy(axisW).multiplyScalar(Math.min(maxRate, ang * 0.35));
+  return out.copy(axisW).multiplyScalar(Math.min(maxRate, ang * gain));
 }
 
 export class HachiPilot {
@@ -204,7 +204,7 @@ export class HachiPilot {
     f.autopilot.fast = true;
     // attitude: nose along the way (or the target when holding)
     const want = gd.v > 2 ? gd.moveDir.clone().add(this.dodge.clone().multiplyScalar(0.02)).normalize() : this._tgt.pos.clone().sub(f.pos).normalize();
-    ratesNose(f.quat, want, 12 * Math.PI / 180, f.autopilot.wDes);
+    ratesNose(f.quat, want, 48 * Math.PI / 180, f.autopilot.wDes, 1.4);
     f.setSpeed = gd.v;
     this.state = gd.state === 'hold' ? 'hold' : gd.dist < 40000 ? 'approach' : 'transit';
     if (this.state === 'hold' && goal.onArrive) { const cb = goal.onArrive; goal.onArrive = null; cb(); }
@@ -215,19 +215,25 @@ export class HachiPilot {
     const f = this.v.flight;
     this.state = 'dock';
     const at = H8.dockAt;
+    // (more than three times quicker than it used to be: H8 no longer stops at each point on the
+    // way in — the path is planned as a whole, braking only in time for the slower stretches
+    // ahead — it brakes harder, the fine thrusters run a tight loop, and it swings round to
+    // B-29's attitude on the way down). a: the braking allowed on that stretch
     this.dock = {
       wp: [
-        { p: new THREE.Vector3(at.x, at.y + 60, at.z), v: 35, tol: 4 },
-        { p: new THREE.Vector3(at.x, at.y + 16, at.z), v: 10, tol: 0.8 },
-        { p: new THREE.Vector3(at.x, at.y + 1.2, at.z), v: 1.6, tol: 0.08 },
-        { p: at.clone(), v: 0.35, tol: 0.03, final: true },
+        { p: new THREE.Vector3(at.x, at.y + 40, at.z), v: 200, a: 45, tol: 6, pass: true },
+        { p: new THREE.Vector3(at.x, at.y + 8, at.z), v: 60, a: 28, tol: 1.5, pass: true },
+        { p: new THREE.Vector3(at.x, at.y + 0.6, at.z), v: 8, a: 10, tol: 0.15, pass: true },
+        { p: at.clone(), v: 1.6, a: 3, tol: 0.05, final: true },
       ],
       t: 0,
     };
-    // the first waypoint is skipped when H8 already comes in from above
+    // coming in from below or the side: first well clear above B-29's back (the straight line
+    // would run through B-29)
     const rel = f.pos.clone().sub(this.v.g.flight.pos).applyQuaternion(this.v.g.flight.quat.clone().invert());
-    if (rel.y > at.y + 30 && Math.hypot(rel.x - at.x, rel.z - at.z) < 25) this.dock.wp.shift();
-    f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
+    if (rel.y > at.y + 25 && Math.hypot(rel.x - at.x, rel.z - at.z) < 20) this.dock.wp.shift();
+    else if (rel.y < at.y + 10) this.dock.wp.unshift({ p: new THREE.Vector3(rel.x * 0.5, at.y + 45, rel.z * 0.5), v: 200, a: 45, tol: 8, pass: true });
+    f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true, tau: 0.3 };
   }
 
   /** back off B-29's port, straight up, then hand over */
@@ -253,31 +259,61 @@ export class HachiPilot {
     const w = d && d.wp[0];
     if (!w) return;
     if (!f.autopilot) f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
+    f.autopilot.tau = 0.3;
     d.t += dt;
     // B-29's port in ECI (B-29 keeps flying: aim at where it is now, with its velocity)
     const tgt = w.p.clone().applyQuaternion(fb.quat).add(fb.pos);
     const err = tgt.clone().sub(f.pos);
     const dist = err.length();
     this.dist = dist;
-    const a = w.final ? 0.25 : 4.0;
-    const v = Math.min(w.v, Math.sqrt(2 * a * Math.max(0, dist - w.tol * 0.4)), dist * (w.final ? 0.9 : 1.2));
-    const vDes = fb.vel.clone().addScaledVector(err.divideScalar(Math.max(dist, 1e-6)), v);
+    // the speed: this stretch's limit, and in time for every slower stretch and the stop ahead.
+    // (The thrust follows a command with a short lag: the distances are taken as they will be a
+    // moment from now, or it would brake late and swing past the corner / onto the latches.)
+    const a = w.a || (w.final ? 0.8 : 4.0);
+    const dirE = err.clone().divideScalar(Math.max(dist, 1e-6));
+    const closing = Math.max(0, f.vel.clone().sub(fb.vel).dot(dirE));
+    const lag = closing * 0.4;
+    let v = w.v;
+    if (w.pass) {
+      // round a sharp corner at this point slowly enough not to swing wide of it
+      const n1 = d.wp[1];
+      if (n1) {
+        const inDir = err.clone().normalize();
+        const outDir = n1.p.clone().sub(w.p).applyQuaternion(fb.quat).normalize();
+        const turn = Math.acos(Math.max(-1, Math.min(1, inDir.dot(outDir))));
+        if (turn > 0.3) v = Math.min(v, Math.sqrt(400 + 2 * a * Math.max(0, dist - w.tol - lag)));
+      }
+      let along = Math.max(0, dist - lag), prev = w.p;
+      for (let i = 1; i < d.wp.length; i++) {
+        const n = d.wp[i], seg = n.p.distanceTo(prev);
+        // the fastest that stretch can be entered: its own limit, or still stopping at its end
+        const vin = n.pass ? n.v : Math.min(n.v, Math.sqrt(2 * (n.a || a) * Math.max(0, seg - n.tol * 0.4)));
+        v = Math.min(v, Math.sqrt(vin * vin + 2 * a * along));
+        if (!n.pass) break;
+        along += seg; prev = n.p;
+      }
+    } else if (w.final) {
+      // the last few decimetres at a steady creep (no slow exponential tail) onto the latches
+      v = Math.min(v, Math.max(0.1, Math.min(Math.sqrt(2 * a * Math.max(0, dist - 0.02 - lag)), dist * 3)));
+    } else v = Math.min(v, Math.sqrt(2 * a * Math.max(0, dist - w.tol * 0.4 - lag)), dist * 2.2);
+    const vDes = fb.vel.clone().addScaledVector(dirE, v);
     f.autopilot.vRel.copy(vDes).sub(f.refVelocity(f.pos, new THREE.Vector3()));
     f.autopilot.aff = null;
     f.autopilot.fast = true;
     f.setSpeed = v;
     // attitude: B-29's own (H8 sits on its back in the same orientation)
-    const r = ratesToward(f.quat, fb.quat, 15 * Math.PI / 180, 0.8, f.autopilot.wDes);
+    const r = ratesToward(f.quat, fb.quat, 45 * Math.PI / 180, 2.4, f.autopilot.wDes);
     const relV = f.vel.clone().sub(fb.vel).length();
     if (w.final) {
-      if ((dist < w.tol && relV < 0.08 && r.ang < 0.03) || (dist < 0.25 && d.t > 25)) {
+      // (soft capture: the latches take up a closing speed of up to 15 cm/s)
+      if ((dist < w.tol && relV < 0.15 && r.ang < 0.04) || (dist < 0.25 && d.t > 8)) {
         d.wp.length = 0;
         this.state = 'idle';
         this.v.latch();
       }
       return;
     }
-    if (dist < w.tol && (w.v > 5 || r.ang < 0.12 || this.state === 'undock')) {
+    if (dist < w.tol && (w.pass || w.v > 5 || r.ang < 0.12 || this.state === 'undock')) {
       d.wp.shift(); d.t = 0;
       if (w.last) {
         this.state = 'idle';

@@ -334,8 +334,8 @@ export class Gameplay {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
     if (h.target > 0.5) { h.target = 0; g.audio.doorMotor(h.o.center, false); return; }
     const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
-    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
-    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
     h.target = 1;
     g.audio.doorMotor(h.o.center, true);
   }

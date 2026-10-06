@@ -11,6 +11,7 @@ import { RANGES } from '../core/layers.js';
 import { passRange } from '../core/engine.js';
 import { QUALITY, QUALITY_JP } from '../core/quality.js';
 import { STATUS_JP } from '../world/worldDamage.js';
+import { VOICE_JP } from '../ship/asphalt.js';
 
 const SCREEN_VERT = /* glsl */`
 varying vec2 vUv;
@@ -358,7 +359,7 @@ export class Monitors {
     const g = this.g, f = g.flight;
     this.header(K, 'B-29  ナビゲーション', H);
     // orbit map
-    const cx = 150, cy = 30 + (H - 30) / 2, R0 = Math.min(110, (H - 50) / 2);
+    const cx = 146, cy = 40 + (H - 74) / 2, R0 = Math.min(100, (H - 84) / 2);
     const zoom = m.zoom || 0;
     const scale = zoom === 0 ? R0 / (R_EARTH * 1.35) : zoom === 1 ? R0 / 4.4e7 : R0 / 2.8e8;
     // plane basis
@@ -376,128 +377,126 @@ export class Monitors {
     // ship orbit circle
     const rr = f.pos.length() * scale;
     K.circle(cx, cy, rr, { stroke: 'rgba(95,208,255,0.55)', lw: 1 });
-    // stations
+    // stations (labels kept apart: the ones that would land on another are left out)
+    const placed = [];
     for (const s of st.list) {
       const [x, y] = proj(s.pos);
       if (Math.hypot(x - cx, y - cy) > 140) continue;
       const sel = this.selDest === s.id;
       const sst = s.dmg ? s.dmg.status : 'ok';
       const dot = sst === 'destroyed' || sst === 'failed' ? COL.dim : sst === 'critical' ? COL.red : sst === 'damaged' ? COL.amber : s.kind === 'dock' ? COL.amber : COL.green;
-      K.circle(x, y, sel ? 4 : 3, { fill: dot, stroke: null });
-      K.text(s.en + (sst === 'destroyed' ? ' ×' : ''), x + 6, y - 4, { size: 8, color: sel ? COL.amber : COL.dim });
+      K.circle(x, y, sel ? 4.5 : 3.5, { fill: dot, stroke: null });
+      if (sel || !placed.some(([px, py]) => Math.abs(px - x) < 74 && Math.abs(py - y) < 15)) {
+        K.text((s.en || '').split(' ')[0] + (sst === 'destroyed' ? ' ×' : ''), x + 6, y - 5, { size: 11, color: sel ? COL.amber : 'rgba(190,220,250,0.8)', weight: sel ? 700 : 500 });
+        placed.push([x, y]);
+      }
     }
     // relays (dots)
     if (zoom === 0) for (let i = 0; i < st.relays.length; i += 7) { const [x, y] = proj(st.relays[i].pos); if (Math.hypot(x - cx, y - cy) < R0 + 15) K.circle(x, y, 0.6, { fill: 'rgba(160,200,255,0.4)', stroke: null }); }
     const [shx, shy] = proj(f.pos);
     const t = performance.now() / 300;
-    K.circle(shx, shy, 4 + Math.sin(t) * 1, { fill: COL.cyan, stroke: '#fff' });
-    K.text('B-29', shx + 7, shy + 10, { size: 9, color: COL.cyan, weight: 700 });
+    K.circle(shx, shy, 4.5 + Math.sin(t) * 1, { fill: COL.cyan, stroke: '#fff' });
+    K.text('B-29', shx + 8, shy + 13, { size: 12, color: COL.cyan, weight: 700 });
     // asteroids
     for (const a of g.asteroids.list) {
       if (!a.warned) continue;
       const [x, y] = proj(a.pos);
       K.circle(x, y, 3, { fill: COL.red, stroke: null });
     }
-    K.button(12, H - 26, 70, 20, ['近傍', '静止軌道', '月軌道'][zoom], () => { m.zoom = ((m.zoom || 0) + 1) % 3; }, { size: 10 });
     // H8 on the map and its call / release strip
     if (g.h8) {
-      if (g.h8.mode !== 'docked') {
+      if (g.h8.mode !== 'docked' && g.h8.mode !== 'lost') {
         const [hx, hy] = proj(g.h8.flight.pos);
-        if (Math.hypot(hx - cx, hy - cy) < 140) { K.circle(hx, hy, 3, { fill: COL.amber, stroke: null }); K.text('H8', hx + 6, hy - 4, { size: 8, color: COL.amber }); }
+        if (Math.hypot(hx - cx, hy - cy) < 140) { K.circle(hx, hy, 3.5, { fill: COL.amber, stroke: null }); K.text('H8', hx + 6, hy - 5, { size: 11, color: COL.amber, weight: 700 }); }
       }
-      this.drawH8Strip(K, 12, 32);
+      this.drawH8Strip(K, 8, H - 90);
     }
+    K.button(8, H - 30, 78, 25, ['近傍', '静止軌道', '月軌道'][zoom], () => { m.zoom = ((m.zoom || 0) + 1) % 3; }, { size: 12 });
     {
       const es = g.elevator.dmg ? g.elevator.dmg.status : 'ok';
-      K.text('宇宙エレベーター：' + STATUS_JP[es], 12, H - 34, { size: 9, color: es === 'ok' ? COL.dim : es === 'damaged' ? COL.amber : COL.red });
+      if (es !== 'ok') K.text('宇宙エレベーター：' + STATUS_JP[es], 8, 46, { size: 11, color: es === 'damaged' ? COL.amber : COL.red });
       // docked at a terminal on the ribbon: when the next climbers come in
       const dk = g.docking;
       if (dk && dk.state === 'docked' && dk.station && dk.station.tether && g.elevator.nextInfo && es !== 'failed' && es !== 'destroyed') {
         const fm = (w) => (w < 60 ? 'まもなく' : w < 3600 ? Math.round(w / 60) + '分後' : (w / 3600).toFixed(1) + '時間後');
-        const txt = g.elevator.nextInfo(dk.station.id).map((i) => (i.up ? '↓' : '↑') + i.line + ' ' + fm(i.w)).join('   ');
-        K.text('次のクライマー到着  ' + txt, 12, H - 47, { size: 8, color: COL.cyan });
+        const txt = g.elevator.nextInfo(dk.station.id).map((i) => (i.up ? '↓' : '↑') + i.line + ' ' + fm(i.w)).join('  ');
+        K.text('次のクライマー  ' + txt, 8, es !== 'ok' ? 60 : 46, { size: 10, color: COL.cyan });
       }
     }
     // right column
-    const X = 300;
-    K.rect(X, 34, 202, 74, { fill: COL.bg2, r: 8 });
+    const X = 290, CW = 214;
+    K.rect(X, 30, CW, 52, { fill: COL.bg2, r: 8 });
     const sp = f.vel.clone().sub(f.refVelocity(f.pos, new THREE.Vector3())).length();
-    K.text('速度', X + 10, 52, { size: 10, color: COL.dim });
-    K.text(sp.toFixed(1), X + 10, 82, { size: 28, color: f.ultra ? COL.amber : COL.text, weight: 300, mono: true });
-    K.text('m/s', X + 104, 82, { size: 11, color: COL.dim });
+    K.text('速度', X + 8, 45, { size: 11, color: COL.dim });
+    K.text(sp < 1000 ? sp.toFixed(1) : (sp / 1000).toFixed(2) + 'k', X + 8, 74, { size: 24, color: f.ultra ? COL.amber : COL.text, weight: 400, mono: true });
+    K.text('m/s', X + 108, 74, { size: 12, color: COL.dim });
     const alt = f.alt / 1000;
     if (f.groundAlt < 8000 || f.landed) {
       // close to the surface: radar altitude in metres + vertical speed
-      K.text('対地', X + 140, 52, { size: 10, color: COL.dim });
+      K.text('対地', X + 150, 45, { size: 11, color: COL.dim });
       const ga = Math.max(0, f.groundAlt);
-      K.text(ga.toFixed(0), X + 192, 74, { size: 16, color: ga < 100 && f.vertSpeed < -4 ? COL.red : COL.text, align: 'right', mono: true });
-      K.text('m  ' + (f.vertSpeed >= 0 ? '↑' : '↓') + Math.abs(f.vertSpeed).toFixed(1), X + 192, 92, { size: 9, color: f.vertSpeed < -6 ? COL.amber : COL.dim, align: 'right', mono: true });
+      K.text(ga.toFixed(0), X + CW - 8, 64, { size: 16, color: ga < 100 && f.vertSpeed < -4 ? COL.red : COL.text, align: 'right', mono: true });
+      K.text('m  ' + (f.vertSpeed >= 0 ? '↑' : '↓') + Math.abs(f.vertSpeed).toFixed(1), X + CW - 8, 78, { size: 10, color: f.vertSpeed < -6 ? COL.amber : COL.dim, align: 'right', mono: true });
     } else {
-      K.text('高度', X + 140, 52, { size: 10, color: COL.dim });
-      K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + 192, 76, { size: 16, color: COL.text, align: 'right', mono: true });
-      K.text('km', X + 192, 92, { size: 9, color: COL.dim, align: 'right' });
+      K.text('高度', X + 150, 45, { size: 11, color: COL.dim });
+      K.text(alt < 1000 ? alt.toFixed(1) : (alt / 1000).toFixed(1) + 'k', X + CW - 8, 66, { size: 16, color: COL.text, align: 'right', mono: true });
+      K.text('km', X + CW - 8, 78, { size: 10, color: COL.dim, align: 'right' });
     }
-    K.bar(X + 10, 96, 182, 5, sp / (f.ultra || sp > f.vNormal ? f.vUltra : f.vNormal), f.ultra ? COL.amber : COL.cyan);
     // ULTRA button
     const ultraStyle = f.ultra ? 'warn' : (f.engineHealth < 0.45 || f.dry ? 'disabled' : 'normal');
-    K.button(X, 112, 202, 26, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });
+    K.button(X, 86, CW, 26, f.ultra ? 'ULTRA  作動中' : (f.ultraDown ? 'ULTRA  減速中…' : 'ULTRA'), () => g.systems.toggleUltra(), { style: ultraStyle, size: 13 });
     // propellant (and H8's push while it is docked)
     const fu = f.fuel;
-    K.text('推進剤', X + 4, 153, { size: 9, color: COL.dim });
-    K.bar(X + 40, 147, 88, 6, fu, fu < 0.15 ? COL.red : COL.amber);
-    K.text(f.dry ? '空' : `${Math.round(fu * 100)}%`, X + 160, 153, { size: 9, color: fu < 0.15 ? COL.red : COL.text, align: 'right', mono: true });
-    if (f.mul > 1) K.text(`H8 ×${f.mul}`, X + 202, 153, { size: 9, color: COL.amber, align: 'right', weight: 700 });
-    // destinations
-    K.text('目的地', X + 4, 168, { size: 10, color: COL.dim });
-    let y = 173;
+    K.text('推進剤', X + 2, 128, { size: 11, color: COL.dim });
+    K.bar(X + 46, 121, 92, 7, fu, fu < 0.15 ? COL.red : COL.amber);
+    K.text(f.dry ? '空' : `${Math.round(fu * 100)}%`, X + 172, 128, { size: 11, color: fu < 0.15 ? COL.red : COL.text, align: 'right', mono: true });
+    if (f.mul > 1) K.text(`H8 ×${f.mul}`, X + CW, 128, { size: 11, color: COL.amber, align: 'right', weight: 700 });
+    // destinations: big rows, a page at a time
     const ap = g.autopilot;
-    // H8 (Kaito's sub-base) is a destination too while it is away from B-29
-    if (g.h8 && g.h8.mode !== 'docked') {
+    const dests = [];
+    if (g.h8 && g.h8.mode !== 'docked' && g.h8.mode !== 'lost') {
       const s = g.h8.navTarget();
-      const d = s.pos.distanceTo(f.pos);
-      const sel = this.selDest === 'h8';
-      const dd = d < 1e5 ? (d / 1000).toFixed(d < 1e4 ? 1 : 0) + ' km' : (d / 1000 / 1000).toFixed(1) + ' 千km';
-      K.rect(X, y, 202, 20, { fill: sel ? 'rgba(255,170,60,0.16)' : 'rgba(255,170,60,0.04)', stroke: sel ? COL.amber : 'rgba(255,170,80,0.25)', r: 5 });
-      K.text('H8（サブ拠点）', X + 8, y + 14, { size: 10, color: COL.amber });
-      K.text(dd, X + 196, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
-      K.buttons.push({ x: X, y, w: 202, h: 20, onTap: () => { this.selDest = 'h8'; } });
-      y += 23;
+      dests.push({ id: 'h8', label: g.h8.mode === 'pod' ? 'H8 シェルター' : 'H8（サブ拠点）', d: s.pos.distanceTo(f.pos), color: COL.amber, h8: true });
     }
-    for (const s of st.list) {
-      const d = s.dist || s.pos.distanceTo(f.pos);
-      const sel = this.selDest === s.id;
-      const lbl = s.name.replace('（修理基地）', '');
-      const dd = d < 1e5 ? (d / 1000).toFixed(0) + ' km' : (d / 1000 / 1000).toFixed(1) + ' 千km';
-      K.rect(X, y, 202, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
-      const sst = s.dmg ? s.dmg.status : 'ok';
-      const sc = { ok: s.kind === 'dock' ? COL.amber : COL.text, damaged: COL.amber, critical: COL.red, failed: COL.dim, destroyed: COL.dim }[sst];
-      if (sst === 'ok') K.text(lbl, X + 8, y + 14, { size: 10, color: sc });
-      else {
-        // short name + status pill, so the distance still fits
-        const short = lbl.split(/[・ ]/)[0];
-        K.text(short, X + 8, y + 14, { size: 10, color: sc });
-        const px = X + 14 + short.length * 10;
-        K.rect(px, y + 4, 46, 13, { fill: sst === 'critical' ? 'rgba(255,77,61,0.25)' : sst === 'damaged' ? 'rgba(255,176,59,0.2)' : 'rgba(120,130,140,0.2)', stroke: sc, r: 3 });
-        K.text(STATUS_JP[sst], px + 23, y + 14, { size: 8, color: sc, align: 'center', weight: 700 });
-      }
-      K.text(dd, X + 196, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
-      K.buttons.push({ x: X, y, w: 202, h: 20, onTap: () => { this.selDest = s.id; } });
-      y += 23;
-      if (y > H - 60) break;
+    for (const s of st.list) dests.push({ id: s.id, s, label: s.name.replace('（修理基地）', ''), d: s.dist || s.pos.distanceTo(f.pos) });
+    const RH = 29, y0 = 136, rows = Math.max(1, Math.floor((H - 38 - y0) / RH));
+    const pages = Math.max(1, Math.ceil(dests.length / rows));
+    m.destPage = Math.min(pages - 1, m.destPage || 0);
+    let y = y0;
+    for (const e of dests.slice(m.destPage * rows, m.destPage * rows + rows)) {
+      const sel = this.selDest === e.id;
+      const dd = e.d < 1e5 ? (e.d / 1000).toFixed(e.d < 1e4 ? 1 : 0) + ' km' : (e.d / 1000 / 1000).toFixed(1) + ' 千km';
+      const W = pages > 1 ? CW - 34 : CW;
+      K.rect(X, y, W, RH - 3, { fill: sel ? (e.h8 ? 'rgba(255,170,60,0.18)' : 'rgba(95,208,255,0.16)') : 'rgba(255,255,255,0.03)', stroke: sel ? (e.h8 ? COL.amber : COL.cyan) : 'rgba(120,190,255,0.16)', r: 6 });
+      const sst = e.s && e.s.dmg ? e.s.dmg.status : 'ok';
+      const sc = e.h8 ? COL.amber : { ok: e.s && e.s.kind === 'dock' ? COL.amber : COL.text, damaged: COL.amber, critical: COL.red, failed: COL.dim, destroyed: COL.dim }[sst];
+      let lbl = e.label;
+      if (sst !== 'ok') lbl = lbl.split(/[・ ]/)[0] + ' ' + STATUS_JP[sst];
+      K.text(dd, X + W - 6, y + 18, { size: 11, color: COL.dim, align: 'right', mono: true });
+      K.font(11, 400, true);
+      const dw = K.g.measureText(dd).width / K.s;
+      K.text(fitText(K, lbl, W - 22 - dw, 13, sel ? 700 : 500), X + 8, y + 18, { size: 13, color: sc, weight: sel ? 700 : 500 });
+      K.buttons.push({ x: X, y, w: W, h: RH - 3, onTap: () => { this.selDest = e.id; } });
+      y += RH;
+    }
+    if (pages > 1) {
+      // page buttons beside the list
+      K.button(X + CW - 30, y0, 30, (rows * RH) / 2 - 3, '▲', () => { m.destPage = Math.max(0, m.destPage - 1); }, { style: m.destPage > 0 ? 'normal' : 'disabled', size: 13 });
+      K.button(X + CW - 30, y0 + (rows * RH) / 2, 30, (rows * RH) / 2 - 3, '▼', () => { m.destPage = Math.min(pages - 1, m.destPage + 1); }, { style: m.destPage < pages - 1 ? 'normal' : 'disabled', size: 13 });
     }
     // autopilot button
     const on = ap.state !== 'off';
     const label = on ? (ap.state === 'hold' ? '到着・保持中（解除）' : `自動操縦中  ${fmtEta(ap.eta)}（解除）`) : (this.selDest ? '自動操縦  開始' : '目的地を選択');
-    K.button(X, H - 34, 202, 28, label, () => { if (on) ap.disengage(); else if (this.selDest) ap.engage(this.selDest); }, { style: on ? 'on' : this.selDest ? 'normal' : 'disabled', size: 11 });
+    K.button(X, H - 33, CW, 29, label, () => { if (on) ap.disengage(); else if (this.selDest) ap.engage(this.selDest); }, { style: on ? 'on' : this.selDest ? 'normal' : 'disabled', size: 13 });
     // dock repair when holding at the dock
     if (ap.state === 'hold' && ap.target && ap.target.kind === 'dock') {
-      K.button(12, H - 54, 130, 22, 'ドッキング・修理', () => g.systems.dockRepair(), { style: 'warn', size: 10 });
+      K.button(8, 64, 150, 26, 'ドッキング・修理', () => g.systems.dockRepair(), { style: 'warn', size: 12 });
     }
     // docking with a hub station (walk into its lobby)
     const dk = g.docking;
     if (dk && (dk.state !== 'free' || dk.candidate())) {
       const lbl = { free: 'ドッキング', approach: 'ドッキング中…（中止）', docked: '離脱（アンドック）', leaving: '離脱中…' }[dk.state];
-      K.button(88, H - 26, 150, 22, lbl, () => dk.request(), { style: dk.state === 'docked' ? 'on' : dk.state === 'free' ? 'warn' : 'normal', size: 10 });
+      K.button(92, H - 30, 168, 25, lbl, () => dk.request(), { style: dk.state === 'docked' ? 'on' : dk.state === 'free' ? 'warn' : 'normal', size: 12 });
     }
   }
 
@@ -595,7 +594,7 @@ export class Monitors {
     K.text('最寄り中継局  ' + ((g.systems.relayDist ?? 0) / 1000).toFixed(0) + ' km', 100, 78, { size: 10, color: COL.dim });
     const music = g.audio.musicOn;
     K.button(14, 92, 230, 30, music ? '♪ 5Gラジオ  再生中' : '♪ 5Gラジオ', () => g.systems.toggleMusic(), { style: music ? 'on' : sig > 0.05 ? 'normal' : 'disabled', size: 12 });
-    K.button(254, 92, 120, 30, g.asphalt.voiceOn ? 'AI音声  ON' : 'AI音声  OFF', () => { g.asphalt.voiceOn = !g.asphalt.voiceOn; }, { style: g.asphalt.voiceOn ? 'on' : 'normal', size: 11 });
+    K.button(254, 92, 120, 30, 'AI音声  ' + VOICE_JP[g.asphalt.mode], () => g.asphalt.cycleMode(), { style: g.asphalt.mode === 'off' ? 'normal' : 'on', size: 11 });
     // H8 over the link (within 1500 km)
     if (g.h8 && this.drawH8Comms && !this._tabs) this.drawH8Comms(K, 384, 32, 120, 92);
     K.text('アスファルト ログ', 14, 142, { size: 10, color: COL.dim });
@@ -751,8 +750,18 @@ function hullHW(z) {
   return 3.05;
 }
 
+/** the text cut (…) to fit width w (kit units) at the given size */
+function fitText(K, str, w, size, weight = 400) {
+  K.font(size, weight);
+  if (K.g.measureText(str).width / K.s <= w) return str;
+  let t = str;
+  while (t.length > 1 && K.g.measureText(t + '…').width / K.s > w) t = t.slice(0, -1);
+  return t + '…';
+}
+
 function fmtEta(s) {
   if (!s || s < 1) return '';
+  if (s < 60) return Math.round(s) + '秒';
   if (s < 3600) return Math.round(s / 60) + '分';
   if (s < 86400) return (s / 3600).toFixed(1) + '時間';
   return (s / 86400).toFixed(1) + '日';

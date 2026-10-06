@@ -42,6 +42,8 @@ import { springVec, springQuat } from './core/spring.js';
 import { setFineVisible } from './ship/geom.js';
 import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullShape.js';
 import { glassUniforms } from './ship/glass.js';
+import { StatusLine } from './ui/statusLine.js';
+import { ExtMarkers } from './ui/extMarkers.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -132,6 +134,8 @@ export class Game {
     this.breakup = new Breakup(this);
     this.worldDamage = new WorldDamage(this);
     this.hud = new Hud(this);
+    this.statusLine = new StatusLine(this);
+    this.extMarkers = new ExtMarkers(this);
     this.initWorldState();
     // H8 — Kaito's old sub-base (parked on its orbit until called)
     if (!this.params.has('noH8')) {
@@ -251,10 +255,11 @@ export class Game {
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (this.mode === 'camera' && !focused) {
         // drag in the middle / top of the screen: look round with the external camera
+        // (more sensitive than it was: a short drag swings the view a long way round)
         const L = this.extLook;
-        L.zoom = Math.max(0.35, Math.min(4, (L.zoom || 1) * (inp.pinch || 1)));
-        L.yaw -= inp.lookDX * 0.0045;
-        L.pitch = Math.max(-1.45, Math.min(1.45, L.pitch - inp.lookDY * 0.0045));
+        L.zoom = Math.max(0.25, Math.min(6, (L.zoom || 1) * Math.pow(inp.pinch || 1, 1.6)));
+        L.yaw -= inp.lookDX * 0.011;
+        L.pitch = Math.max(-1.5, Math.min(1.5, L.pitch - inp.lookDY * 0.011));
         // a double tap puts it back
         for (const tap of inp.taps) {
           const now = performance.now();
@@ -317,6 +322,7 @@ export class Game {
     this.worldDamage.update(sdt);
     this.save.update(dt);
     this.hud.update(dt);
+    this.statusLine.update(dt);
   }
 
   /**
@@ -424,7 +430,7 @@ export class Game {
   lookExternal(c, dt) {
     const L = this.extLook;
     if (L.cam !== this.extCam) { L.cam = this.extCam; L.yaw = L.pitch = L.sy = L.sp = 0; L.zoom = L.sz = 1; }
-    const k = 1 - Math.exp(-dt * 12);
+    const k = 1 - Math.exp(-dt * 20);
     L.sy += (L.yaw - L.sy) * k; L.sp += (L.pitch - L.sp) * k;
     L.sz = (L.sz || 1) + ((L.zoom || 1) - (L.sz || 1)) * k;
     if (Math.abs(L.sy) < 1e-4 && Math.abs(L.sp) < 1e-4 && Math.abs(L.sz - 1) < 1e-3) return c;
@@ -552,6 +558,7 @@ export class Game {
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
+    if (this.extMarkers) this.extMarkers.update();
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
       const ls = this.lifeSupport;

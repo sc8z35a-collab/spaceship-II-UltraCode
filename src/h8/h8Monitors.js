@@ -270,17 +270,20 @@ export const H8_PAGES = {
   drawH8Strip(K, x, y) {
     const g = this.g, h = g.h8;
     if (!h) return;
-    const w = 150;
+    const w = 168;
     const L = h.linkState();
-    K.rect(x, y, w, 46, { fill: 'rgba(20,12,4,0.82)', stroke: 'rgba(255,170,80,0.45)', r: 6 });
-    K.text('H8', x + 8, y + 15, { size: 11, color: AMBER, weight: 700 });
-    K.text(h.mode === 'docked' ? '結合中' : L.ok ? `${stateJP(h)}  ${fmtDist(L.d)}` : `圏外  ${fmtDist(L.d)}`, x + 30, y + 15, { size: 9, color: L.ok ? COL.text : COL.red });
+    K.rect(x, y, w, 52, { fill: 'rgba(20,12,4,0.86)', stroke: 'rgba(255,170,80,0.5)', r: 6 });
+    K.text('H8', x + 8, y + 17, { size: 13, color: AMBER, weight: 700 });
+    const s = h.mode === 'lost' ? '喪失' : h.mode === 'pod' ? `シェルター  ${fmtDist(L.d)}` : h.mode === 'docked' ? '結合中' : L.ok ? `${stateJP(h)}  ${fmtDist(L.d)}` : `圏外  ${fmtDist(L.d)}`;
+    K.text(s.length > 14 ? s.slice(0, 13) + '…' : s, x + 34, y + 17, { size: 11, color: L.ok && h.mode !== 'lost' ? COL.text : COL.red });
     let label, fn, style = 'normal';
-    if (h.mode === 'docked') { label = '分離'; fn = () => h.release('escort'); style = 'warn'; }
+    if (h.mode === 'lost') { label = '修理基地で再建造'; fn = null; style = 'disabled'; }
+    else if (h.mode === 'pod') { label = 'シェルターを回収に行く'; fn = () => h.rescuePod(); style = 'danger'; }
+    else if (h.mode === 'docked') { label = '分離'; fn = () => h.release('escort'); style = 'warn'; }
     else if (h.goalKind === 'b29' || h.pilot.state === 'dock') { label = '呼び戻し中…（中止）'; fn = () => h.goal('hold'); style = 'on'; }
     else if (!L.ok) { label = '通信圏外（呼べません）'; fn = null; style = 'disabled'; }
     else { label = h.mode === 'parked' ? 'H8 を呼ぶ' : 'H8 を呼ぶ（ドッキング）'; fn = () => h.call(); style = 'warn'; }
-    K.button(x + 6, y + 21, w - 12, 20, label, fn, { style, size: 9 });
+    K.button(x + 6, y + 24, w - 12, 24, label, fn, { style, size: 11 });
   },
 
   /** H8's box on B-29's comms screen: the link, H8's state, call / report */

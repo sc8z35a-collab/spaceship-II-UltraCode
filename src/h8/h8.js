@@ -108,7 +108,7 @@ export class H8Vessel {
     this.buildNeckHatch();
     this.buildBeacon();
     // ---------------------------------------------------------------- flight & pilot
-    this.flight = new Flight({ normalMax: 60 * H8.speedMulInternal, ultraMax: 900 * H8.speedMulInternal, aMax: H8.accel, mass: H8.mass, CdA: 18, comfortK: 4, rampK: 6, tank: { cap: H8.propKg, ve: H8.ve } });
+    this.flight = new Flight({ normalMax: 60 * H8.speedMulInternal, ultraMax: 900 * H8.speedMulInternal, aMax: H8.accel, mass: H8.mass, CdA: 18, comfortK: 5, rampK: 6, turnK: H8.turnK, tank: { cap: H8.propKg, ve: H8.ve } });
     this.pilot = new HachiPilot(this);
     // ---------------------------------------------------------------- damage you can see
     this.hull = new H8Hull(this);
@@ -197,6 +197,16 @@ export class H8Vessel {
     // ---- B-29 side: the sliding hatch, the well's walls, the umbilical
     this.hatch = new DorsalHatch(g.shipVis.M, g.phys);
     g.shipVis.root.add(this.hatch.group);
+    {
+      // what the cameras see of the port from H8's cockpit: the mated neck's plate (dark metal)
+      const cap = new THREE.Mesh(new THREE.CircleGeometry(PORT.r + 0.2, 40), g.shipVis.M.metalDark || g.shipVis.M.hullDark);
+      cap.rotation.x = -Math.PI / 2;
+      cap.position.set(0, PORT.yCollar + 0.012, PORT.z);
+      cap.layers.set(LAYER_NEAR);
+      cap.visible = false;
+      g.shipVis.root.add(cap);
+      this.collarCap = cap;
+    }
     const well = [];
     for (let i = 0; i < 18; i++) {
       const a = (i / 18) * Math.PI * 2;
@@ -742,7 +752,9 @@ export class H8Vessel {
   /** B-29's flight model with H8 pushing (or not) */
   applyBoost(on) {
     const f = this.g.flight;
-    if (!on) { f.mul = 1; f.aExtra = 0; f.boostDamp = false; f.extHealth = 0; f.extTank = null; f.extMass = 0; return; }
+    if (!on) { f.mul = 1; f.aExtra = 0; f.boostDamp = false; f.extHealth = 0; f.extTank = null; f.extMass = 0; f.turnK = f.spec.turnK; return; }
+    // H8's thrusters help the pair round
+    f.turnK = this.awake > 0.5 ? H8.turnKPair : f.spec.turnK;
     // the pair is 26 t heavier; H8's drive pushes on H8's own propellant
     f.extMass = H8.mass;
     f.extTank = this.flight.tank;
@@ -833,11 +845,14 @@ export class H8Vessel {
     if (this.mode === 'free' && this.goalKind === 'b29' && this.pilot.state !== 'dock') {
       const d = this.flight.pos.distanceTo(g.flight.pos);
       const steady = g.flight.thrustAcc.length() < 1.2 || (g.docking && g.docking.state === 'docked');
-      if (d < 420 && steady && !(g.docking && (g.docking.state === 'approach' || g.docking.state === 'leaving'))) {
+      if (d < 900 && steady && !(g.docking && (g.docking.state === 'approach' || g.docking.state === 'leaving'))) {
         this.pilot.startDock();
         this.say('hachi_final');
       }
     }
+    // ---- radiators fold up while B-29 docks at (or lies at) a station's berth
+    const fold = this.mode === 'docked' && g.docking && g.docking.state !== 'free' ? 1 : 0;
+    this.radFold += (fold - this.radFold) * Math.min(1, sdt * 0.6);
     // ---- point defence (and the pair's evasive step for the big ones)
     this.pointDefence(sdt);
     // ---- the player's apparent gravity while riding H8 alone
@@ -1505,7 +1520,17 @@ export class H8Vessel {
     if (this.ext.far.visible) this.ext.far.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dCam - 5), dCam + 5); });
     this.int.group.visible = this.mode === 'docked' ? (eyePF ? eyePF.distanceTo(DOCK) < 18 : false) : (this.crew || dCam < 30);
     this.display.mesh.visible = this.int.group.visible;
-    this.neckHatch.visible = this.int.group.visible || dCam < 60;
+    // from the cockpit (floor hatch shut) the outside cameras look past H8's own neck and B-29's
+    // port: neither hatch is in the picture (they used to show through the floor glass); a dark
+    // mating plate stands in for the port's mouth instead
+    const sealedIn = !!(eyePF && this.inCockpit(eyePF) && eyePF.y > FLOOR.y + DOCK.y && this.floorHatch < 0.01);
+    this.neckHatch.visible = (this.int.group.visible || dCam < 60) && !sealedIn;
+    if (this.hatch) this.hatch.group.visible = !(sealedIn && this.mode === 'docked');
+    if (this.collarCap) this.collarCap.visible = sealedIn && this.mode === 'docked';
+    // seated with the floor hatch shut, the floor is one sheet of display: its hatch ring is not
+    // shown (it comes back when Kaito stands, or the hatch moves)
+    this._hatchHidden = sealedIn && g.player.state === 'seated' && g.player.seat === this.seat;
+    this.int.hatchRing.visible = !this._hatchHidden;
     // ---- far beacon
     const showBeacon = this.mode !== 'docked' && dCam > 900;
     this.beacon.visible = showBeacon;
@@ -1550,15 +1575,15 @@ export class H8Vessel {
     // radiators glow with the waste heat; they fold up while B-29 lies at a station's berth
     const heat = Math.min(1, this.power.reactor * 0.9 + this.drive * 0.6);
     M.radiator.emissiveIntensity = heat * heat * 0.35;
-    const fold = this.mode === 'docked' && g.docking && g.docking.state !== 'free' ? 1 : 0;
-    this.radFold += (fold - this.radFold) * Math.min(1, dt * 0.35);
     for (const r of this.ext.parts.radiators) r.pivot.rotation.z = r.side * this.radFold * 1.62;
     if (this.ext.parts.radar) this.ext.parts.radar.rotation.y += dt * (aw > 0.3 ? 2.2 : 0);
     // status LEDs blink, fans turn
     if (this.int.group.visible) {
       const L = this.int.leds, base = L.userData.base, rate = L.userData.rate, c = new THREE.Color();
+      const [h0, h1] = this.int.hatchLeds;
       for (let i = 0; i < base.length; i += 1) {
-        const on = aw < 0.15 ? (i % 9 === 0 ? 0.3 : 0) : (Math.sin(t * rate[i] + i * 1.7) > -0.2 ? 1 : 0.15);
+        let on = aw < 0.15 ? (i % 9 === 0 ? 0.3 : 0) : (Math.sin(t * rate[i] + i * 1.7) > -0.2 ? 1 : 0.15);
+        if (this._hatchHidden && i >= h0 && i < h1) on = 0;
         c.copy(base[i]).multiplyScalar(on);
         L.setColorAt(i, c);
       }

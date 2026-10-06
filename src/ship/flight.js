@@ -27,7 +27,10 @@ export class Flight {
    * acceleration, its inertial damper, the health of its drive)
    */
   constructor(spec = {}) {
-    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1, tank: B29_TANK }, spec);
+    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1, turnK: 1, tank: B29_TANK }, spec);
+    // how quickly it turns (x): H8's thrusters swing the little sphere round several times faster
+    // than B-29's; the pair gets some of that while H8 rides on B-29's back
+    this.turnK = this.spec.turnK;
     // propellant { kg, cap, ve (exhaust speed, m/s) }; a docked H8 pushes on its own tank (extTank)
     // and adds its mass (extMass)
     this.tank = this.spec.tank ? { kg: this.spec.tank.cap, cap: this.spec.tank.cap, ve: this.spec.tank.ve } : null;
@@ -196,9 +199,10 @@ export class Flight {
     this.groundAlt = alt - surf.h - HULL_BOTTOM;
 
     // --- attitude control (relative to LVLH)
-    const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180;
+    const tk = this.turnK || 1;
+    const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180 * tk;
     const rcs = Math.max(0.15, this.rcsHealth);
-    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1);
+    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1) * tk;
     const wDes = _v2.set(0, 0, 0);
     if (inp && !this.landed) wDes.set(inp.pitch * maxRate, -inp.yaw * maxRate, -inp.roll * maxRate);
     if (this.autopilot && this.autopilot.wDes) wDes.copy(this.autopilot.wDes);
@@ -277,7 +281,7 @@ export class Flight {
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     // stays stable for coarse (catch-up) steps too; tighter during a docking manoeuvre
-    const tau = Math.max(this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
+    const tau = Math.max(this.autopilot && this.autopilot.tau ? this.autopilot.tau : this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
     const fast = this.autopilot && this.autopilot.fast;   // station docking manoeuvre
     const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.driveHealth) * (this.mul > 1 ? Math.min(6, this.mul) : 1) * this.spec.comfortK;
     const extra = Math.max(0, aMaxEngine - aComp.length());

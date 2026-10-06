@@ -19,11 +19,15 @@ import { RING } from './stationRing.js';
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _Z = new THREE.Vector3(0, 0, 1);
 const SHIP_MASS = 42000;
-// hull spheres (ship-local): body, nose, tail, reactor, engine, radiators
+// hull spheres (ship-local): body, nose, tail, reactor, engine, and the two radiator fins (thin
+// 6.4 x 3.4 m plates: two rows of small spheres each — the old fat ones stood 1.7 m proud of the
+// plates and grazed the promenade module at the berth, which aborted many a docking)
+const FIN = [];
+for (const sx of [-1, 1]) for (const x of [2.5, 4.1, 5.7, 7.3]) for (const z of [12.3, 13.9]) FIN.push([sx * x, 0.4, z, 0.9]);
 const SHIP_SPHERES = [
   [0, 0.4, -10.8, 2.3], [0, 0.4, -7.2, 2.95], [0, 0.4, -3.2, 3.0], [0, 0.4, 0.8, 3.0], [0, 0.4, 4.6, 2.9], [0, 0.4, 8.2, 2.3],
   [0, 0.4, 12.0, 1.7], [0, 0.4, 15.4, 1.6], [0, 0.4, 17.6, 1.3],
-  [3.1, 0.4, 13.1, 1.7], [5.4, 0.4, 13.1, 1.7], [7.6, 0.4, 13.1, 1.7], [-3.1, 0.4, 13.1, 1.7], [-5.4, 0.4, 13.1, 1.7], [-7.6, 0.4, 13.1, 1.7],
+  ...FIN,
 ].map(([x, y, z, r]) => ({ c: V(x, y, z), r }));
 
 function segPoint(p, a, b, out) {
@@ -153,9 +157,8 @@ export class Docking {
       this.wp.push({ p: from.clone().applyQuaternion(q).multiplyScalar(Math.max(R0, Rs + (R0 - Rs) * (k / steps))), v: 90, tol: 22, pass: true });
     }
     this.wp.push({ p: V(-R0, DOCK_AT.y, DOCK_AT.z), v: 70, tol: 10 });
-    this.wp.push({ p: V(DOCK_AT.x - 22, DOCK_AT.y, DOCK_AT.z), v: 40, tol: 1.5 });
-    this.wp.push({ p: V(DOCK_AT.x - 6, DOCK_AT.y, DOCK_AT.z), v: 4, tol: 0.4 });
-    this.wp.push({ p: DOCK_AT.clone(), v: 1.2, tol: 0.06, final: true });
+    this.pushFinal();
+    this.retries = 0;
     // the autopilot hands over
     const ap = g.autopilot;
     ap.state = 'off'; ap.target = null;
@@ -163,6 +166,26 @@ export class Docking {
     this.state = 'approach';
     this.tFinal = 0;
     g.asphalt.say('st_dock_start', { name: s.name }, { force: true });
+  }
+
+  /** the last stretch in along the berth line. align: hold there until the ship (and H8 on its back,
+   * its radiators folded) lines up with the station — swinging in still turning, H8 sticking up
+   * 11 m above B-29's back could brush the lobby module */
+  pushFinal() {
+    this.wp.push({ p: V(DOCK_AT.x - 22, DOCK_AT.y, DOCK_AT.z), v: 40, tol: 1.5, align: true });
+    this.wp.push({ p: V(DOCK_AT.x - 6, DOCK_AT.y, DOCK_AT.z), v: 4, tol: 0.4 });
+    this.wp.push({ p: DOCK_AT.clone(), v: 1.2, tol: 0.06, final: true });
+  }
+
+  /** a touch on the way in: back off along the berth line and come in again (three goes) */
+  retry() {
+    const g = this.g;
+    this.retries = (this.retries || 0) + 1;
+    if (this.retries > 3) { this.abort(); return; }
+    this.wp = [{ p: V(DOCK_AT.x - 40, DOCK_AT.y, DOCK_AT.z), v: 8, tol: 3 }];
+    this.pushFinal();
+    this.tFinal = 0;
+    g.asphalt.say('st_dock_retry', {}, { minGap: 10 });
   }
 
   abort() {
@@ -513,7 +536,9 @@ export class Docking {
       }
       return;
     }
-    if (dist < w.tol) {
+    // (lined up first: the ship's attitude, and H8's radiators folded away)
+    const lined = !w.align || (ang < 0.05 && !(g.h8 && g.h8.docked && g.h8.radFold < 0.92));
+    if (dist < w.tol && lined) {
       this.wp.shift();
       if (w.last) {
         this.state = 'free';
@@ -530,8 +555,10 @@ export class Docking {
     this.lastHit -= dt;
     for (const s of g.stations.list) {
       const P = s.model && s.model.userData.proxies;
-      if (!P || !(s.dist < 600)) continue;
+      if (!P) continue;
+      // (the station's pose at this very step: its drawn position is a frame old)
       const pose = this.stationPose(s, g.time, this._pose || (this._pose = {}));
+      if (pose.pos.distanceTo(f.pos) > 600) continue;
       const qInv = pose.quat.clone().invert();
       let worst = null;
       const n = new THREE.Vector3(), pl = new THREE.Vector3();
@@ -546,6 +573,15 @@ export class Docking {
       }
       if (!worst) continue;
       const nE = worst.n.clone().applyQuaternion(pose.quat);
+      // coming in to this station's berth a graze of a few centimetres is taken up by the fenders:
+      // eased out, no damage, the approach goes on
+      if ((this.state === 'approach' || this.state === 'leaving') && s === this.station && -worst.d < 0.15) {
+        f.pos.addScaledVector(nE, -worst.d + 0.01);
+        const vRel0 = f.vel.clone().sub(this.frameVel(s, pose, f.pos, new THREE.Vector3()));
+        const vn0 = vRel0.dot(nE);
+        if (vn0 < 0) f.vel.addScaledVector(nE, -vn0);
+        continue;
+      }
       f.pos.addScaledVector(nE, -worst.d + 0.02);
       const contactE = worst.pl.clone().addScaledVector(worst.n, -worst.sp.r);
       const contactEci = this.toEci(pose, contactE);
@@ -565,7 +601,8 @@ export class Docking {
           g.systems.onImpact(E, pLocal);
           g.shake = Math.max(g.shake, Math.min(3, 0.6 + vn * vn * 0.4));
           if (g.autopilot.state !== 'off') g.autopilot.disengage(true);
-          if (this.state === 'approach') this.abort();
+          if (this.state === 'approach' && s === this.station) this.retry();
+          else if (this.state === 'approach') this.abort();
           g.asphalt.say('st_hit', { name: s.name }, { minGap: 8 });
         }
       }

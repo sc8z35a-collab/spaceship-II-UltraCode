@@ -37,6 +37,14 @@ for (const [i, s] of steps.entries()) {
   if (s.eval) {
     try { const r = await page.evaluate(s.eval); if (r !== undefined) logs.push(`[step ${i}] ` + JSON.stringify(r)); } catch (e) { logs.push(`[step ${i} error] ` + e.message); }
   }
+  // { canvas: 'js expression giving a canvas data URL', file: 'name.png' }: save that canvas
+  if (s.canvas) {
+    try {
+      const url = await page.evaluate(s.canvas);
+      if (typeof url === 'string' && url.startsWith('data:image/')) fs.writeFileSync(path.join(outDir, s.file || `canvas${i}.png`), Buffer.from(url.split(',')[1], 'base64'));
+      else logs.push(`[step ${i} canvas] no image`);
+    } catch (e) { logs.push(`[step ${i} canvas error] ` + e.message); }
+  }
   if (logs.length) { console.log(logs.join('\n')); logs.length = 0; }
   if (s.shot) await page.screenshot({ path: path.join(outDir, s.shot), timeout: 120000 });
 }

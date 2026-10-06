@@ -51,6 +51,10 @@ export const H8 = {
   speedMulInternal: 6,
   speedMulFed: 12,
   accel: 62,
+  // turning (x B-29's rates): alone H8 swings round five times as fast; riding on B-29's back
+  // its thrusters double the pair's
+  turnK: 5,
+  turnKPair: 2,
   mass: 26000,
   reactorMW: 140,
   driveMW: { cruise: 120, boost: 310 },
