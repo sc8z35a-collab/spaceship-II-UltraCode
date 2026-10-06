@@ -19,7 +19,7 @@ const browser = await chromium.launch({
 });
 const page = await browser.newPage({ viewport: { width: +W, height: +H }, deviceScaleFactor: 1 });
 const logs = [];
-page.on('console', (m) => { const t = m.text(); if (!/vite|DevTools|requestFullscreen/.test(t)) logs.push(`[${m.type()}] ${t}`); });
+page.on('console', (m) => { const t = m.text().replace(/\u0000/g, ''); if (!/vite|DevTools|requestFullscreen/.test(t)) logs.push(`[${m.type()}] ${t}`); });
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(0, 6).join('\n')}`));
 const t0 = Date.now();
 await page.goto(`${BASE}?${query}`, { waitUntil: 'load', timeout: 180000 });

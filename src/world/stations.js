@@ -433,6 +433,7 @@ export class Stations {
   constructor(engine, shipM, startTime) {
     this.ref = referenceFrame(startTime);
     this.scene = engine.scene;
+    this.engine = engine;
     // plain copies of the ship materials (no ship-space dents / window cut-outs)
     const M = {};
     for (const [k, m] of Object.entries(shipM)) M[k] = m.userData && m.userData.shipPatched ? m.clone() : m;
@@ -592,12 +593,15 @@ export class Stations {
 
   update(t, origin, camWorld, dt) {
     const camEci = camWorld.clone().add(origin);
+    // a magnified view (H8's zoom) brings them closer: the models show from further away
+    const E = this.engine, cam = E && E.camera;
+    const zk = cam && E.baseVFov ? Math.tan(cam.fov * Math.PI / 360) / Math.tan(E.baseVFov() * Math.PI / 360) : 1;
     for (const s of this.list) {
       this.posOf(s, t, s.pos, s.vel);
       const rel = s.pos.clone().sub(origin);
       const d = rel.distanceTo(camWorld);
       s.dist = s.pos.distanceTo(origin);
-      const vis = d < (this.visRange || 4.0e5);
+      const vis = d * zk < (this.visRange || 4.0e5) && d < 6.0e6;
       s.model.visible = vis;
       if (vis) {
         // orient: long axis along velocity, up radial

@@ -334,6 +334,17 @@ export class Engine {
     this.smaa = new SMAAEffect({ preset: this.low ? SMAAPreset.LOW : SMAAPreset.HIGH });
     if (this.low) this.bloom.mipmapBlurPass.levels = 5;
     this.composer.addPass(new EffectPass(this.camera, this.smaa));
+    // drawn over the finished picture, with the unmagnified view (H8's tabs: they are part of its
+    // display, so the zoom does not magnify them; the picture's grading does not touch them)
+    this.uiScene = new THREE.Scene();
+    this.uiScene.matrixWorldAutoUpdate = false;
+    this.uiCam = new THREE.PerspectiveCamera();
+    this.uiCam.matrixAutoUpdate = false;
+    this.uiCam.matrixWorldAutoUpdate = false;
+    this.uiOn = false;
+    // called once with the canvas right after the next picture is finished (before the overlay is
+    // drawn over it): a photograph
+    this.onFrame = null;
     this.frameTimes = [];
     this.lastAdjust = 0;
     this.autoRes = true;
@@ -425,11 +436,28 @@ export class Engine {
     }
   }
 
+  /** the projection of the unmagnified view (what the overlay is drawn with) */
+  uiProjection(out = new THREE.Matrix4()) {
+    const c = this.uiCam;
+    c.fov = this.baseVFov(); c.aspect = this.camera.aspect; c.near = 0.02; c.far = 50;
+    c.updateProjectionMatrix();
+    return out.copy(c.projectionMatrix);
+  }
+
   render(dt) {
     this.renderer.info.reset();
     this.scene.updateMatrixWorld();
     this.camera.updateMatrixWorld(true);
     this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
     this.composer.render(dt);
+    if (this.onFrame) { const f = this.onFrame; this.onFrame = null; try { f(this.renderer.domElement); } catch (e) { console.warn(e); } }
+    if (this.uiOn) {
+      const c = this.uiCam;
+      this.uiProjection();
+      c.matrixWorld.copy(this.camera.matrixWorld);
+      c.matrixWorldInverse.copy(this.camera.matrixWorldInverse);
+      this.renderer.setRenderTarget(null);
+      this.renderer.render(this.uiScene, c);
+    }
   }
 }

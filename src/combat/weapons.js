@@ -189,8 +189,8 @@ export class Weapons {
     const g = this.g, P = this.pose(which), out = [];
     if (g.drones) for (const d of g.drones.list) if (d.alive) { const dist = d.pos.distanceTo(P.pos); if (dist < 12000) out.push({ kind: 'drone', ref: d, pos: d.pos, vel: d.vel, acc: d.thrust, R: d.R, name: d.id, dist, threat: true }); }
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) { const dist = a.pos.distanceTo(P.pos); if (dist < 4000) out.push({ kind: 'rock', ref: a, pos: a.pos, vel: a.vel, R: a.radius, name: '岩塊', dist }); }
-    if (which === 'h8' && g.h8 && g.h8.display) {
-      for (const l of g.h8.display.locks) {
+    if (which === 'h8' && g.h8 && g.h8.hud) {
+      for (const l of g.h8.hud.locks) {
         const c = l.c;
         if (!c || c.kind === 'drone' || c.kind === 'rock' || c.kind === 'body' || !c.pos) continue;
         const dist = c.pos.distanceTo(P.pos);

@@ -15,9 +15,10 @@ import { H8, CAMERAS } from './h8Spec.js';
 import { createH8Materials, H8_UNIFORMS } from './h8Materials.js';
 import { buildH8Exterior } from './h8Exterior.js';
 import { buildH8Interior, createH8InteriorMaterials } from './h8Interior.js';
-import { H8Display, fmtDist, altOf, FLOOR } from './h8Display.js';
+import { H8Display, fmtDist, altOf, FLOOR, CAM_DEAD } from './h8Display.js';
 import { H8Tabs } from './h8Tabs.js';
-import { H8Zoom } from './h8Zoom.js';
+import { H8Zoom, OPT_MAX, DIG_MAX } from './h8Zoom.js';
+import { H8Hud } from './h8Hud.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
@@ -88,10 +89,14 @@ export class H8Vessel {
     this.display = new H8Display();
     this.tabs = new H8Tabs(this);
     this.zoom = new H8Zoom(this);
+    this.hud = new H8Hud(this);
+    this.cands = [];
     this.root = new THREE.Group();
     this.root.name = 'H8';
     this.root.matrixAutoUpdate = false;
-    this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh, this.tabs.group);
+    this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh);
+    // the tabs are drawn over the finished picture (unmagnified by the zoom)
+    game.engine.uiScene.add(this.tabs.group);
     this.extMeshes = [];
     // the outside takes no shadows (B-29 underneath would black out the earthshine on H8's belly);
     // its substrate sphere casts them: the sealed cockpit inside gets no sunlight, and H8 shades
@@ -271,9 +276,10 @@ export class H8Vessel {
     // its information is on the tabs of the all-round display)
     Object.assign(Object.getPrototypeOf(g.monitors), H8_PAGES);
     // touches on the display's tabs (tap, fold, drag) are theirs, not the look's
-    g.input.capture = (x, y) => this.tabTouch(x, y);
+    g.input.capture = (x, y, touches) => this.tabTouch(x, y, touches);
     g.input.captureMove = (t) => this.tabMove(t);
     g.input.captureUp = (t, tap) => this.tabUp(t, tap);
+    g.input.captureWheel = (x, y, dy) => this.tabWheel(x, y, dy);
     // ---- a new game: H8 waits right above B-29, on standby
     if (!this.park) this.initAbove();
     this.placeParked(g.time);
@@ -1350,6 +1356,8 @@ export class H8Vessel {
     if (inside && E > 3e5) {
       this.flickT = Math.min(1.5, 0.3 + E / 2e7);
       this.display.stutter(Math.min(1, 0.2 + E / 4e6));
+      // a blow that comes through the armour knocks out display panels on that side
+      if (A.outer < 0.6 || E > 2e6) this.display.panelHit(dirLocal, E * (1.6 - A.outer));
       if (this.seatMotion && this.crew) this.seatMotion.jolt(Math.min(2.2, 0.25 + E / 2e6));
       if (E > 1.5e6 && this.fx) {
         const side = dirLocal.x >= 0 ? 1 : -1;
@@ -1635,14 +1643,22 @@ export class H8Vessel {
     this.display.update(dt, inCockpit && aw > 0.5);
     this.display.setHatch(this.floorHatch);
     this.display.setLocker(this.locker.open);
-    if (inCockpit && this.display.power > 0.01) this.updateDisplay(dt, rw, camWorld);
-    else { this.tabs.place(dt, null, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; if (this.seat) this.seat.stab = 0; }
+    this.display.setShelter(this.shelterOpen || 0);
+    const disp = inCockpit && this.display.power > 0.01;
+    if (disp) this.updateDisplay(dt, rw, camWorld);
+    else { this.tabs.place(dt, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; if (this.seat) this.seat.stab = 0; }
     // the zoom narrows the view itself (and coarsens it past the optical range)
     const z = inCockpit ? this.zoom.z : 1;
     g.engine.setZoom(z);
     this.display.setZoom(z);
-    g.engine.grade.set('uPixel', z > 10.6 ? Math.min(4, z / 10.5) : 1);
-    this.zoom.drawHud(inCockpit && g.player.seat === this.seat && (g.mode === 'pilot' || g.mode === 'camera'));
+    g.engine.grade.set('uPixel', z > OPT_MAX * 1.005 ? Math.min(DIG_MAX, z / OPT_MAX) : 1);
+    g.engine.uiOn = this.tabs.visible;
+    // the marks over the outside: with this frame's magnification
+    const seatedHere = g.player.state === 'seated' && g.player.seat === this.seat;
+    this.hud.frame(dt, this.cands || [], this._orbit, disp && this.display.power > 0.3 && g.mode !== 'camera', disp && this.display.power > 0.5);
+    this.zoom.drawHud(inCockpit && seatedHere && (g.mode === 'pilot' || g.mode === 'camera'));
+    // a photograph is taken of the outside alone: the cockpit is out of the cameras' picture
+    if (g.photos && g.photos.pending && inCockpit) { this.int.group.visible = false; this.display.mesh.visible = false; }
     // the shaft below the floor is out of sight (and not drawn) while the hatch is shut
     const eyeUp = eyePF && this.inCockpit(eyePF) && eyePF.y > FLOOR.y + DOCK.y;
     this.int.shaft.visible = !(eyeUp && this.floorHatch < 0.01);
@@ -1761,33 +1777,30 @@ export class H8Vessel {
   }
 
   // ==================================================================== the display's overlay
-  /** per frame while Kaito is in the cockpit: where he looks, what is out there, the cards */
+  /** per frame while Kaito is in the cockpit: where he looks, what is out there, the tabs */
   updateDisplay(dt, rw, camWorld) {
     const g = this.g, D = this.display, f = this.flight;
-    // the camera in H8's frame: the markers hang along the lines from it
+    // the eye in H8's frame: the display works out its lines of sight from it
     const camL = new THREE.Vector3().copy(camWorld).applyMatrix4(DENT_U.uH8RootInv.value);
     D.setEye(camL);
-    // the line of sight
-    const qv = new THREE.Quaternion().setFromRotationMatrix(rw).invert().multiply(g.camQuat);
-    const gaze = new THREE.Vector3(0, 0, -1).applyQuaternion(qv);
-    // what is out there (the list a few times a second, the directions every frame)
+    // what is out there (the list a few times a second, the ranges every frame)
     this.candT = (this.candT || 0) - dt;
     if (this.candT <= 0) { this.candT = 0.2; this.cands = this.buildCands(); }
-    const qInv = _q2.copy(f.quat).invert();
     const rel = new THREE.Vector3(), rv = new THREE.Vector3();
     for (const c of this.cands) {
       rel.copy(c.pos).sub(f.pos);
       c.dist = rel.length();
-      c.dir = (c.dir || new THREE.Vector3()).copy(rel).divideScalar(Math.max(1e-6, c.dist)).applyQuaternion(qInv);
       c.closing = c.vel ? -rel.dot(rv.copy(c.vel).sub(f.vel)) / Math.max(1e-6, c.dist) : 0;
     }
-    // orbit markers and the horizon's vertical
+    // the horizon's vertical (H8-local) and the orbit directions (ECI)
     const fl = this.mode === 'docked' ? g.flight : f;
+    const qInv = _q2.copy(f.quat).invert();
+    D.uniforms.uUp.value.copy(f.pos).normalize().applyQuaternion(qInv);
+    const up = f.pos.clone().normalize();
     const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, new THREE.Vector3()));
-    const up = f.pos.clone().normalize().applyQuaternion(qInv);
-    const orbit = { zen: up, nad: up.clone().negate() };
-    if (vRel.lengthSq() > 1) { orbit.pro = vRel.normalize().applyQuaternion(qInv); orbit.retro = orbit.pro.clone().negate(); }
-    D.updateMarks(dt, this.cands, gaze, orbit, up, (c) => this.onLock(c));
+    const orbit = this._orbit || (this._orbit = {});
+    orbit.zen = up; orbit.nad = up.clone().negate();
+    if (vRel.lengthSq() > 1) { orbit.pro = vRel.normalize(); orbit.retro = orbit.pro.clone().negate(); } else { orbit.pro = orbit.retro = null; }
     // the zoom (from the seat) and the tabs
     const pl = g.player;
     const seated = pl.state === 'seated' && pl.seat === this.seat;
@@ -1795,21 +1808,20 @@ export class H8Vessel {
     // a magnified (or followed) view is stabilised against the seat's lean and shiver
     // (a tilt of the head moves the magnified picture by the same angle, not z times as much)
     this.seat.stab = this.zoom.follow ? 1 : 1 - 1 / Math.max(1, z);
-    for (const l of D.locks) l.follow = this.zoom.follow && this.zoom.target && this.zoom.target.id === l.id;
-    this.tabs.place(dt, camL, true, z, D.locks);
+    this.tabs.place(dt, g.mode !== 'camera');
     this.tabs.draw(dt, D.power);
   }
 
   /** everything the display can track: B-29, stations within 3000 km, the Moon, rocks nearby */
   buildCands() {
     const g = this.g, f = this.flight, out = [];
-    if (this.mode !== 'docked') out.push({ id: 'b29', kind: 'b29', name: 'B-29', short: 'B-29', pos: g.flight.pos, vel: g.flight.vel, extra: this.link.ok ? 'リンク良好' : '通信圏外' });
+    if (this.mode !== 'docked') out.push({ id: 'b29', kind: 'b29', name: 'B-29', short: 'B-29', pos: g.flight.pos, vel: g.flight.vel, ref: g.flight, R: 22, extra: this.link.ok ? 'リンク良好' : '通信圏外' });
     for (const st of g.stations.list) {
       if (st.pos.distanceTo(f.pos) > 3.0e6) continue;
       const ss = st.dmg ? st.dmg.status : 'ok';
-      out.push({ id: 'st:' + st.id, kind: 'station', name: st.name.replace('（修理基地）', ''), short: st.en || st.name, pos: st.pos, vel: st.vel, extra: ss !== 'ok' ? STATUS_JP[ss] : null });
+      out.push({ id: 'st:' + st.id, kind: 'station', name: st.name.replace('（修理基地）', ''), short: st.en || st.name, pos: st.pos, vel: st.vel, ref: st, extra: ss !== 'ok' ? STATUS_JP[ss] : null });
     }
-    if (g.space.moonPos) out.push({ id: 'moon', kind: 'body', name: '月', short: '月', pos: g.space.moonPos, vel: null });
+    if (g.space.moonPos) out.push({ id: 'moon', kind: 'body', name: '月', short: '月', pos: g.space.moonPos, vel: null, R: 1737400 });
     // rocks within 8 km; on a collision course they are threats
     const R0 = this.mode === 'docked' ? 16 : H8.R + 4;
     for (const a of g.asteroids.list) {
@@ -1823,7 +1835,7 @@ export class H8Vessel {
       const miss = rel.clone().addScaledVector(rv, Math.max(0, tca)).length();
       const threat = tca > 0 && tca < 150 && miss < R0 + a.radius * 2 + 12;
       out.push({
-        id: 'rk' + a.h8id, kind: 'rock', name: `岩塊 ${(a.radius * 2).toFixed(1)} m`, short: '岩塊', pos: a.pos, vel: a.vel, threat,
+        id: 'rk' + a.h8id, kind: 'rock', name: `岩塊 ${(a.radius * 2).toFixed(1)} m`, short: '岩塊', pos: a.pos, vel: a.vel, threat, ref: a, R: a.radius,
         extra: threat ? `衝突まで ${Math.max(0, tca).toFixed(0)} 秒・${a.radius <= 0.8 ? '迎撃' : '回避'}` : `最接近 ${fmtDist(miss)}`, tca,
       });
     }
@@ -1838,7 +1850,7 @@ export class H8Vessel {
         if (!own && !shared) continue;
         const hostile = d.state === 'hunt' || d.state === 'attack' || d.state === 'evade';
         out.push({
-          id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d,
+          id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d, R: d.R,
           extra: (d.state === 'evade' ? `損傷 ${Math.round(d.hp * 100)}%・後退中` : d.state === 'attack' ? (d.run ? '攻撃航過中' : '周回・攻撃中') + (d.hp < 1 ? `  損傷${Math.round((1 - d.hp) * 100)}%` : '') : hostile ? '接近中' : '巡回中') + (shared ? '・B-29経由' : ''),
         });
       }
@@ -1877,28 +1889,94 @@ export class H8Vessel {
   }
 
   // ==================================================================== touching the tabs
-  camPose() {
-    const g = this.g;
-    return { pos: g.camWorld.clone(), quat: g.camQuat.clone(), proj: g.engine.camera.projectionMatrix };
+  /** the ray of a screen point through the unmagnified view (the tabs' own), in H8's frame */
+  tabRay(x, y) {
+    const g = this.g, E = g.engine;
+    const P = E.uiProjection(_m);
+    const dir = _v.set(x / window.innerWidth * 2 - 1, -(y / window.innerHeight) * 2 + 1, 0.5).applyMatrix4(P.invert()).normalize().applyQuaternion(g.camQuat);
+    const inv = _m.copy(this.root.matrixWorld).invert();
+    const eye = g.camWorld.clone().applyMatrix4(inv);
+    return { eye, dir: dir.clone().transformDirection(inv) };
   }
 
-  ndc(x, y) { return { x: x / window.innerWidth * 2 - 1, y: -(y / window.innerHeight) * 2 + 1 }; }
-
-  tabTouch(x, y) {
-    if (!this.tabs.visible || this.zoom.z > 1.3 || this.g.mode === 'camera') return null;
-    return this.tabs.hit(this.ndc(x, y), this.camPose());
+  tabTouch(x, y, touches) {
+    if (!this.tabs.visible || this.g.mode === 'camera') return null;
+    // a second finger while one is on a tab: the two pinch that tab
+    if (touches) for (const o of touches.values()) {
+      if (o.zone !== 'ui' || !o.cap || !o.cap.tab || o.cap.part === 'pinch') continue;
+      if (this.tabs.drag) this.tabs.dragEnd();
+      this._pinch = { tab: o.cap.tab, a: o, b: null, d: 0 };
+      o.cap.pinched = true;
+      return { tab: o.cap.tab, part: 'pinch' };
+    }
+    return this.tabs.hit(this.tabRay(x, y));
   }
 
   tabMove(t) {
     const h = t.cap;
-    if (!h || h.part !== 'head') return;
+    if (!h) return;
+    const P = this._pinch;
+    if (P && (h.part === 'pinch' || h.pinched)) {
+      if (h.part === 'pinch') P.b = t;
+      if (!P.b) return;
+      const d = Math.hypot(P.a.x - P.b.x, P.a.y - P.b.y);
+      if (P.d > 0) this.tabs.scaleBy(P.tab, d / P.d);
+      P.d = Math.max(10, d);
+      return;
+    }
+    if (h.part !== 'head') return;
     if (!this.tabs.drag) { if (t.moved < 10) return; this.tabs.dragStart(h); }
-    this.tabs.dragMove(this.ndc(t.x, t.y), this.camPose());
+    this.tabs.dragMove(this.tabRay(t.x, t.y));
   }
 
   tabUp(t, tap) {
+    const h = t.cap;
+    if (this._pinch && h && (h.part === 'pinch' || h.pinched)) { this.tabs.resize(this._pinch.tab); this._pinch = null; return; }
     if (this.tabs.drag) { this.tabs.dragEnd(); return; }
-    if (tap && t.cap) this.tabs.tap(t.cap);
+    if (tap && h && h.tab) this.tabs.tap(h);
+  }
+
+  /** the mouse wheel over a tab: its size */
+  tabWheel(x, y, dy) {
+    if (!this.tabs.visible || this.g.mode === 'camera') return false;
+    const h = this.tabs.hit(this.tabRay(x, y));
+    if (!h) return false;
+    this.tabs.scaleBy(h.tab, Math.exp(-dy * 0.0012));
+    clearTimeout(this._wheelT);
+    this._wheelT = setTimeout(() => this.tabs.resize(h.tab), 350);
+    return true;
+  }
+
+  /** a tap on the view (not on a tab): the locks' boxes take it */
+  hudTap(tap) {
+    const g = this.g;
+    if (!this.hud.on || g.mode === 'camera' || tap.px === undefined) return false;
+    return this.hud.tap(tap.px, tap.py);
+  }
+
+  hudHolds(holds) { if (this.hud.on) this.hud.holds(holds); }
+
+  /** a double tap on a lock: go there (HACHI flies; docked, B-29's autopilot takes the pair) */
+  goTo(c) {
+    const g = this.g;
+    if (!c) return;
+    if (c.kind === 'body') { this.say('hachi_goto_far', { name: c.name }, { minGap: 3 }); return; }
+    if (this.mode === 'docked') {
+      if (c.kind === 'station' && c.ref && g.autopilot.engage(c.ref.id)) { this.say('hachi_goto', { name: c.name }, { minGap: 2 }); return; }
+      this.say('hachi_goto_docked', {}, { minGap: 3 });
+      return;
+    }
+    if (c.kind === 'b29') { this.call(); return; }
+    if (c.kind === 'station' && c.ref) { this.wake(); this.goal(c.ref.id); this.say('hachi_goto', { name: c.name }, { minGap: 2 }); return; }
+    // anything else: up to a safe distance from it, then hold there with it
+    this.wake();
+    const ref = c.ref || c;
+    const R = this.hud.radiusOf(c);
+    const stand = c.kind === 'drone' ? 1500 : Math.max(120, R * 3 + 80);
+    this.pilot.setGoal({ kind: 'target', name: c.name, posOf: (t, pos, vel) => { pos.copy(ref.pos); if (vel) vel.copy(ref.vel || this.flight.vel); return pos; }, standoff: stand, onArrive: () => this.say('hachi_arrived', { name: c.name }, { minGap: 3 }) });
+    this.goalKind = 'target';
+    this.goalId = c.id;
+    this.say('hachi_goto', { name: c.name }, { minGap: 2 });
   }
 
   // ==================================================================== what the tabs show
@@ -1915,8 +1993,8 @@ export class H8Vessel {
     if (this._leak && kPa < 95) return `船内減圧中  ${kPa.toFixed(1)} kPa`;
     if (f.fuel < 0.05 && !docked) return `推進剤 残り ${Math.round(f.tank.kg)} kg`;
     if (this.armour.outer < 0.2) return `外部装甲 限界  ${Math.round(this.armour.outer * 100)}%`;
-    const dead = this.hull.cams.filter((c) => c < 0.15).length;
-    if (dead) return `カメラ ${dead} 台 信号なし`;
+    const dead = this.hull.cams.filter((c) => c < CAM_DEAD).length;
+    if (dead) return `カメラ ${dead} 台 喪失 — その方向の表示なし`;
     return null;
   }
 
@@ -1956,43 +2034,59 @@ export class H8Vessel {
   /** HACHI's tab: its log, and what it can be asked to do */
   drawHachi(K, H) {
     const g = this.g;
-    const log = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-6);
-    let y = 10;
+    const log = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-5);
+    let y = 8;
     for (const e of log) {
       const t = e.text.replace(/^HACHI: /, '');
       const age = (g.time - e.t) / 1000;
-      K.text(t.length > 40 ? t.slice(0, 39) + '…' : t, 14, y + 12, { size: 12.5, color: age < 15 ? '#ffd9a8' : COL_DIM });
-      y += 19;
+      K.text(t.length > 30 ? t.slice(0, 29) + '…' : t, 14, y + 17, { size: 15, color: age < 15 ? '#ffd9a8' : COL_DIM });
+      y += 24;
     }
-    if (!log.length) K.text('HACHI からの報告はまだありません', 14, y + 12, { size: 12.5, color: COL_DIM });
+    if (!log.length) K.text('HACHI からの報告はまだありません', 14, y + 17, { size: 15, color: COL_DIM });
     // what HACHI can be asked (it works the answers out from what it is watching)
-    const bw = 119, by = H - 76, M = this.mind;
-    K.button(10, by, bw, 30, '状況分析', () => M.ask('sitrep'), { size: 12 });
-    K.button(10 + (bw + 6), by, bw, 30, '敵情報', () => M.ask('threat'), { size: 12 });
-    K.button(10 + (bw + 6) * 2, by, bw, 30, '帰還計画', () => M.ask('plan'), { size: 12 });
-    K.button(10 + (bw + 6) * 3, by, bw, 30, 'どうする？', () => M.ask('advice'), { style: 'warn', size: 12 });
-    const bw2 = 160, by2 = H - 40;
-    K.button(10, by2, bw2, 30, 'H8 状況報告', () => this.reportH8(), { size: 12 });
-    K.button(10 + bw2 + 6, by2, bw2, 30, 'B-29 状況', () => this.reportB29(), { style: this.link.ok ? 'normal' : 'disabled', size: 12 });
-    K.button(10 + (bw2 + 6) * 2, by2, bw2, 30, 'タブ 初期化', () => this.tabs.resetLayout(), { size: 12 });
-    if (M.learn > 0.05) K.text(`攻撃パターン解析 ${Math.round(M.learn * 100)}%`, 498, H - 84, { size: 11, color: COL_DIM, align: 'right' });
+    const M = this.mind;
+    if (M.learn > 0.05) K.text(`攻撃パターン解析 ${Math.round(M.learn * 100)}%`, 498, H - 102, { size: 13, color: COL_DIM, align: 'right' });
+    const bw = 117, by = H - 94;
+    K.button(10, by, bw, 38, '状況分析', () => M.ask('sitrep'), { size: 14 });
+    K.button(10 + (bw + 8), by, bw, 38, '敵情報', () => M.ask('threat'), { size: 14 });
+    K.button(10 + (bw + 8) * 2, by, bw, 38, '帰還計画', () => M.ask('plan'), { size: 14 });
+    K.button(10 + (bw + 8) * 3, by, bw, 38, 'どうする？', () => M.ask('advice'), { style: 'warn', size: 14 });
+    const bw2 = 158, by2 = H - 48;
+    K.button(10, by2, bw2, 40, 'H8 状況報告', () => this.reportH8(), { size: 14 });
+    K.button(10 + bw2 + 9, by2, bw2, 40, 'B-29 状況', () => this.reportB29(), { style: this.link.ok ? 'normal' : 'disabled', size: 14 });
+    K.button(10 + (bw2 + 9) * 2, by2, bw2, 40, 'ロック 全解除', () => this.hud.clear(), { style: this.hud.locks.length ? 'normal' : 'disabled', size: 14 });
   }
 
-  /** the suit tab */
-  drawSuit(K, H) {
+  /** the equipment tab: the suit, the shelter (tabs: the tab system, for its button row) */
+  drawGear(K, H, tabs) {
     const g = this.g, pl = g.player;
     const on = pl.suit && pl.suitH8;
-    K.text(on ? '小型宇宙服  着用中（HACHI と接続）' : '小型宇宙服  収納庫', 14, 24, { size: 14, color: on ? '#7cf0a6' : COL_DIM, weight: 600 });
+    K.text(on ? '小型宇宙服  着用中' : '小型宇宙服  収納庫', 14, 26, { size: 17, color: on ? '#7cf0a6' : '#d7e7f7', weight: 700 });
+    let y = 36;
     if (on) {
-      K.text('酸素', 14, 52, { size: 13, color: COL_DIM });
-      K.bar(96, 45, 290, 8, pl.suitO2, '#5fd0ff');
-      K.text(`${Math.round(pl.suitO2 * 100)}%`, 498, 53, { size: 13, color: '#d7e7f7', align: 'right', mono: true });
-      K.text('推進剤', 14, 74, { size: 13, color: COL_DIM });
-      K.bar(96, 67, 290, 8, pl.suitFuel, '#ffb347');
-      K.text(`${Math.round(pl.suitFuel * 100)}%`, 498, 75, { size: 13, color: '#d7e7f7', align: 'right', mono: true });
-    } else K.text('外の回路の応急処置に出るときに着ます。', 14, 52, { size: 12.5, color: COL_DIM });
-    const by = H - 40;
-    K.button(10, by, 240, 32, this.locker.target > 0.5 ? '収納庫を閉める' : 'スーツを出す', () => { this.locker.target = this.locker.target > 0.5 ? 0 : 1; this.lockerSound(); }, { style: this.locker.target > 0.5 ? 'on' : 'warn', size: 12 });
+      y = tabs.row(K, y, '酸素', pl.suitO2, `${Math.round(pl.suitO2 * 100)}%`, '#5fd0ff', pl.suitO2 < 0.2);
+      y = tabs.row(K, y, '推進剤', pl.suitFuel, `${Math.round(pl.suitFuel * 100)}%`, '#ffb347', pl.suitFuel < 0.15);
+    } else { K.text('外で回路の応急処置をするときに着ます。', 14, y + 16, { size: 14.5, color: COL_DIM }); y += 26; }
+    y += 10;
+    const S = this.shelter;
+    K.text('緊急シェルター（後部）', 14, y + 18, { size: 17, color: S && S.occupied ? '#ffb347' : '#d7e7f7', weight: 700 });
+    y += 28;
+    if (S) {
+      const o2 = S.o2Hours();
+      y = tabs.row(K, y, '独立酸素', o2 / 10, `${o2.toFixed(1)} 時間`, '#5fe08f', o2 < 1);
+      K.text(S.occupied ? '使用中 — 船内の操作はここから全てできます' : '推進・発電なし。H8 を失ってもここは残る。', 14, y + 15, { size: 14, color: S.occupied ? '#ffb347' : COL_DIM });
+    }
+    const list = [[this.locker.target > 0.5 ? '収納庫 閉' : 'スーツを出す', () => { this.locker.target = this.locker.target > 0.5 ? 0 : 1; this.lockerSound(); }, this.locker.target > 0.5 ? 'on' : 'warn']];
+    if (S) list.push([S.target > 0.5 ? 'シェルター 閉' : 'シェルター 開', () => S.toggle(), S.target > 0.5 ? 'on' : 'warn']);
+    list.push(['タブ配置 初期化', () => tabs.resetLayout()]);
+    tabs.buttons(K, H, list);
+  }
+
+  /** the equipment tab's header */
+  gearLine() {
+    const pl = this.g.player, S = this.shelter;
+    const suit = pl.suit && pl.suitH8 ? `スーツ O₂ ${Math.round(pl.suitO2 * 100)}%` : 'スーツ 収納';
+    return S ? `${suit}  ・  シェルター O₂ ${S.o2Hours().toFixed(1)} 時間${S.occupied ? '（使用中）' : ''}` : suit;
   }
 
   /** external-camera views around H8 (physics frame, for the camera mode while flying H8) */
@@ -2045,7 +2139,7 @@ export class H8Vessel {
       armour: { outer: this.armour.outer, inner: this.armour.inner },
       hatch: this.hatch ? this.hatch.target : 0,
       met: !!this.metAsphalt, hits: this.hits,
-      hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null,
+      hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)),
       learn: +this.mind.learn.toFixed(3),
     };
@@ -2063,6 +2157,7 @@ export class H8Vessel {
     this.metAsphalt = !!d.met;
     this.hits = d.hits || 0;
     this.hull.restore(d.hull);
+    this.display.restorePanels(d.panels);
     if (d.air) this.air = { o2: d.air.o2, n2: d.air.n2 };
     if (d.circuits) Object.assign(this.circuits, d.circuits);
     if (d.learn) this.mind.learn = d.learn;

@@ -83,7 +83,7 @@ html, body {
 #b-fire svg { fill: rgba(255, 210, 200, 0.9); }
 #b-auto.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
 /* H8's zoom (left side, under the top-left buttons) */
-#hud-zoom, #hud-suit, #hud-ext { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
+#hud-zoom, #hud-suit, #hud-ext, #hud-h8 { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
 /* the speed / where-to line, always in view (small, top centre) */
 #hud-info {
   position: absolute; left: 50%; transform: translateX(-50%); top: calc(1.1vh + env(safe-area-inset-top, 0px));
@@ -93,8 +93,40 @@ html, body {
   color: rgba(225, 238, 255, 0.92); background: rgba(6, 12, 22, 0.42); border: 1px solid rgba(160, 200, 255, 0.18);
   text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
 }
-#btns-zoom { position: absolute; left: calc(2.2vw + env(safe-area-inset-left, 0px)); top: 15vh; display: flex; flex-direction: column; gap: 1.5vh; }
+/* H8's camera controls: big zoom buttons, the shutter, the zoom ring along the bottom */
+#btns-zoom { position: absolute; left: calc(2.2vw + env(safe-area-inset-left, 0px)); top: 13vh; display: flex; flex-direction: column; align-items: center; gap: 1.6vh; }
+#btns-zoom .zbtn { width: 10.5vh; height: 10.5vh; padding: 2.3vh; }
 #b-zfol.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
+#b-zshot { width: 12.5vh; height: 12.5vh; padding: 1.6vh; border: 2.5px solid rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.12); }
+#b-zshot svg { fill: rgba(255, 255, 255, 0.92); }
+#b-zshot.on, #b-zshot:active { background: rgba(255, 255, 255, 0.45); }
+#zoom-ring {
+  position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(1.6vh + env(safe-area-inset-bottom, 0px));
+  width: 38vw; height: 7.5vh; border-radius: 1.2vh; pointer-events: auto; touch-action: none; overflow: hidden;
+  border: 1.5px solid rgba(220, 230, 255, 0.3); background: rgba(10, 16, 28, 0.5);
+}
+#zoom-ring.on { border-color: rgba(160, 225, 255, 0.75); background: rgba(30, 50, 80, 0.55); }
+#zoom-ring .zr-ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, rgba(220, 230, 255, 0.35) 0 2px, transparent 2px 1.2vh); -webkit-mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
+#zoom-ring .zr-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 600 clamp(9px, 2.2vh, 12px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: rgba(230, 240, 255, 0.85); text-shadow: 0 0 4px #000; pointer-events: none; }
+/* photographs: the toast after a shot, the gallery */
+#photo-toast { position: absolute; right: calc(2vw + env(safe-area-inset-right, 0px)); top: calc(12vh + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 1vh; padding: 0.8vh; border-radius: 1vh; background: rgba(6, 12, 22, 0.75); border: 1px solid rgba(160, 200, 255, 0.3); opacity: 0; transform: translateY(-1vh); transition: opacity 0.25s, transform 0.25s; pointer-events: none; }
+#photo-toast.on { opacity: 1; transform: none; }
+#photo-toast img { height: 9vh; border-radius: 0.6vh; }
+#photo-toast span { font: 600 clamp(10px, 2.3vh, 13px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; white-space: nowrap; }
+#photo-gallery { position: absolute; inset: 0; z-index: 50; background: rgba(3, 6, 12, 0.94); display: flex; flex-direction: column; color: #e6eefc; font-family: -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; touch-action: pan-y; }
+#photo-gallery.hidden, #photo-gallery .hidden { display: none !important; }
+#photo-gallery .pg-head { display: flex; align-items: center; justify-content: space-between; padding: calc(1.5vh + env(safe-area-inset-top, 0px)) calc(3vw + env(safe-area-inset-right, 0px)) 1.5vh calc(3vw + env(safe-area-inset-left, 0px)); font-size: clamp(13px, 3.2vh, 18px); font-weight: 700; }
+#photo-gallery .pg-grid { flex: 1; overflow-y: auto; display: grid; grid-template-columns: repeat(auto-fill, minmax(26vh, 1fr)); gap: 1.2vh; padding: 0 3vw 3vh; align-content: start; }
+#photo-gallery .pg-cell { position: relative; padding: 0; border: 1px solid rgba(160, 200, 255, 0.25); border-radius: 1vh; overflow: hidden; background: #000; aspect-ratio: 16 / 9; }
+#photo-gallery .pg-cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
+#photo-gallery .pg-cell span { position: absolute; left: 0; right: 0; bottom: 0; padding: 0.5vh 0.8vh; font-size: clamp(9px, 2vh, 12px); background: linear-gradient(transparent, rgba(0, 0, 0, 0.8)); text-align: left; color: #dfe9fa; }
+#photo-gallery .pg-empty { grid-column: 1 / -1; padding: 6vh 2vw; text-align: center; color: rgba(200, 215, 240, 0.7); font-size: clamp(12px, 2.8vh, 15px); }
+#photo-gallery .pg-view { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.2vh; padding: 0 3vw 2vh; min-height: 0; }
+#photo-gallery .pg-view img { max-width: 100%; max-height: 70vh; object-fit: contain; border-radius: 0.8vh; }
+#photo-gallery .pg-info { font-size: clamp(10px, 2.3vh, 13px); color: rgba(210, 225, 245, 0.85); text-align: center; }
+#photo-gallery .pg-row { display: flex; gap: 2vw; }
+#photo-gallery .pg-btn { font: 600 clamp(12px, 2.8vh, 15px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; background: rgba(40, 60, 95, 0.6); border: 1px solid rgba(160, 200, 255, 0.4); border-radius: 999px; padding: 1vh 2.6vh; }
+#photo-gallery .pg-btn.danger { background: rgba(110, 30, 25, 0.6); border-color: rgba(255, 120, 100, 0.5); }
 .hbtn {
   pointer-events: auto; width: 9vh; height: 9vh; border-radius: 50%; padding: 1.9vh;
   border: 1.5px solid rgba(220, 230, 255, 0.28); background: rgba(10, 16, 28, 0.42); color: #e6ecf7;

@@ -44,6 +44,9 @@ export const H8 = {
   // (rad, 0 = forward, + = starboard), its elevation span and half-width (rad, from the cockpit's
   // middle) and how deep the niche goes
   locker: { az: -1.83, el0: -0.32, el1: 0.44, hw: 0.25, depth: 0.42 },
+  // the emergency shelter right behind the cockpit (aft): a panel of the display slides aside
+  // over a sill to a narrow upright box for one person (its own air, no drive, no power plant)
+  shelter: { az: Math.PI, el0: -0.5, el1: 0.62, hw: 0.27, depth: 0.95, w: 0.78, top: 1.12 },
   // drive: the plasma drive's magnetic nozzle at the stern, four auxiliary engines round it
   driveZ: 3.15,
   aux: [[1.55, 45], [1.55, 135], [1.55, 225], [1.55, 315]],

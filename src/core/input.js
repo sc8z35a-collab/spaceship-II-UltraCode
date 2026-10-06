@@ -45,9 +45,15 @@ export class Input {
     window.addEventListener('keydown', (e) => { this.keys.add(e.code); });
     window.addEventListener('keyup', (e) => { this.keys.delete(e.code); });
     window.addEventListener('blur', () => { this.keys.clear(); this.touches.clear(); this._resetSticks(); });
-    el.addEventListener('wheel', (e) => { if (!this.enabled) return; e.preventDefault(); this.pinch *= Math.exp(e.deltaY * 0.0012); }, opt);
+    el.addEventListener('wheel', (e) => {
+      if (!this.enabled) return;
+      e.preventDefault();
+      // over something in the world that takes the wheel for itself (H8's tabs: their size)
+      if (this.captureWheel && this.mode !== 'focus' && this.captureWheel(e.clientX, e.clientY, e.deltaY)) return;
+      this.pinch *= Math.exp(e.deltaY * 0.0012);
+    }, opt);
     // HUD buttons
-    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto', 'b-zin', 'b-zout', 'b-zfol']) {
+    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto', 'b-zin', 'b-zout', 'b-zfol', 'b-zshot', 'b-shot']) {
       const b = document.getElementById(id);
       if (!b) continue;
       this.btn[id] = { down: false, pressed: false };
@@ -63,9 +69,10 @@ export class Input {
     if (!this.enabled) return;
     e.preventDefault();
     let zone = this._zone(e.clientX, e.clientY);
-    // something in the world can take the touch for itself (H8's tabs: tap, fold, drag)
+    // something in the world can take the touch for itself (H8's tabs: tap, fold, drag; a second
+    // finger while one is on a tab pinches that tab)
     let cap = null;
-    if (this.capture && this.mode !== 'focus') cap = this.capture(e.clientX, e.clientY);
+    if (this.capture && this.mode !== 'focus') cap = this.capture(e.clientX, e.clientY, this.touches);
     if (cap) zone = 'ui';
     const t = { id: e.pointerId, zone, cap, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, t0: performance.now(), moved: 0, type: e.pointerType };
     this.touches.set(e.pointerId, t);

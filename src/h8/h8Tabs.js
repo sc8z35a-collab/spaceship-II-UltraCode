@@ -1,80 +1,143 @@
-// The information on H8's all-round display, as tabs: small glass panels hanging on the inside
-// of the sphere (each turned to face Kaito's eye). Every tab has a slim header — its name and the
-// figures that matter at a glance — and a body with the rest and its buttons. Tap a header to
-// fold the tab down to just that strip (or open it again); drag a header to move the tab anywhere
-// on the sphere, floor included. They stay where they are put (kept in the browser and in the
-// save), never turn with the seat, fade away while the view is zoomed, and go see-through when
-// something locked lies behind them.
+// The information on H8's all-round display, as tabs. The display draws them on its own glass:
+// each tab lies on the inside of the sphere — curved with it, bent down onto the floor glass where
+// it reaches it — and never turns toward Kaito. The display lays each one out for the pilot's eye
+// point (where the eye is in the seat): from the seat a tab looks flat and square; from anywhere
+// else, like what it is — a picture on curved glass. One tab per subject:
+//   警報 (the alert strip, low ahead), 機体, 推進・電力, 航法, 兵装, カメラ, B-29, HACHI, 装備.
+// Each has a slim header (its name and the figures that matter at a glance) and a body with the
+// rest and its buttons. Tap a header to fold the tab down to that strip (or open it again); drag a
+// header to move the tab anywhere on the glass; pinch a tab with two fingers (or turn the mouse
+// wheel over it) to make it bigger or smaller. They stay as they are left (kept in the browser).
+//
+// They are drawn after the picture is finished (engine.uiScene, with the unmagnified view): the
+// zoom magnifies the outside, not the tabs — they stay where they are, as large and as opaque, and
+// work while zoomed. Where the display is dead (its camera gone, a broken panel) nothing of them
+// shows, and where a panel of the display has slid aside (the suit locker, the shelter) neither.
 import * as THREE from 'three';
 import { Kit, COL } from '../ui/monitorKit.js';
 import { H8, CAMERAS } from './h8Spec.js';
-import { LAYER_NEAR } from '../core/layers.js';
-import { fmtDist, altOf } from './h8Display.js';
+import { SEAT } from './h8Seat.js';
+import { fmtDist, altOf, DISPLAY_FX, FLOOR, CAM_DEAD } from './h8Display.js';
 import { QUALITY } from '../core/quality.js';
 
 const DEG = Math.PI / 180;
-const PX_DEG = 22;              // texels per degree
-const HEAD_DEG = 2.7;           // header height (degrees)
-const STORE = 'b29.h8tabs';
+const HEAD = 5.4;                // header height (degrees at scale 1)
+const STORE = 'b29.h8tabs.v3';
 const AMBER = '#ffb347';
+const K_MIN = 0.45, K_MAX = 1.8; // how far a tab can be shrunk / enlarged
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
-const UP = V(0, 1, 0);
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _m = new THREE.Matrix4(), _q = new THREE.Quaternion();
+const RT = Math.PI * 2;
 
-/** the tabs and where they start (az: 0 = H8's bow, + = starboard; el: from the cockpit's middle) */
+/** the tabs and where they start, as seen from the seat (az: 0 = H8's bow, + = starboard; el: up;
+ * w, h: size in degrees — twice what the first tabs had) */
 const DEFS = [
-  { id: 'alert', title: '警報', az: 0, el: -19, w: 34, h: 0, open: false, fixedClosed: true },
-  { id: 'h8', title: 'H8', az: -33, el: -3, w: 23, h: 14.5, open: true, color: AMBER },
-  { id: 'b29', title: 'B-29', az: 33, el: -3, w: 23, h: 14.5, open: true },
-  { id: 'wpn', title: '兵装', az: -60, el: 13, w: 21, h: 12.5, open: false, color: '#ff8a6a' },
-  { id: 'cam', title: 'カメラ・ズーム', az: 60, el: 13, w: 21, h: 12.5, open: false },
-  { id: 'nav', title: '航法', az: -21, el: 24, w: 23, h: 17, open: false },
-  { id: 'hachi', title: 'HACHI', az: 21, el: 24, w: 23, h: 15, open: false, color: AMBER },
-  { id: 'suit', title: 'スーツ', az: -86, el: -2, w: 20, h: 11.5, open: false },
+  { id: 'alert', title: '警報', az: 0, el: 19, w: 54, h: 0, open: false, fixedClosed: true },
+  { id: 'hull', title: '機体', az: -55, el: 10, w: 44, h: 29, open: true, color: AMBER },
+  { id: 'drive', title: '推進・電力', az: 55, el: 10, w: 44, h: 29, open: true, color: AMBER },
+  { id: 'nav', title: '航法', az: -55, el: 50, w: 44, h: 31, open: false },
+  { id: 'wpn', title: '兵装', az: 55, el: 50, w: 44, h: 31, open: false, color: '#ff8a6a' },
+  { id: 'cam', title: 'カメラ', az: -112, el: 10, w: 44, h: 31, open: false },
+  { id: 'b29', title: 'B-29', az: 112, el: 10, w: 46, h: 31, open: false },
+  { id: 'hachi', title: 'HACHI', az: -112, el: 50, w: 44, h: 30, open: false, color: AMBER },
+  { id: 'gear', title: '装備', az: 112, el: 50, w: 42, h: 27, open: false },
 ];
 
-function surfaceTex(w, h) {
-  const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
-  const tex = new THREE.CanvasTexture(canvas);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = false;
-  tex.minFilter = THREE.LinearFilter;
-  tex.anisotropy = 4;
-  return { canvas, tex, kit: new Kit(canvas) };
+/** the eye point the tabs are laid out for: the pilot's eye in the seat (H8-local) */
+const E0 = SEAT.G.clone().add(SEAT.eye);
+
+const VERT = /* glsl */`
+varying vec2 vUv;
+varying vec3 vP;
+void main(){ vUv = uv; vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
+
+const FRAG = /* glsl */`
+uniform sampler2D map;
+uniform float uOpacity;
+uniform vec3 uEye;
+uniform vec4 uDoorL;   // the suit locker's panel: az, half-width, el0, el1 (from the cockpit's middle)
+uniform float uDoorLOpen;
+uniform vec4 uDoorS;   // the shelter's panel
+uniform float uDoorSOpen;
+varying vec2 vUv;
+varying vec3 vP;
+${DISPLAY_FX}
+float inDoor(vec3 u, vec4 D){
+  float az = atan(u.x, -u.z);
+  float da = abs(mod(az - D.x + 3.14159265, 6.28318531) - 3.14159265);
+  float el = asin(clamp(u.y, -1.0, 1.0));
+  return step(da, D.y) * step(D.z, el) * step(el, D.w);
+}
+void main(){
+  vec3 u = normalize(vP - uC);
+  if (uDoorLOpen > 0.02 && inDoor(u, uDoorL) > 0.5) discard;
+  if (uDoorSOpen > 0.02 && inDoor(u, uDoorS) > 0.5) discard;
+  vec4 c = texture2D(map, vUv);
+  vec3 fc; float fa, dead;
+  displayFx(vP, normalize(vP - uEye), gl_FragCoord.xy, 1.0, fc, fa, dead);
+  if (dead > 0.5) discard;
+  float a = c.a * uOpacity;
+  if (a < 0.003) discard;
+  gl_FragColor = vec4(mix(c.rgb, fc, fa), a);
+  #include <colorspace_fragment>
+}`;
+
+/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways */
+function pxDeg() {
+  const q = QUALITY.level;
+  return q === 'low2' ? 10 : q === 'low' ? 14 : 19;
 }
 
 class Tab {
   constructor(sys, def) {
-    Object.assign(this, { id: def.id, title: def.title, az: def.az * DEG, el: def.el * DEG, wDeg: def.w, hDeg: def.h, open: def.open, color: def.color || COL.cyan, fixedClosed: !!def.fixedClosed });
+    Object.assign(this, { id: def.id, title: def.title, az: def.az * DEG, el: def.el * DEG, w: def.w, h: def.h, k: 1, open: def.open, color: def.color || COL.cyan, fixedClosed: !!def.fixedClosed });
     this.def = def;
     this.sys = sys;
-    this.fade = 1;
+    this.fade = 0;
     this.t = Math.random();
-    this.headS = this.surface(def.w, HEAD_DEG, 27);
-    if (def.h > 0) this.bodyS = this.surface(def.w, def.h, 26);
-    this.sub = 0;               // a tab's own page (B-29's pages)
+    this.sub = 0;               // a tab's own page (B-29's pages, list pages)
+    this.page = 0;
+    this.order = ++sys.z;
+    this.c = V(0, 0, -1); this.ex = V(1, 0, 0); this.ey = V(0, 1, 0);
+    this.dirty = true;
+    this.head = sys.surface(this, 'head');
+    this.body = null;           // made when first opened
+    this.resK = 1;              // the scale the canvases were made for
   }
 
-  surface(wDeg, hDeg, order) {
-    // about one texel per screen pixel on a phone held sideways (a little less on Low)
-    const k = QUALITY.level === 'low' ? 0.95 : 1.25;
-    const W = Math.round(wDeg * PX_DEG * k), H = Math.round(hDeg * PX_DEG * k);
-    const s = surfaceTex(W, H);
-    const mat = new THREE.MeshBasicMaterial({ map: s.tex, transparent: true, depthWrite: false, toneMapped: false, opacity: 0 });
-    // sized for 1 m away; scaled with the distance it hangs at
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(2 * Math.tan(wDeg * DEG / 2), 2 * Math.tan(hDeg * DEG / 2)), mat);
-    mesh.layers.set(LAYER_NEAR);
-    mesh.renderOrder = order;
-    mesh.frustumCulled = false;
-    mesh.matrixAutoUpdate = false;
-    mesh.userData.tab = this;
-    this.sys.group.add(mesh);
-    return Object.assign(s, { mesh, mat, W, H, wDeg, hDeg });
+  /** the tab's frame: c (its header's middle, unit from the eye point E0), ex (right), ey (up) —
+   * its face is the plane there square to c, projected from E0 onto the glass */
+  frame() {
+    const ca = Math.cos(this.az), sa = Math.sin(this.az), ce = Math.cos(this.el), se = Math.sin(this.el);
+    this.c.set(sa * ce, se, -ca * ce);
+    this.ex.set(ca, 0, sa);
+    this.ey.crossVectors(this.ex, this.c);
+    // extents in the tangent plane
+    this.hx = Math.tan(this.k * this.w / 2 * DEG);
+    this.hy = Math.tan(this.k * HEAD / 2 * DEG);
+    this.by = Math.tan(Math.min(80, this.k * (HEAD / 2 + this.h)) * DEG);
   }
 
-  /** the unit direction (H8-local, from the cockpit's middle) of the tab's header */
-  dir(out) { return out.set(Math.sin(this.az) * Math.cos(this.el), Math.sin(this.el), -Math.cos(this.az) * Math.cos(this.el)); }
+  /** where a direction from the eye point (unit) lands on the tab: null, or { part, u, v } */
+  at(u) {
+    const d = u.dot(this.c);
+    if (d < 0.2) return null;
+    const X = u.dot(this.ex) / d, Y = u.dot(this.ey) / d;
+    if (Math.abs(X) > this.hx) return null;
+    if (Y <= this.hy && Y >= -this.hy) return { part: 'head', u: (X + this.hx) / (2 * this.hx), v: (Y + this.hy) / (2 * this.hy) };
+    if (this.open && this.h > 0 && Y < -this.hy && Y >= -this.by) return { part: 'body', u: (X + this.hx) / (2 * this.hx), v: (Y + this.by) / (this.by - this.hy) };
+    return null;
+  }
+}
+
+/** the point of the glass seen from the eye point E0 along u (unit), just inside it */
+function onGlass(u, out) {
+  const Cc = H8.cockpitC, R = H8.cockpitR - 0.008;
+  const ox = E0.x - Cc.x, oy = E0.y - Cc.y, oz = E0.z - Cc.z;
+  const b = ox * u.x + oy * u.y + oz * u.z;
+  let s = -b + Math.sqrt(Math.max(0, b * b - (ox * ox + oy * oy + oz * oz - R * R)));
+  if (u.y < -1e-4) { const tf = (FLOOR.y + 0.004 - E0.y) / u.y; if (tf > 0 && tf < s) s = tf; }
+  return out.copy(u).multiplyScalar(s).add(E0);
 }
 
 export class H8Tabs {
@@ -82,17 +145,97 @@ export class H8Tabs {
     this.v = vessel;
     this.group = new THREE.Group();
     this.group.name = 'h8Tabs';
+    this.group.matrixAutoUpdate = false;
+    this.z = 0;
+    const D = vessel.display.uniforms, L = H8.locker, S = H8.shelter;
+    // the display's own state (cameras, panels, eye): one set of uniforms for every tab
+    this.uniforms = {
+      uCam: D.uCam, uCamH: D.uCamH, uCamFail: D.uCamFail, tPanel: D.tPanel, tFloorP: D.tFloorP,
+      uC: D.uC, uFloorY: D.uFloorY, uTime: D.uTime, uEye: D.uEye,
+      uDoorL: { value: new THREE.Vector4(L.az, L.hw, L.el0, L.el1) }, uDoorLOpen: { value: 0 },
+      uDoorS: { value: new THREE.Vector4(S.az, S.hw, S.el0, S.el1) }, uDoorSOpen: { value: 0 },
+    };
     this.tabs = DEFS.map((d) => new Tab(this, d));
     this.byId = Object.fromEntries(this.tabs.map((t) => [t.id, t]));
     this.visible = false;
     this.drag = null;
-    this.ray = new THREE.Raycaster();
-    this.ray.layers.enableAll();
     this.loadLayout();
+    for (const t of this.tabs) { t.resK = t.k; this.size(t, t.head); }
+  }
+
+  // ------------------------------------------------------------------ surfaces
+  /** a canvas, its texture and the curved mesh it is shown on */
+  surface(t, part) {
+    const canvas = document.createElement('canvas');
+    canvas.width = 4; canvas.height = 4;
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.generateMipmaps = false;
+    tex.minFilter = THREE.LinearFilter;
+    tex.anisotropy = 4;
+    const mat = new THREE.ShaderMaterial({
+      uniforms: Object.assign({ map: { value: tex }, uOpacity: { value: 0 } }, this.uniforms),
+      vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, depthTest: false,
+    });
+    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
+    mesh.frustumCulled = false;
+    mesh.visible = false;
+    this.group.add(mesh);
+    const S = { canvas, tex, kit: new Kit(canvas), mesh, mat, part, W: 4, H: 4 };
+    this.size(t, S);
+    return S;
+  }
+
+  /** the canvas resolution for the tab's present size (its shape on the glass is a rectangle of
+   * the tangent plane: the canvas has the same proportions) */
+  size(t, S) {
+    const px = pxDeg() * 57.2958;
+    const head = S.part === 'head';
+    const k = t.k;
+    const tw = 2 * Math.tan(k * t.w / 2 * DEG);
+    const th = head ? 2 * Math.tan(k * HEAD / 2 * DEG) : Math.tan(Math.min(80, k * (HEAD / 2 + t.h)) * DEG) - Math.tan(k * HEAD / 2 * DEG);
+    const sc = Math.min(1, 2048 / (tw * px));
+    const W = Math.round(tw * px * sc), H = Math.max(8, Math.round(th * px * sc));
+    if (W === S.W && H === S.H) return;
+    S.canvas.width = W; S.canvas.height = H;
+    S.W = W; S.H = H;
+    S.kit.resize();
+    S.tex.dispose();
+    S.tex.image = S.canvas;
+    S.tex.needsUpdate = true;
+    t.t = 999;
+  }
+
+  /** the curved meshes of a tab (after a move or a resize) */
+  shape(t) {
+    t.frame();
+    const mk = (S, y0, y1, nx, ny) => {
+      const pos = new Float32Array((nx + 1) * (ny + 1) * 3), uv = new Float32Array((nx + 1) * (ny + 1) * 2), idx = [];
+      for (let j = 0; j <= ny; j++) {
+        const Y = y0 + (y1 - y0) * j / ny;
+        for (let i = 0; i <= nx; i++) {
+          const X = -t.hx + 2 * t.hx * i / nx;
+          _v.copy(t.c).addScaledVector(t.ex, X).addScaledVector(t.ey, Y).normalize();
+          onGlass(_v, _v2);
+          const k = j * (nx + 1) + i;
+          pos[k * 3] = _v2.x; pos[k * 3 + 1] = _v2.y; pos[k * 3 + 2] = _v2.z;
+          uv[k * 2] = i / nx; uv[k * 2 + 1] = j / ny;
+          if (i < nx && j < ny) { const a = k, b = k + 1, c = k + nx + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
+        }
+      }
+      const g = S.mesh.geometry;
+      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+      g.setIndex(idx);
+      g.computeBoundingSphere();
+    };
+    mk(t.head, -t.hy, t.hy, 32, 2);
+    if (t.body) mk(t.body, -t.by, -t.hy, 32, 22);
+    t.dirty = false;
   }
 
   // ------------------------------------------------------------------ layout (kept)
-  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open }])); }
+  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open, k: +t.k.toFixed(3) }])); }
 
   applyLayout(L) {
     if (!L) return;
@@ -101,118 +244,101 @@ export class H8Tabs {
       if (!s) continue;
       if (Number.isFinite(s.az)) t.az = s.az * DEG;
       if (Number.isFinite(s.el)) t.el = Math.max(-78, Math.min(80, s.el)) * DEG;
+      if (Number.isFinite(s.k)) t.k = Math.max(K_MIN, Math.min(K_MAX, s.k));
       if (typeof s.open === 'boolean' && !t.fixedClosed) t.open = s.open;
+      t.dirty = true;
     }
   }
 
   loadLayout() { try { this.applyLayout(JSON.parse(localStorage.getItem(STORE) || 'null')); } catch (e) { /* none kept */ } }
   saveLayout() { try { localStorage.setItem(STORE, JSON.stringify(this.layout())); } catch (e) { /* storage off */ } }
 
-  /** put every tab back where it started */
+  /** every tab back where (and as big as) it started */
   resetLayout() {
-    for (const t of this.tabs) { t.az = t.def.az * DEG; t.el = t.def.el * DEG; t.open = t.def.open; }
+    for (const t of this.tabs) { t.az = t.def.az * DEG; t.el = t.def.el * DEG; t.open = t.def.open; t.k = 1; t.dirty = true; this.resize(t); }
     this.saveLayout();
   }
 
-  // ------------------------------------------------------------------ placement
-  /**
-   * per frame: eye (H8-local), shown, zoom (the tabs fade out while the view is magnified),
-   * locks (the display's locks: a tab goes see-through when one lies behind it)
-   */
-  place(dt, eye, shown, zoom, locks) {
+  // ------------------------------------------------------------------ per frame
+  /** shown: Kaito in the cockpit with the display on */
+  place(dt, shown) {
     this.visible = shown;
     this.group.visible = shown;
     if (!shown) return;
-    const D = this.v.display, Cc = H8.cockpitC;
-    const zf = Math.max(0, Math.min(1, 1 - (zoom - 1.15) / 0.6));
+    const v = this.v, D = v.display;
+    const pw = Math.max(0, Math.min(1, (D.power - 0.25) / 0.5));
+    this.uniforms.uDoorLOpen.value = v.locker ? v.locker.open : 0;
+    this.uniforms.uDoorSOpen.value = v.shelterOpen || 0;
     for (const t of this.tabs) {
-      // the header's spot on the sphere, seen from the eye
-      t.dir(_v);
-      const P = _v2.copy(_v).multiplyScalar(H8.cockpitR - 0.06).add(Cc);
-      const toP = P.clone().sub(eye);
-      const dist = toP.length();
-      const dirE = toP.divideScalar(dist);
-      const r = Math.min(dist, D.surface(eye, dirE)) - 0.05;
-      // facing the eye, upright to H8's vertical (unless right overhead)
-      const head = eye.clone().addScaledVector(dirE, r);
-      const up = Math.abs(dirE.y) > 0.96 ? V(-Math.sin(t.az), 0, Math.cos(t.az)).multiplyScalar(dirE.y > 0 ? 1 : -1) : UP;
-      _m.lookAt(eye, head, up);
-      _q.setFromRotationMatrix(_m);
-      const H = t.headS;
-      H.mesh.matrix.compose(head, _q, _v.set(r, r, r));
-      // something locked behind it: see-through
-      let behind = false;
-      if (t.open && t.bodyS && locks && locks.length) {
-        const bodyC = head.clone().addScaledVector(V(0, -1, 0).applyQuaternion(_q), r * Math.tan((HEAD_DEG + t.hDeg) * DEG / 2));
-        const dB = bodyC.sub(eye).normalize();
-        const hw = t.wDeg * DEG / 2, hh = t.hDeg * DEG / 2;
-        for (const l of locks) { const a = l.c.dir.angleTo(dB); if (a < Math.min(hw, hh) * 1.1) { behind = true; break; } }
-      }
-      const target = zf * (this.drag && this.drag.tab === t ? 0.85 : 1);
+      if (t.open && t.h > 0 && !t.body) { t.body = this.surface(t, 'body'); t.dirty = true; }
+      if (t.dirty) this.shape(t);
+      const target = pw * (this.drag && this.drag.tab === t ? 0.82 : 1);
       t.fade += (target - t.fade) * Math.min(1, dt * 6);
-      H.mat.opacity = t.fade;
-      H.mesh.visible = t.fade > 0.02;
-      if (t.bodyS) {
-        const B = t.bodyS;
-        const bodyOn = t.open && t.fade > 0.02;
-        B.mesh.visible = bodyOn;
-        if (bodyOn) {
-          // hung under the header, in the header's plane
-          const off = r * (Math.tan(HEAD_DEG * DEG / 2) + Math.tan(t.hDeg * DEG / 2));
-          const bc = head.clone().addScaledVector(V(0, -1, 0).applyQuaternion(_q), off);
-          B.mesh.matrix.compose(bc, _q, _v.set(r, r, r));
-          t.bodyFade = (t.bodyFade ?? 1) + ((behind ? 0.3 : 1) - (t.bodyFade ?? 1)) * Math.min(1, dt * 5);
-          B.mat.opacity = t.fade * t.bodyFade;
-        }
+      if (Math.abs(t.fade - target) < 0.002) t.fade = target;
+      const H = t.head;
+      H.mesh.visible = t.fade > 0.01;
+      H.mat.uniforms.uOpacity.value = t.fade;
+      H.mesh.renderOrder = t.order * 2;
+      if (t.body) {
+        const on = t.open && t.fade > 0.01;
+        t.body.mesh.visible = on;
+        t.body.mat.uniforms.uOpacity.value = t.fade;
+        t.body.mesh.renderOrder = t.order * 2 + 1;
       }
     }
-    this.group.updateMatrixWorld(true);
+    // the tabs ride with H8 (the scene they are drawn in has nothing else)
+    this.group.matrix.copy(v.root.matrixWorld);
+    this.group.matrixWorld.copy(v.root.matrixWorld);
+    for (const c of this.group.children) c.matrixWorld.copy(this.group.matrixWorld);
   }
 
   // ------------------------------------------------------------------ drawing
-  /** redraw the tabs in view a few times a second */
+  /** redraw the tabs a few times a second (open ones more often) */
   draw(dt, power) {
     if (!this.visible) return;
+    const q = QUALITY.level;
     for (const t of this.tabs) {
       if (t.fade < 0.02) continue;
       t.t += dt;
-      const low = QUALITY.level === 'low';
-      const rate = t.open ? (low ? 3 : 4) : (low ? 1.5 : 2);
+      const rate = t.open ? (q === 'low2' ? 2 : q === 'low' ? 3 : 4) : (q === 'low2' ? 1 : q === 'low' ? 1.5 : 2);
       if (t.t < 1 / rate) continue;
       t.t = 0;
       this.drawHead(t, power);
-      if (t.open && t.bodyS) this.drawBody(t, power);
+      if (t.open && t.body) this.drawBody(t, power);
     }
   }
 
-  frame(K, W, H, warn) {
+  frame(K, S, warn) {
     const g = K.g;
     K.buttons.length = 0;
     g.setTransform(1, 0, 0, 1, 0, 0);
-    g.clearRect(0, 0, W, H);
-    K.rect(1, 1, 512 - 2, H / K.s - 2, { fill: warn ? 'rgba(46,8,5,0.62)' : 'rgba(4,14,24,0.6)', stroke: warn ? 'rgba(255,90,60,0.55)' : 'rgba(130,220,255,0.25)', r: 9, lw: 1.4 });
+    g.clearRect(0, 0, S.W, S.H);
+    const Hk = 512 * S.H / S.W;
+    // (opaque enough to read over anything behind it)
+    K.rect(1, 1, 510, Hk - 2, { fill: warn ? 'rgba(52,9,6,0.9)' : 'rgba(5,12,21,0.88)', stroke: warn ? 'rgba(255,96,64,0.75)' : 'rgba(130,215,255,0.38)', r: S.part === 'head' ? 9 : 7, lw: 1.4 });
   }
 
   drawHead(t, power) {
-    const S = t.headS, K = S.kit, Hh = 512 * S.H / S.W;
+    const S = t.head, K = S.kit, Hh = 512 * S.H / S.W;
     const info = this.headInfo(t);
-    this.frame(K, S.W, S.H, info.warn);
-    if (power < 0.2) { S.tex.needsUpdate = true; return; }
-    K.text(t.title, 12, Hh / 2 + 1, { size: 15, color: info.warn ? COL.red : t.color, weight: 700, base: 'middle' });
-    K.text(info.text || '', 12 + Math.max(46, t.title.length * 15 + 14), Hh / 2 + 1, { size: 13, color: info.warn ? '#ffd0c8' : COL.text, base: 'middle', mono: !!info.mono });
-    if (!t.fixedClosed) {
-      // fold mark (the whole header folds / unfolds; it is also the handle to move the tab)
-      K.text(t.open ? '▾' : '▸', 498, Hh / 2 + 1, { size: 15, color: COL.dim, align: 'right', base: 'middle' });
+    this.frame(K, S, info.warn);
+    if (power >= 0.2) {
+      // a coloured rule at the left: what kind of tab this is
+      K.rect(6, 8, 5, Hh - 16, { fill: info.warn ? COL.red : t.color, stroke: null, r: 2 });
+      K.text(t.title, 18, Hh / 2 + 1, { size: 19, color: info.warn ? '#ffb3a6' : t.color, weight: 700, base: 'middle' });
+      const x0 = 18 + Math.max(50, measure(K, t.title, 19, 700) + 14);
+      K.text(fit(K, info.text || '', 472 - x0, 15), x0, Hh / 2 + 1, { size: 15, color: info.warn ? '#ffd0c8' : COL.text, base: 'middle', mono: !!info.mono });
+      if (!t.fixedClosed) K.text(t.open ? '▾' : '▸', 502, Hh / 2 + 1, { size: 19, color: COL.dim, align: 'right', base: 'middle' });
     }
     S.tex.needsUpdate = true;
   }
 
   drawBody(t, power) {
-    const S = t.bodyS, K = S.kit, H = 512 * S.H / S.W;
-    this.frame(K, S.W, S.H, false);
+    const S = t.body, K = S.kit, H = 512 * S.H / S.W;
+    this.frame(K, S, false);
     if (power >= 0.2) {
       const fn = this['body_' + t.id];
-      if (fn) fn.call(this, K, H, t);
+      if (fn) { try { fn.call(this, K, H, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); } }
     }
     S.tex.needsUpdate = true;
   }
@@ -227,66 +353,245 @@ export class H8Tabs {
         if (a) return { text: a, warn: true };
         const last = g.asphalt.log.filter((e) => e.who === 'hachi').slice(-1)[0];
         const say = last && g.time - last.t < 12000 ? last.text.replace(/^HACHI: /, '') : null;
-        return { text: say ? (say.length > 34 ? say.slice(0, 33) + '…' : say) : `ロック ${v.display.locks.length}/8 ・ 見つめるとロックオン ・ タブは見出しで移動／折りたたみ` };
+        const n = v.hud ? v.hud.locks.length : 0;
+        return { text: say || `ロック ${n} ・ 中央の枠に収めてロック ・ ロック枠を2回タップでそこへ向かう` };
       }
-      case 'h8': {
+      case 'hull': {
+        const z = g.lifeSupport.z.h8;
+        const kPa = z ? z.n2 + z.o2 + z.co2 : 101.3;
+        const bad = v.hull.cams.filter((c) => c < CAM_DEAD).length;
+        return { text: `外部装甲 ${Math.round(v.armour.outer * 100)}%  内部 ${Math.round(v.armour.inner * 100)}%  気圧 ${kPa.toFixed(0)} kPa${bad ? `  カメラ喪失 ${bad}` : ''}`, warn: v.armour.inner < 0.15 || kPa < 80 || bad > 0 };
+      }
+      case 'drive': {
         const fl = docked ? g.flight : f;
-        const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, new THREE.Vector3())).length();
-        return { text: `${vRel.toFixed(vRel < 100 ? 1 : 0)} m/s  推進剤 ${Math.round(f.fuel * 100)}%  装甲 ${Math.round(v.armour.outer * 100)}%`, warn: v.armour.inner < 0.15 || f.fuel < 0.05, mono: false };
+        const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, _v3)).length();
+        const mode = v.driveModeName ? v.driveModeName() : (fl.ultra ? 'ULTRA' : '通常');
+        return { text: `${vRel.toFixed(vRel < 100 ? 1 : 0)} m/s  ${mode}  推進剤 ${Math.round(f.fuel * 100)}%  蓄電 ${Math.round(v.power.smes / H8.smesMJ * 100)}%`, warn: f.fuel < 0.05 || v.power.smes < H8.smesMJ * 0.05 };
       }
-      case 'b29': {
-        if (docked) return { text: '結合中・ケーブル接続' };
-        const L = v.link;
-        return { text: L.ok ? `${fmtDist(L.d)}  リンク ${Math.round(v.linkQuality() * 100)}%` : `${fmtDist(L.d)}  通信圏外`, warn: !L.ok };
-      }
+      case 'nav': return { text: v.navLine() };
       case 'wpn': {
         const W = g.weapons;
         if (!W) return { text: '—' };
         const n = g.drones ? g.drones.list.filter((d) => d.alive && (d.state === 'attack' || d.state === 'hunt') && d.pos.distanceTo(f.pos) < 90e3).length : 0;
-        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  弾 ${W.ammo.missile}  ${W.auto.hachi ? '自動' : '手動'}${n ? `  敵 ${n}` : ''}`, warn: n > 0 };
+        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  ミサイル ${W.ammo.missile}  ${W.auto.hachi ? '自動' : '手動'}${n ? `  敵 ${n}` : ''}`, warn: n > 0 };
       }
       case 'cam': {
-        const z = v.zoom ? v.zoom.z : 1;
-        const bad = v.hull.cams.filter((c) => c < 0.5).length;
-        return { text: `×${z < 10 ? z.toFixed(1) : z.toFixed(0)}${v.zoom && v.zoom.follow ? ' 追従' : ''}  カメラ ${4 - bad}/4`, warn: bad > 0 };
+        const Z = v.zoom, z = Z ? Z.z : 1;
+        const ok = v.hull.cams.filter((c) => c >= CAM_DEAD).length;
+        return { text: `×${z < 10 ? z.toFixed(1) : z.toFixed(0)}${Z && Z.follow && Z.target ? '  追従 ' + (Z.target.short || Z.target.name) : ''}  カメラ ${ok}/4${g.photos ? `  写真 ${g.photos.count}` : ''}`, warn: ok < 4 };
       }
-      case 'nav': return { text: v.navLine() };
+      case 'b29': {
+        if (docked) return { text: '結合中・ケーブル接続' };
+        const L = v.link;
+        return { text: L.ok ? `${fmtDist(L.d)}  リンク ${Math.round(v.linkQuality() * 100)}%  ${v.b29State()}` : `${fmtDist(L.d)}  通信圏外`, warn: !L.ok };
+      }
       case 'hachi': return { text: v.hachiLine ? v.hachiLine() : '' };
-      case 'suit': return { text: v.suitLine ? v.suitLine() : '' };
+      case 'gear': return { text: v.gearLine ? v.gearLine() : (v.suitLine ? v.suitLine() : '') };
       default: return { text: '' };
     }
   }
 
   // ------------------------------------------------------------------ bodies
-  body_h8(K, H) {
-    const v = this.v, g = v.g, f = v.flight, P = v.power, docked = v.mode === 'docked';
-    const fl = docked ? g.flight : f;
-    const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, new THREE.Vector3())).length();
-    const modeTxt = docked ? 'B-29 と結合' : v.pilot.state === 'dock' ? 'ドッキング進入' : v.pilot.state === 'undock' ? '離脱中' : v.pilot.goal ? 'HACHI 自律航行' : '手動操縦';
-    K.text(modeTxt, 14, 24, { size: 13, color: COL.dim });
-    K.text(`${vRel.toFixed(vRel < 100 ? 1 : 0)} m/s`, 14, 52, { size: 24, color: COL.text, weight: 600, mono: true });
-    K.text(`高度 ${(altOf(fl.pos) / 1000).toFixed(1)} km`, 498, 50, { size: 14, color: COL.text, align: 'right', mono: true });
-    let y = 68;
-    const row = (label, val, txt, col, warn) => {
-      K.text(label, 14, y + 10, { size: 13, color: warn ? COL.red : COL.dim });
-      K.bar(96, y + 3, 290, 8, val, warn ? COL.red : col);
-      K.text(txt, 498, y + 11, { size: 13, color: warn ? COL.red : COL.text, align: 'right', mono: true });
-      y += 22;
-    };
-    row('推進剤', f.fuel, `${Math.round(f.fuel * 100)}%`, AMBER, f.fuel < 0.15);
-    row('蓄電', P.smes / H8.smesMJ, `${Math.round(P.smes / H8.smesMJ * 100)}%`, COL.cyan, P.smes < H8.smesMJ * 0.1);
-    row('外部装甲', v.armour.outer, `${Math.round(v.armour.outer * 100)}%`, COL.green, v.armour.outer < 0.35);
-    row('内部装甲', v.armour.inner, `${Math.round(v.armour.inner * 100)}%`, COL.green, v.armour.inner < 0.5);
-    if (v.circuits) row('回路', v.circuitHealth(), `${Math.round(v.circuitHealth() * 100)}%`, COL.violet, v.circuitHealth() < 0.5);
+  // (a body is 512 units wide and about 360 high; text from 14 units up, rows of 27: big enough
+  // to read at a glance from the seat)
+
+  /** a labelled bar row; returns the next y */
+  row(K, y, label, val, txt, col, warn) {
+    K.text(label, 14, y + 14, { size: 15, color: warn ? '#ff8a7a' : COL.dim });
+    K.bar(118, y + 6, 250, 10, val, warn ? COL.red : col);
+    K.text(txt, 498, y + 15, { size: 15, color: warn ? '#ff8a7a' : COL.text, align: 'right', mono: true });
+    return y + 27;
+  }
+
+  /** a row of buttons along the bottom: [[label, fn, style], ...] */
+  buttons(K, H, list) {
+    const n = list.length, gap = 8, bw = (492 - gap * (n - 1)) / n, by = H - 48;
+    list.forEach(([label, fn, style], i) => K.button(10 + i * (bw + gap), by, bw, 40, label, fn, { style: style || 'normal', size: 14.5 }));
+  }
+
+  /** small boxes side by side: [{ label, val (0..1), txt, bad }] */
+  chips(K, y, list, h = 44) {
+    const n = list.length, cw = 492 / n;
+    list.forEach((c, i) => {
+      const x = 10 + i * cw;
+      K.rect(x + 2, y, cw - 4, h, { fill: c.bad ? 'rgba(255,77,61,0.18)' : 'rgba(255,255,255,0.04)', stroke: c.bad ? COL.red : 'rgba(150,190,230,0.22)', r: 6 });
+      K.text(c.label, x + cw / 2, y + 17, { size: 13, color: c.bad ? '#ff9a8a' : COL.dim, align: 'center' });
+      if (c.txt) K.text(c.txt, x + cw / 2, y + 35, { size: 13.5, color: c.bad ? COL.red : COL.text, align: 'center', mono: true });
+      else K.bar(x + 12, y + 28, cw - 24, 6, c.val, c.bad ? COL.red : c.val < 0.9 ? AMBER : COL.green);
+    });
+    return y + h + 8;
+  }
+
+  body_hull(K, H) {
+    const v = this.v, g = v.g, docked = v.mode === 'docked';
+    const holes = v.hull.dents.filter((d) => d.hole && !d.patched).length;
+    const integ = Math.round((v.armour.outer * 0.45 + v.armour.inner * 0.4 + (v.circuitHealth ? v.circuitHealth() : 1) * 0.15) * 100);
+    K.text(`機体 ${integ}%`, 14, 30, { size: 22, color: integ < 50 ? COL.red : COL.text, weight: 700 });
+    K.text(`被弾 ${v.hits}  へこみ ${v.hull.dents.length}  貫通 ${holes}`, 498, 28, { size: 14, color: holes ? '#ff8a7a' : COL.dim, align: 'right' });
+    let y = 42;
+    y = this.row(K, y, '外部装甲', v.armour.outer, `${Math.round(v.armour.outer * 100)}%`, COL.green, v.armour.outer < 0.35);
+    y = this.row(K, y, '内部装甲', v.armour.inner, `${Math.round(v.armour.inner * 100)}%`, COL.green, v.armour.inner < 0.5);
     const z = g.lifeSupport.z.h8;
     const kPa = z ? z.n2 + z.o2 + z.co2 : 101.3;
-    K.text(`推力 ×${docked ? g.flight.mul : 6 * f.mul}   ${P.feed ? `給電 ${Math.round(P.feedMW)} MW` : '内部電源'}   船内 ${kPa.toFixed(1)} kPa`, 14, y + 12, { size: 12.5, color: kPa < 90 ? COL.red : COL.dim, mono: true });
-    y += 24;
-    const bw = 116, by = Math.min(y + 4, H - 40);
-    K.button(10, by, bw, 32, P.feedOn ? '給電 ON' : '給電 OFF', () => v.toggleFeed(), { style: P.feedOn ? 'on' : 'normal', size: 12 });
-    K.button(10 + (bw + 6), by, bw, 32, P.boost ? 'ブースト' : 'ブースト切', () => v.toggleBoost(), { style: P.boost ? 'on' : 'normal', size: 12 });
-    K.button(10 + (bw + 6) * 2, by, bw, 32, v.xfer === 'toB29' ? '移送 停止' : '推進剤→B29', () => v.setXfer('toB29'), { style: !docked ? 'disabled' : v.xfer === 'toB29' ? 'warn' : 'normal', size: 11 });
-    K.button(10 + (bw + 6) * 3, by, bw, 32, docked ? (v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開') : 'タブ 初期化', () => (docked ? v.portTapped() : this.resetLayout()), { size: 11 });
+    const o2 = z ? z.o2 / Math.max(1, kPa) : 0.21;
+    y = this.row(K, y, '船内気圧', kPa / 101.3, `${kPa.toFixed(1)} kPa`, COL.cyan, kPa < 90);
+    y = this.row(K, y, '酸素', o2 / 0.21, `${(o2 * 100).toFixed(1)}%${v._leak ? ' 漏洩' : ''}`, COL.cyan, o2 < 0.17 || !!v._leak);
+    y += 4;
+    if (v.circuits) {
+      const names = { drive: '推進制御', power: '電力', sensor: 'センサー', comms: '通信', fire: '射撃管制' };
+      y = this.chips(K, y, Object.keys(names).map((k) => ({ label: names[k], val: v.circuits[k] ?? 1, bad: (v.circuits[k] ?? 1) < 0.5 })));
+    }
+    y = this.chips(K, y, CAMERAS.map((c, i) => { const h = v.hull.cams[i]; return { label: c.name.split(' ')[0], txt: h < CAM_DEAD ? '喪失' : `${Math.round(h * 100)}%`, bad: h < CAM_DEAD }; }));
+    const broken = v.display.panelHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0) + v.display.floorHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0);
+    if (broken && y < H - 70) K.text(`表示パネル 破損 ${broken} 枚`, 14, y + 12, { size: 14, color: '#ff8a7a' });
+    this.buttons(K, H, [
+      ['H8 状況報告', () => v.reportH8()],
+      [docked ? (v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開') : '下ハッチ', () => (docked ? v.portTapped() : null), docked ? 'normal' : 'disabled'],
+      ['HACHI 診断', () => v.mind && v.mind.ask('sitrep')],
+    ]);
+  }
+
+  body_drive(K, H) {
+    const v = this.v, g = v.g, f = v.flight, P = v.power, docked = v.mode === 'docked';
+    const fl = docked ? g.flight : f;
+    const vRel = fl.vel.clone().sub(fl.refVelocity(fl.pos, _v3)).length();
+    const sv = vRel < 100 ? vRel.toFixed(1) : vRel < 1e4 ? vRel.toFixed(0) : (vRel / 1000).toFixed(2);
+    K.text(sv, 14, 40, { size: 34, color: COL.text, weight: 600, mono: true });
+    K.text(vRel < 1e4 ? 'm/s' : 'km/s', 20 + measure(K, sv, 34, 600, true), 40, { size: 15, color: COL.dim });
+    K.text(`高度 ${(altOf(fl.pos) / 1000).toFixed(1)} km`, 498, 22, { size: 14.5, color: COL.text, align: 'right', mono: true });
+    const vmax = v.maxSpeedNow ? v.maxSpeedNow() : fl.vUltra;
+    K.text(`最高 ${vmax > 9500 ? (vmax / 1000).toFixed(1) + ' km/s' : Math.round(vmax) + ' m/s'}`, 498, 42, { size: 14, color: COL.dim, align: 'right', mono: true });
+    let y = 54;
+    const modes = v.driveModes ? v.driveModes() : null;
+    if (modes) {
+      const bw = 492 / modes.length;
+      modes.forEach((m, i) => K.button(10 + i * bw + 3, y, bw - 6, 36, m.label, () => v.setDriveMode(m.id), { style: m.on ? (m.id === 'max' ? 'danger' : m.id === 'ultra' ? 'warn' : 'on') : m.ok ? 'normal' : 'disabled', size: 15 }));
+      y += 44;
+    }
+    y = this.row(K, y, '推進剤', f.fuel, `${Math.round(f.fuel * 100)}%`, AMBER, f.fuel < 0.15);
+    y = this.row(K, y, '蓄電', P.smes / H8.smesMJ, `${Math.round(P.smes / H8.smesMJ * 100)}%`, COL.cyan, P.smes < H8.smesMJ * 0.1);
+    y = this.row(K, y, '原子炉', P.reactor, `${Math.round(P.reactor * H8.reactorMW)} MW`, COL.green, P.reactor > 0.97);
+    const net = P.reactor * H8.reactorMW + P.feedMW - P.loadMW;
+    K.text(`消費 ${Math.round(P.loadMW)} MW   収支 ${net >= 0 ? '+' : ''}${Math.round(net)} MW${P.feed ? `   給電 ${Math.round(P.feedMW)}` : ''}`, 14, y + 15, { size: 14.5, color: net < -1 ? '#ff8a7a' : COL.dim, mono: true });
+    y += 25;
+    const sm = net < -1 ? P.smes / -net : Infinity;
+    if (Number.isFinite(sm) && y < H - 60) K.text(`蓄電が尽きるまで ${sm > 3600 ? (sm / 3600).toFixed(1) + ' 時間' : sm > 60 ? Math.round(sm / 60) + ' 分' : Math.round(sm) + ' 秒'}`, 14, y + 14, { size: 14.5, color: sm < 120 ? COL.red : AMBER });
+    this.buttons(K, H, [
+      [P.feedOn ? '給電 ON' : '給電 OFF', () => v.toggleFeed(), P.feedOn ? 'on' : 'normal'],
+      [P.boost ? 'ブースト ON' : 'ブースト OFF', () => v.toggleBoost(), P.boost ? 'on' : 'normal'],
+      [v.xfer === 'toB29' ? '移送 停止' : '推進剤→B-29', () => v.setXfer('toB29'), !docked ? 'disabled' : v.xfer === 'toB29' ? 'warn' : 'normal'],
+    ]);
+  }
+
+  body_nav(K, H, t) {
+    const v = this.v, g = v.g, P = v.pilot, L = v.linkState();
+    let y = 8;
+    const btn = (label, fn, style, x, w) => K.button(x, y, w, 34, label, fn, { style, size: 14 });
+    if (v.mode === 'docked') {
+      btn(v.pending ? 'ハッチを閉めて分離中…' : v.crew ? 'B-29 から分離（単独飛行）' : 'H8 を分離（護衛）', () => v.release(v.crew ? 'free' : 'escort'), v.pending ? 'on' : 'danger', 10, 492);
+      y += 40;
+      if (!v.crew) { btn('分離して停泊軌道へ', () => v.release('home'), 'normal', 10, 492); y += 40; }
+    } else {
+      const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      btn(v.goalKind === 'b29' ? 'B-29 へ帰還中（中止）' : 'B-29 へ帰還・結合', () => (v.goalKind === 'b29' ? v.goal('hold') : v.call()), v.goalKind === 'b29' ? 'on' : 'warn', 10, 243);
+      btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ', () => (coming ? ap.disengage() : v.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled', 259, 243);
+      y += 40;
+      btn(v.goalKind === 'escort' ? '護衛中' : 'B-29 を護衛', () => v.goal('escort'), v.goalKind === 'escort' ? 'on' : L.ok ? 'normal' : 'disabled', 10, 160);
+      btn(v.crew ? (P.goal ? '手動にする' : '手動操縦中') : '待機', () => v.goal('hold'), !P.goal ? 'on' : 'normal', 176, 160);
+      btn('停泊軌道へ', () => v.sendHome(), v.goalKind === 'home' ? 'on' : 'normal', 342, 160);
+      y += 40;
+      // the focused target: go there (a double tap on its box does the same)
+      const F = v.hud && v.hud.primary();
+      if (F) { btn(`フォーカス目標へ：${F.c.short || F.c.name}  ${fmtDist(F.c.dist)}`, () => v.goTo(F.c), v.goalKind === 'target' && v.goalId === F.c.id ? 'on' : 'warn', 10, 492); y += 40; }
+    }
+    if (v.mode !== 'docked' && y < H - 40) {
+      const list = g.stations.list;
+      const RH = 29, rows = Math.max(1, Math.floor((H - y - 26) / RH));
+      const pages = Math.ceil(list.length / rows);
+      t.page = Math.min(t.page, pages - 1);
+      K.text('自律航行先', 14, y + 15, { size: 13.5, color: COL.dim });
+      if (pages > 1) K.button(402, y - 1, 100, 22, `${t.page + 1}/${pages} ▸`, () => { t.page = (t.page + 1) % pages; }, { size: 12 });
+      y += 24;
+      list.slice(t.page * rows, t.page * rows + rows).forEach((s) => {
+        const sel = v.goalKind === s.id;
+        K.rect(10, y, 492, 25, { fill: sel ? 'rgba(95,208,255,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.16)', r: 6 });
+        K.text(fit(K, s.name.replace('（修理基地）', ''), 330, 15), 20, y + 18, { size: 15, color: (s.dmg ? s.dmg.status : 'ok') === 'ok' ? COL.text : COL.dim });
+        K.text(fmtDist(s.pos.distanceTo(v.flight.pos)), 494, y + 18, { size: 14, color: COL.dim, align: 'right', mono: true });
+        K.buttons.push({ x: 10, y, w: 492, h: 25, onTap: () => v.goal(s.id) });
+        y += RH;
+      });
+    }
+  }
+
+  body_wpn(K, H) {
+    const v = this.v, g = v.g, W = g.weapons;
+    if (!W) return;
+    let y = 6;
+    y = this.row(K, y, '25mm 砲', W.ammo.cannon / 1600, `${W.ammo.cannon}`, AMBER, W.ammo.cannon < 200);
+    y = this.row(K, y, 'レール', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%` : `発射可 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
+    y = this.row(K, y, 'ミサイル', W.ammo.missile / 12, `${W.ammo.missile}/12`, '#ff8a6a', W.ammo.missile <= 0);
+    // what the guns are on: the locks, the focus first, with the fire control's odds of a hit
+    K.text('目標      距離   命中見込み 25mm / レール', 14, y + 15, { size: 13, color: COL.dim });
+    y += 22;
+    const T = W.targets('h8');
+    if (!T.length) { K.text('目標なし — 中央の枠に収めてロック', 14, y + 16, { size: 14.5, color: COL.dim }); y += 26; }
+    const prim = W.lastTarget;
+    for (const x of T) {
+      if (y > H - 80) break;
+      const sel = prim && prim.id === x.id;
+      K.rect(10, y, 492, 26, { fill: sel ? 'rgba(255,90,60,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.red : 'rgba(150,190,230,0.18)', r: 6 });
+      K.text(fit(K, `${sel ? '◆ ' : ''}${x.name}`, 200, 14.5), 18, y + 18, { size: 14.5, color: x.threat ? '#ffb3a6' : COL.text });
+      const pc = W.hitChance ? W.hitChance(x, 'cannon') : null, pr = W.hitChance ? W.hitChance(x, 'rail') : null;
+      K.text(`${fmtDist(x.dist)}   ${pc != null ? pct(pc) : '—'} / ${pr != null ? pct(pr) : '—'}`, 494, y + 18, { size: 14, color: COL.text, align: 'right', mono: true });
+      K.buttons.push({ x: 10, y, w: 492, h: 26, onTap: () => v.hud && v.hud.setPrimary(x.id) });
+      y += 30;
+    }
+    this.buttons(K, H, [
+      [W.auto.hachi ? 'HACHI 自動' : '手動射撃', () => W.toggleAuto('h8'), W.auto.hachi ? 'on' : 'normal'],
+      ['レールガン', () => W.fireRail(true), W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled'],
+      ['ミサイル斉射', () => W.salvoMissiles(true), W.ammo.missile > 0 ? 'danger' : 'disabled'],
+    ]);
+  }
+
+  body_cam(K, H, t) {
+    const v = this.v, g = v.g, Z = v.zoom;
+    let y = 6;
+    y = this.chips(K, y, CAMERAS.map((c, i) => { const h = v.hull.cams[i]; return { label: c.name.split(' ')[0] + ' ' + (c.name.split(' ')[1] || ''), txt: h < CAM_DEAD ? '信号なし' : h > 0.8 ? '正常' : `劣化 ${Math.round(h * 100)}%`, bad: h < CAM_DEAD }; }));
+    if (!Z) return;
+    const zs = `×${Z.z < 10 ? Z.z.toFixed(1) : Z.z < 100 ? Z.z.toFixed(1) : Z.z.toFixed(0)}`;
+    K.text(zs, 14, y + 26, { size: 26, color: COL.text, weight: 600, mono: true });
+    K.text(`${Math.round(Z.focal()).toLocaleString()} mm 相当`, 498, y + 12, { size: 13.5, color: COL.dim, align: 'right', mono: true });
+    K.text(Z.digital > 1.01 ? `光学 ×${Z.OPT}  デジタル ×${Z.digital.toFixed(1)}` : `光学 ×${Z.optical.toFixed(1)} / ${Z.OPT}`, 498, y + 30, { size: 13.5, color: Z.digital > 1.01 ? AMBER : COL.cyan, align: 'right', mono: true });
+    y += 38;
+    // the zoom bar: optical then digital — tap along it to set the magnification
+    const bx = 14, bw = 484, ow = bw * Math.log(Z.OPT) / Math.log(Z.OPT * Z.DIG);
+    K.bar(bx, y, ow - 2, 9, Math.min(1, Math.log(Z.z) / Math.log(Z.OPT)), COL.cyan);
+    K.bar(bx + ow + 2, y, bw - ow - 2, 9, Math.max(0, Math.log(Z.digital) / Math.log(Z.DIG)), AMBER);
+    K.buttons.push({ x: bx, y: y - 10, w: bw, h: 29, onTap: null, zoomBar: true });
+    this._zoomBar = { x: bx, w: bw, tab: t };
+    y += 18;
+    // what to follow (anything the display tracks)
+    const C = (v.cands || []).slice().sort((a, b) => (b.locked ? 1 : 0) - (a.locked ? 1 : 0) || a.dist - b.dist);
+    const RH = 27, rows = Math.max(1, Math.floor((H - 56 - y - 22) / RH));
+    const pages = Math.max(1, Math.ceil(C.length / rows));
+    t.page = Math.min(t.page, pages - 1);
+    K.text('自動追従の対象（タップで選択）', 14, y + 14, { size: 13.5, color: COL.dim });
+    if (pages > 1) K.button(402, y - 1, 100, 22, `${t.page + 1}/${pages} ▸`, () => { t.page = (t.page + 1) % pages; }, { size: 12 });
+    y += 22;
+    for (const c of C.slice(t.page * rows, t.page * rows + rows)) {
+      const on = Z.follow && Z.target && Z.target.id === c.id;
+      K.rect(10, y, 492, 23, { fill: on ? 'rgba(95,224,143,0.18)' : 'rgba(255,255,255,0.04)', stroke: on ? COL.green : 'rgba(150,190,230,0.16)', r: 6 });
+      K.text(fit(K, `${on ? '● ' : c.locked ? '◇ ' : ''}${c.name}`, 330, 14.5), 18, y + 17, { size: 14.5, color: c.threat ? '#ffb3a6' : COL.text });
+      K.text(fmtDist(c.dist || 0), 494, y + 17, { size: 13.5, color: COL.dim, align: 'right', mono: true });
+      K.buttons.push({ x: 10, y, w: 492, h: 23, onTap: () => (on ? Z.toggleFollow() : Z.followTarget(c)) });
+      y += RH;
+    }
+    this.buttons(K, H, [
+      ['◉ 撮影', () => g.photos && g.photos.shoot(), 'warn'],
+      [`写真 ${g.photos ? g.photos.count : 0}`, () => g.photos && g.photos.openGallery()],
+      [Z.follow ? '追従 解除' : '追従', () => Z.toggleFollow(), Z.follow ? 'on' : 'normal'],
+      ['等倍', () => Z.reset()],
+    ]);
   }
 
   body_b29(K, H, t) {
@@ -296,11 +601,10 @@ export class H8Tabs {
       // B-29's own pages, run from here over the cable
       const pages = [['nav', '航法'], ['sys', '系統'], ['life', '生命維持'], ['reactor', '原子炉'], ['comms', '通信']];
       const page = pages[t.sub % pages.length][0];
-      // the page draws into a monitor of its own size; this body shows it below a row of page tabs
-      if (!t.pm) {
+      if (!t.pm || t.pm.H !== Math.round(1024 * (H - 36) / 512)) {
         const c = document.createElement('canvas');
-        c.width = 512 * 2; c.height = Math.round(512 * 2 * (H - 30) / 512);
-        t.pm = { id: page, slot: { pos: v.root.position, w: 1, h: (H - 30) / 512, res: 1024 }, canvas: c, kit: new Kit(c), W: c.width, H: c.height, zoom: 1, tab: 0 };
+        c.width = 1024; c.height = Math.round(1024 * (H - 36) / 512);
+        t.pm = { id: page, slot: { pos: v.root.position, w: 1, h: (H - 36) / 512, res: 1024 }, canvas: c, kit: new Kit(c), W: c.width, H: c.height, zoom: 1, tab: 0 };
       }
       const pm = t.pm;
       pm.id = page;
@@ -309,137 +613,43 @@ export class H8Tabs {
       const ph = 512 * pm.H / pm.W;
       try { mon._tabs = null; const fn = mon['draw_' + page]; if (fn) fn.call(mon, pk, pm, ph); } catch (e) { /* a page that needs B-29's own screen */ }
       pk.end(0, performance.now(), false);
-      K.g.drawImage(pm.canvas, 0, 30 * K.s, K.W, K.H - 30 * K.s);
+      K.g.drawImage(pm.canvas, 0, 36 * K.s, K.W, K.H - 36 * K.s);
       const w = 512 / pages.length;
       pages.forEach(([id, label], i) => {
         const on = i === t.sub % pages.length;
-        K.button(i * w + 3, 3, w - 6, 24, label, () => { t.sub = i; }, { style: on ? 'on' : 'normal', size: 11 });
+        K.button(i * w + 3, 4, w - 6, 29, label, () => { t.sub = i; }, { style: on ? 'on' : 'normal', size: 13.5 });
       });
       // taps below the row go to the page
-      K.buttons.push({ x: 0, y: 30, w: 512, h: H - 30, onTap: null, page: true });
-      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 30) * pk.s);
+      K.buttons.push({ x: 0, y: 36, w: 512, h: H - 36, onTap: null, page: true });
+      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 36) * pk.s);
       return;
     }
     const L = v.link, fb = g.flight, ap = g.autopilot;
-    K.text(L.ok ? 'リンク良好' : L.why === 'range' ? '通信圏外（1500 km 超）' : 'B-29 応答なし', 14, 26, { size: 15, color: L.ok ? COL.green : COL.red, weight: 700 });
-    K.text(`距離 ${fmtDist(L.d)}`, 498, 26, { size: 16, color: COL.text, align: 'right', mono: true });
-    K.bar(14, 36, 484, 5, 1 - Math.min(1, L.d / 1.5e6), L.ok ? COL.green : COL.red);
+    K.text(L.ok ? 'リンク良好' : L.why === 'range' ? '通信圏外（1500 km 超）' : 'B-29 応答なし', 14, 28, { size: 17, color: L.ok ? COL.green : COL.red, weight: 700 });
+    K.text(fmtDist(L.d), 498, 28, { size: 17, color: COL.text, align: 'right', mono: true });
+    K.bar(14, 38, 484, 6, 1 - Math.min(1, L.d / 1.5e6), L.ok ? COL.green : COL.red);
     let y = 52;
     if (L.ok) {
       const integ = g.damage.integrityNow ?? g.damage.integrity();
       const pw = g.systems.power ?? 1;
-      K.text('状態  ' + v.b29State(), 14, y + 10, { size: 13, color: COL.text });
-      K.text(`データリンク ${Math.round(v.linkQuality() * 100)}%  目標共有・射撃連携・警報中継`, 498, y + 10, { size: 11, color: COL.cyan, align: 'right' }); y += 22;
-      const row = (label, val, txt, col, warn) => {
-        K.text(label, 14, y + 10, { size: 13, color: COL.dim });
-        K.bar(96, y + 3, 290, 8, val, warn ? COL.red : col);
-        K.text(txt, 498, y + 11, { size: 13, color: warn ? COL.red : COL.text, align: 'right', mono: true });
-        y += 21;
-      };
-      row('推進剤', fb.fuel, `${Math.round(fb.fuel * 100)}%`, AMBER, fb.fuel < 0.15);
-      row('船体', integ, `${Math.round(integ * 100)}%`, COL.green, integ < 0.6);
-      row('電力', pw, `${Math.round(pw * 100)}%`, COL.cyan, pw < 0.4);
+      K.text(fit(K, v.b29State(), 480, 15), 14, y + 15, { size: 15, color: COL.text });
+      y += 26;
+      y = this.row(K, y, '推進剤', fb.fuel, `${Math.round(fb.fuel * 100)}%`, AMBER, fb.fuel < 0.15);
+      y = this.row(K, y, '船体', integ, `${Math.round(integ * 100)}%`, COL.green, integ < 0.6);
+      y = this.row(K, y, '電力', pw, `${Math.round(pw * 100)}%`, COL.cyan, pw < 0.4);
       const al = g.systems.alarm.active;
-      K.text('警報  ' + (al ? '作動中' : 'なし') + (g.weapons ? `   防衛機銃 ${g.weapons.ammo.pd} ${g.weapons.auto.asphalt ? '自動' : '手動'}` : ''), 14, y + 10, { size: 12.5, color: al ? COL.red : COL.dim }); y += 20;
+      K.text(`警報 ${al ? '作動中' : 'なし'}   データリンク ${Math.round(v.linkQuality() * 100)}%`, 14, y + 15, { size: 14.5, color: al ? COL.red : COL.dim });
     } else {
-      K.text('1500 km 以内に近づくと、状況の確認と呼び出しができます。', 14, y + 10, { size: 12.5, color: COL.dim });
-      K.text('B-29 の位置は全天周モニターの B-29 マーカーで追えます。', 14, y + 30, { size: 12, color: COL.dim });
+      K.text('1500 km 以内に近づくと', 14, y + 16, { size: 15, color: COL.dim });
+      K.text('状況の確認と呼び出しができます。', 14, y + 38, { size: 15, color: COL.dim });
     }
     const coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
-    const bw = 116, by = H - 40;
-    K.button(10, by, bw, 32, coming ? '呼出 中止' : 'B-29 を呼ぶ', () => (coming ? ap.disengage() : v.callB29()), { style: !L.ok ? 'disabled' : coming ? 'on' : 'warn', size: 12 });
-    K.button(10 + (bw + 6), by, bw, 32, '状況報告', () => v.reportB29(), { style: L.ok ? 'normal' : 'disabled', size: 12 });
-    K.button(10 + (bw + 6) * 2, by, bw, 32, 'H8 で迎えに', () => v.call(), { style: L.ok ? 'normal' : 'disabled', size: 12 });
-    K.button(10 + (bw + 6) * 3, by, bw, 32, g.weapons && g.weapons.auto.asphalt ? '機銃 自動' : '機銃 手動', () => g.weapons && g.weapons.toggleAuto('b29'), { style: L.ok ? (g.weapons && g.weapons.auto.asphalt ? 'on' : 'normal') : 'disabled', size: 12 });
-  }
-
-  body_wpn(K, H) {
-    const v = this.v, g = v.g, W = g.weapons;
-    if (!W) return;
-    let y = 10;
-    const row = (label, val, txt, col, warn) => {
-      K.text(label, 14, y + 10, { size: 13, color: COL.dim });
-      K.bar(100, y + 3, 270, 8, val, warn ? COL.red : col);
-      K.text(txt, 498, y + 11, { size: 13, color: warn ? COL.red : COL.text, align: 'right', mono: true });
-      y += 22;
-    };
-    row('25mm 砲', W.ammo.cannon / 1600, `${W.ammo.cannon}`, AMBER, W.ammo.cannon < 200);
-    row('レールガン', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%  残${W.ammo.rail}` : `発射可  残${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
-    row('ミサイル', W.ammo.missile / 12, `${W.ammo.missile} / 12`, '#ff8a6a', W.ammo.missile <= 0);
-    // what the guns are on
-    const T = W.targets('h8').slice(0, 4);
-    K.text('目標', 14, y + 12, { size: 12, color: COL.dim });
-    y += 18;
-    if (!T.length) { K.text('射程内に目標なし', 14, y + 10, { size: 12.5, color: COL.dim }); y += 20; }
-    T.forEach((x, i) => {
-      const sel = W.lastTarget && W.lastTarget.ref === x.ref;
-      K.rect(10, y, 492, 20, { fill: sel ? 'rgba(255,90,60,0.16)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.red : 'rgba(150,190,230,0.15)', r: 5 });
-      K.text(`${x.name}${x.threat ? '  敵' : ''}`, 20, y + 14, { size: 12, color: x.threat ? '#ffb3a6' : COL.text });
-      K.text(fmtDist(x.dist), 494, y + 14, { size: 12, color: COL.dim, align: 'right', mono: true });
-      K.buttons.push({ x: 10, y, w: 492, h: 20, onTap: () => { W.tgtIndex.h8 = i; } });
-      y += 23;
-    });
-    const bw = 158, by = H - 40;
-    K.button(10, by, bw, 32, W.auto.hachi ? 'HACHI 自動迎撃' : '手動射撃', () => W.toggleAuto('h8'), { style: W.auto.hachi ? 'on' : 'normal', size: 12 });
-    K.button(10 + bw + 7, by, bw, 32, 'レールガン', () => W.fireRail(true), { style: W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled', size: 12 });
-    K.button(10 + (bw + 7) * 2, by, bw, 32, 'ミサイル斉射', () => W.salvoMissiles(true), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 12 });
-  }
-
-  body_cam(K, H) {
-    const v = this.v, Z = v.zoom;
-    let y = 10;
-    CAMERAS.forEach((c, i) => {
-      const h = v.hull.cams[i];
-      const st = h > 0.8 ? '正常' : h > 0.5 ? '劣化' : h > 0.15 ? '重度の劣化' : '信号なし';
-      K.text(c.name, 14, y + 11, { size: 12.5, color: h < 0.5 ? COL.red : COL.dim });
-      K.bar(150, y + 4, 220, 8, h, h > 0.8 ? COL.green : h > 0.5 ? AMBER : COL.red);
-      K.text(st, 498, y + 12, { size: 12.5, color: h < 0.5 ? COL.red : COL.text, align: 'right' });
-      y += 21;
-    });
-    if (!Z) return;
-    y += 6;
-    const opt = Math.min(10.5, Z.z), dig = Z.z / opt;
-    K.text(`ズーム ×${Z.z < 10 ? Z.z.toFixed(1) : Z.z.toFixed(0)}`, 14, y + 18, { size: 18, color: COL.text, weight: 600, mono: true });
-    K.text(`光学 ×${opt.toFixed(1)}${dig > 1.01 ? `  デジタル ×${dig.toFixed(1)}` : ''}`, 498, y + 17, { size: 13, color: dig > 1.01 ? AMBER : COL.dim, align: 'right', mono: true });
-    y += 28;
-    K.bar(14, y, 484 * 10.5 / 42, 6, Math.min(1, Math.log(Z.z) / Math.log(10.5)), COL.cyan);
-    K.bar(14 + 484 * 10.5 / 42 + 4, y, 484 - 484 * 10.5 / 42 - 4, 6, Math.max(0, Math.log(dig) / Math.log(4)), AMBER);
-    const bw = 116, by = H - 40;
-    K.button(10, by, bw, 32, 'ズーム −', () => Z.step(-1), { size: 12 });
-    K.button(10 + (bw + 6), by, bw, 32, 'ズーム ＋', () => Z.step(1), { size: 12 });
-    K.button(10 + (bw + 6) * 2, by, bw, 32, Z.follow ? '自動追従 ON' : '自動追従', () => Z.toggleFollow(), { style: Z.follow ? 'on' : 'normal', size: 12 });
-    K.button(10 + (bw + 6) * 3, by, bw, 32, '等倍', () => Z.reset(), { size: 12 });
-  }
-
-  body_nav(K, H) {
-    const v = this.v, g = v.g, P = v.pilot, L = v.linkState();
-    let y = 8;
-    const btn = (label, fn, style = 'normal', hh = 28) => { K.button(10, y, 492, hh, label, fn, { style, size: 13 }); y += hh + 5; };
-    if (v.mode === 'docked') {
-      btn(v.pending ? 'ハッチを閉めて分離中…' : v.crew ? 'B-29 から分離（単独飛行）' : 'H8 を分離（護衛）', () => v.release(v.crew ? 'free' : 'escort'), v.pending ? 'on' : 'danger', 32);
-      if (!v.crew) btn('分離して停泊軌道へ', () => v.release('home'));
-    } else {
-      btn(v.goalKind === 'b29' ? 'B-29 へ帰還中…（中止）' : 'B-29 へ帰還・ドッキング', () => (v.goalKind === 'b29' ? v.goal('hold') : v.call()), v.goalKind === 'b29' ? 'on' : 'warn');
-      const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
-      btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ（ここへ）', () => (coming ? ap.disengage() : v.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled');
-      btn(v.goalKind === 'escort' ? 'B-29 を護衛中' : 'B-29 を護衛', () => v.goal('escort'), v.goalKind === 'escort' ? 'on' : L.ok ? 'normal' : 'disabled');
-      btn(v.crew ? (P.goal ? '手動操縦にする' : '手動操縦中') : '待機', () => v.goal('hold'), !P.goal ? 'on' : 'normal');
-      btn('停泊軌道へ', () => v.sendHome(), v.goalKind === 'home' ? 'on' : 'normal');
-      if (v.crew) btn(v.flight.ultra ? 'ULTRA 作動中' : 'ULTRA', () => v.flight.setUltra(!v.flight.ultra), v.flight.ultra ? 'warn' : 'normal');
-    }
-    if (v.crew && v.mode !== 'docked' && y < H - 30) {
-      K.text('自律航行先', 14, y + 12, { size: 12, color: COL.dim });
-      y += 18;
-      for (const s of g.stations.list) {
-        if (y > H - 24) break;
-        const sel = v.goalKind === s.id;
-        K.rect(10, y, 492, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
-        K.text(s.name.replace('（修理基地）', ''), 20, y + 14, { size: 12, color: (s.dmg ? s.dmg.status : 'ok') === 'ok' ? COL.text : COL.dim });
-        K.text(fmtDist(s.pos.distanceTo(v.flight.pos)), 494, y + 14, { size: 11.5, color: COL.dim, align: 'right', mono: true });
-        K.buttons.push({ x: 10, y, w: 492, h: 20, onTap: () => v.goal(s.id) });
-        y += 23;
-      }
-    }
+    this.buttons(K, H, [
+      [coming ? '呼出 中止' : 'B-29 を呼ぶ', () => (coming ? ap.disengage() : v.callB29()), !L.ok ? 'disabled' : coming ? 'on' : 'warn'],
+      ['状況報告', () => v.reportB29(), L.ok ? 'normal' : 'disabled'],
+      ['迎えに行く', () => v.call(), L.ok ? 'normal' : 'disabled'],
+      [g.weapons && g.weapons.auto.asphalt ? '機銃 自動' : '機銃 手動', () => g.weapons && g.weapons.toggleAuto('b29'), L.ok ? (g.weapons && g.weapons.auto.asphalt ? 'on' : 'normal') : 'disabled'],
+    ]);
   }
 
   body_hachi(K, H) {
@@ -447,37 +657,90 @@ export class H8Tabs {
     if (v.drawHachi) v.drawHachi(K, H);
   }
 
-  body_suit(K, H) {
+  body_gear(K, H) {
     const v = this.v;
-    if (v.drawSuit) v.drawSuit(K, H);
-    else K.text('—', 14, 30, { size: 13, color: COL.dim });
+    if (v.drawGear) v.drawGear(K, H, this);
   }
 
   // ------------------------------------------------------------------ touch
   /**
-   * What a touch at ndc (x, y) lands on: { tab, part: 'head' | 'body', uv } or null.
-   * cam: { pos (world), quat (world), proj (Matrix4) }
+   * What a touch at client pixel (x, y) lands on: { tab, part: 'head' | 'body', x, y (the tab
+   * canvas, 512 wide) } or null. cam: { eye, dir } in H8's frame (the ray of that pixel through
+   * the unmagnified view)
    */
-  hit(ndc, cam) {
+  hit(cam) {
     if (!this.visible) return null;
-    const dir = _v.set(ndc.x, ndc.y, 0.5).applyMatrix4(_m.copy(cam.proj).invert()).normalize().applyQuaternion(cam.quat);
-    this.ray.set(cam.pos, dir);
-    this.ray.near = 0; this.ray.far = 5;
-    const meshes = [];
+    const D = this.v.display;
+    const t0 = D.surface(cam.eye, cam.dir);
+    const P = _v.copy(cam.eye).addScaledVector(cam.dir, t0);
+    // nothing to touch where the display is dead
+    if (D.deadAt(cam.dir, P)) return null;
+    if (this.inOpenDoor(_v2.copy(P).sub(H8.cockpitC).normalize())) return null;
+    const u = _v2.copy(P).sub(E0).normalize();
+    let best = null;
     for (const t of this.tabs) {
       if (t.fade < 0.3) continue;
-      if (t.headS.mesh.visible) meshes.push(t.headS.mesh);
-      if (t.bodyS && t.bodyS.mesh.visible) meshes.push(t.bodyS.mesh);
+      const a = t.at(u);
+      if (!a || (best && best.tab.order > t.order)) continue;
+      best = { tab: t, part: a.part, u: a.u, v: a.v };
     }
-    const h = this.ray.intersectObjects(meshes, false)[0];
-    if (!h) return null;
-    const tab = h.object.userData.tab;
-    return { tab, part: h.object === tab.headS.mesh ? 'head' : 'body', uv: h.uv, dir: dir.clone(), pos: cam.pos.clone() };
+    if (!best) return null;
+    const S = best.part === 'head' ? best.tab.head : best.tab.body;
+    best.x = best.u * 512;
+    best.y = (1 - best.v) * 512 * S.H / S.W;
+    best.eye = cam.eye.clone(); best.dir = cam.dir.clone();
+    return best;
+  }
+
+  /** the tab covering a line of sight from the eye (H8-local), or null — markers under a tab are
+   * not drawn */
+  coverAt(eye, dir) {
+    if (!this.visible) return null;
+    const t0 = this.v.display.surface(eye, dir);
+    const u = _v.copy(eye).addScaledVector(dir, t0).sub(E0).normalize();
+    let best = null;
+    for (const t of this.tabs) if (t.fade > 0.3 && (!best || t.order > best.order) && t.at(u)) best = t;
+    return best;
+  }
+
+  inOpenDoor(u) {
+    const az = Math.atan2(u.x, -u.z), el = Math.asin(Math.max(-1, Math.min(1, u.y)));
+    const inside = (D) => { let d = az - D.az; d -= Math.round(d / RT) * RT; return Math.abs(d) < D.hw && el > D.el0 && el < D.el1; };
+    return (this.uniforms.uDoorLOpen.value > 0.02 && inside(H8.locker)) || (this.uniforms.uDoorSOpen.value > 0.02 && inside(H8.shelter));
+  }
+
+  /**
+   * The tabs' outlines on the screen (for the markers to be drawn round them): rootW (H8's world
+   * matrix), vp (the unmagnified view-projection), W, H (CSS px). [[x, y], ...] per visible part
+   */
+  outlines(rootW, vp, W, H) {
+    const out = [];
+    if (!this.visible) return out;
+    _m.multiplyMatrices(vp, rootW);
+    for (const t of this.tabs) {
+      if (t.fade < 0.3) continue;
+      const y1 = t.hy, y0 = t.open && t.body && t.h > 0 ? -t.by : -t.hy;
+      const poly = [];
+      const push = (X, Y) => {
+        _v.copy(t.c).addScaledVector(t.ex, X).addScaledVector(t.ey, Y).normalize();
+        onGlass(_v, _v2);
+        const p = _v3.copy(_v2).applyMatrix4(_m);
+        poly.push([(p.x * 0.5 + 0.5) * W, (0.5 - p.y * 0.5) * H, p.z < 1]);
+      };
+      const n = 8;
+      for (let i = 0; i <= n; i++) push(-t.hx + 2 * t.hx * i / n, y1);
+      for (let j = 1; j <= n; j++) push(t.hx, y1 + (y0 - y1) * j / n);
+      for (let i = n - 1; i >= 0; i--) push(-t.hx + 2 * t.hx * i / n, y0);
+      for (let j = n - 1; j >= 1; j--) push(-t.hx, y1 + (y0 - y1) * j / n);
+      if (poly.every((p) => p[2])) out.push(poly);
+    }
+    return out;
   }
 
   /** a tap on a tab (from hit()) */
   tap(hit) {
     const t = hit.tab, A = this.v.g.audio;
+    this.toFront(t);
     if (hit.part === 'head') {
       if (t.fixedClosed) return;
       t.open = !t.open;
@@ -486,38 +749,46 @@ export class H8Tabs {
       A.beep && A.beep(t.open ? 1500 : 1100, 0.04, 0.04, { direct: true });
       return;
     }
-    const S = t.bodyS, K = S.kit;
-    const x = hit.uv.x * 512, y = (1 - hit.uv.y) * 512 * S.H / S.W;
-    // a page shown inside the body (B-29's own) takes the taps below its tab row
-    const pb = K.buttons.find((b) => b.page && y >= b.y);
+    const S = t.body, K = S.kit;
+    const x = hit.x, y = hit.y;
     let ok = false;
-    if (pb && this._pageHit) ok = this._pageHit(x, y);
-    else ok = K.hit(x * K.s, y * K.s);
+    // the zoom bar in the camera tab: the magnification where it was tapped
+    const zb = this._zoomBar;
+    const bar = K.buttons.find((b) => b.zoomBar && x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h);
+    if (bar && zb && this.v.zoom) { this.v.zoom.setFraction((x - zb.x) / zb.w); ok = true; }
+    else {
+      // a page shown inside the body (B-29's own) takes the taps below its tab row
+      const pb = K.buttons.find((b) => b.page && y >= b.y);
+      if (pb && this._pageHit) ok = this._pageHit(x, y);
+      else ok = K.hit(x * K.s, y * K.s);
+    }
     t.t = 999;
     A.click && A.click(null, ok ? 0.2 : 0.08);
     if (ok) A.beep && A.beep(1320, 0.04, 0.05, { direct: true });
   }
 
-  /** start dragging a tab by its header (the point under the finger on the tabs' sphere) */
+  toFront(t) { if (t.order !== this.z) t.order = ++this.z; }
+
+  /** start dragging a tab by its header (the point under the finger on the glass) */
   dragStart(hit) {
-    const p = this.onSphere(hit.pos, hit.dir);
+    const p = this.onSphere(hit.eye, hit.dir);
     if (!p) return;
-    this.drag = { tab: hit.tab, dAz: hit.tab.az - p.az, dEl: hit.tab.el - p.el, moved: 0 };
+    this.toFront(hit.tab);
+    this.drag = { tab: hit.tab, dAz: hit.tab.az - p.az, dEl: hit.tab.el - p.el };
   }
 
-  dragMove(ndc, cam) {
+  /** cam: { eye, dir } (H8-local) of the finger now */
+  dragMove(cam) {
     const D = this.drag;
     if (!D) return;
-    const dir = _v.set(ndc.x, ndc.y, 0.5).applyMatrix4(_m.copy(cam.proj).invert()).normalize().applyQuaternion(cam.quat);
-    const p = this.onSphere(cam.pos, dir.clone());
+    const p = this.onSphere(cam.eye, cam.dir);
     if (!p) return;
     const t = D.tab;
     let az = p.az + D.dAz;
-    while (az > Math.PI) az -= Math.PI * 2;
-    while (az < -Math.PI) az += Math.PI * 2;
+    az -= Math.round(az / RT) * RT;
     t.az = az;
     t.el = Math.max(-78 * DEG, Math.min(80 * DEG, p.el + D.dEl));
-    D.moved++;
+    t.dirty = true;
   }
 
   dragEnd() {
@@ -526,20 +797,43 @@ export class H8Tabs {
     this.saveLayout();
   }
 
-  /** where a ray from the eye (world) meets the tabs' sphere: (az, el) from the cockpit's middle */
-  onSphere(posW, dirW) {
-    const v = this.v;
-    const inv = this.group.parent ? _m.copy(this.group.parent.matrixWorld).invert() : null;
-    if (!inv) return null;
-    const o = posW.clone().applyMatrix4(inv);
-    const d = dirW.clone().transformDirection(inv);
-    const Cc = H8.cockpitC, R = H8.cockpitR - 0.06;
-    const oc = o.clone().sub(Cc);
-    const b = oc.dot(d), c = oc.lengthSq() - R * R;
-    const disc = b * b - c;
-    if (disc < 0) return null;
-    const t = -b + Math.sqrt(disc);
-    const p = oc.addScaledVector(d, t).normalize();
+  /** two fingers on a tab: f > 1 makes it bigger */
+  scaleBy(t, f) {
+    const k = Math.max(K_MIN, Math.min(K_MAX, t.k * f));
+    if (Math.abs(k - t.k) < 1e-4) return;
+    t.k = k;
+    t.dirty = true;
+    this.toFront(t);
+  }
+
+  /** the pinch is over: the canvases are redrawn at the resolution the new size wants */
+  resize(t) {
+    t.resK = t.k;
+    this.size(t, t.head);
+    if (t.body) this.size(t, t.body);
+    this.saveLayout();
+  }
+
+  /** where a ray from the eye (H8-local) meets the glass: (az, el) as seen from the eye point */
+  onSphere(eye, dir) {
+    const t0 = this.v.display.surface(eye, dir);
+    const p = _v.copy(eye).addScaledVector(dir, t0).sub(E0).normalize();
     return { az: Math.atan2(p.x, -p.z), el: Math.asin(Math.max(-1, Math.min(1, p.y))) };
   }
 }
+
+function measure(K, str, size, weight = 400, mono = false) {
+  K.font(size, weight, mono);
+  return K.g.measureText(str).width / K.s;
+}
+
+/** the text cut to a width (Kit units), with an ellipsis */
+function fit(K, str, w, size) {
+  K.font(size);
+  if (K.g.measureText(str).width / K.s <= w) return str;
+  let s = str;
+  while (s.length > 1 && K.g.measureText(s + '…').width / K.s > w) s = s.slice(0, -1);
+  return s + '…';
+}
+
+function pct(p) { return p >= 0.995 ? '99%' : p < 0.005 ? '<1%' : Math.round(p * 100) + '%'; }

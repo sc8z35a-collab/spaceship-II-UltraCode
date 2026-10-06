@@ -374,8 +374,9 @@ export class Drones {
       this.ptPos.set([rel.x, rel.y, rel.z], i * 3);
       this.ptK[i] = 0.35 + 0.65 * thrustK;
       const L = d.lods;
-      const k = this.low || !L.hi ? (eff < 9000 && dist < 25000 ? 'lo' : null)
-        : eff < 60 ? 'hi' : eff < 1200 ? 'mid' : eff < 25000 && dist < 25000 ? 'lo' : null;
+      // (out to the guns' reach and beyond: a zoomed view can pick one out at tens of kilometres)
+      const k = this.low || !L.hi ? (eff < 9000 && dist < 90000 ? 'lo' : null)
+        : eff < 60 ? 'hi' : eff < 1200 ? 'mid' : eff < 25000 && dist < 90000 ? 'lo' : null;
       this.showLod(d, k);
       const mesh = k && L[k];
       if (mesh) {

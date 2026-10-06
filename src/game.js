@@ -44,6 +44,7 @@ import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullS
 import { glassUniforms } from './ship/glass.js';
 import { StatusLine } from './ui/statusLine.js';
 import { ExtMarkers } from './ui/extMarkers.js';
+import { Photos } from './ui/photos.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -136,6 +137,7 @@ export class Game {
     this.hud = new Hud(this);
     this.statusLine = new StatusLine(this);
     this.extMarkers = new ExtMarkers(this);
+    this.photos = new Photos(this);
     this.initWorldState();
     // H8 — Kaito's old sub-base (parked on its orbit until called)
     if (!this.params.has('noH8')) {
@@ -267,6 +269,7 @@ export class Game {
         }
       }
       if (inp.pressed['b-drop']) this.systems.dropPressed();
+      if (inp.pressed['b-shot'] && this.photos) this.photos.shoot();
     }
     // ---- flight
     this.autopilot.update(sdt);
@@ -310,9 +313,12 @@ export class Game {
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     // ---- taps
+    if (this.h8 && !dead) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
       if (this.mode === 'camera' || dead) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
+      // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
+      if (this.h8 && this.h8.hudTap(tap)) continue;
       const hit = this.interact.tap(tap, this.engine.camera);
       if (!hit) this.systems.tapNothing(tap);
     }

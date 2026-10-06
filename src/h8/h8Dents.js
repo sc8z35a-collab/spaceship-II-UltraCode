@@ -11,6 +11,7 @@ import * as THREE from 'three';
 import { H8, CAMERAS } from './h8Spec.js';
 import { LAYER_NEAR } from '../core/layers.js';
 import { Pockmarks } from '../combat/pockmarks.js';
+import { CAM_DEAD } from './h8Display.js';
 
 export const DENT_MAX = 12;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -268,7 +269,7 @@ export class H8Hull {
       if (ang < reach) {
         const before = this.cams[i];
         this.cams[i] = Math.max(0, this.cams[i] - Math.min(1, E / 1.2e7 + 0.05) * (1 - ang / reach));
-        if (before >= 0.5 && this.cams[i] < 0.5) blinded = i;
+        if (before >= CAM_DEAD && this.cams[i] < CAM_DEAD) blinded = i;
       }
     });
     return blinded;
@@ -317,11 +318,12 @@ export class H8Hull {
       DENT_U.uDentB.value[i].set(d.depth, d.lip, d.heat, d.hole);
       DENT_U.uDentC.value[i].set(d.soot, d.seed, 0, 0);
     });
-    this.v.display && this.v.display.setCameras(this.cams);
+    this.v.display && this.v.display.setCameras(this.cams, !!this.restoring);
   }
 
   /** the repair dock makes it all good again */
   repairAll() {
+    if (this.v.display) this.v.display.repairPanels();
     this.dents.length = 0;
     this.pocks.clear();
     this.cams = [1, 1, 1, 1];
@@ -351,6 +353,8 @@ export class H8Hull {
     }
     if (s.cams) this.cams = s.cams.slice(0, 4);
     this.pocks.restore(s.p);
+    this.restoring = true;
     this.sync();
+    this.restoring = false;
   }
 }

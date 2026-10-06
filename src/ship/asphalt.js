@@ -203,6 +203,8 @@ const HACHI = {
   hachi_parked: ['停泊。省電力。'],
   hachi_arrived: ['{name}に到着。'],
   hachi_goto: ['{name}へ向かう。'],
+  hachi_goto_far: ['{name}は遠すぎる。'],
+  hachi_goto_docked: ['結合中は行けない。'],
   hachi_hatch_closing: ['ハッチを閉める。'],
   hachi_vestibule: ['ハッチの間に人がいる。'],
   hachi_busy: ['B-29がドッキング中だ。'],
@@ -323,7 +325,7 @@ const VOICE = new Set([
   // HACHI: refusals
   'hachi_no_link', 'hachi_vestibule', 'hachi_busy', 'hachi_eva_nosuit', 'hachi_suit_keep', 'hachi_no_target', 'hachi_rail_blocked',
   'hachi_hatch_pressure', 'hachi_follow_none', 'hachi_b29_nofuel', 'hachi_b29_landed', 'hachi_kit_empty', 'hachi_ammo_out',
-  'hachi_out_of_range', 'hachi_friendly',
+  'hachi_out_of_range', 'hachi_friendly', 'hachi_goto_far', 'hachi_goto_docked',
   // HACHI: asked
   'hachi_free', 'hachi_report',
 ]);
