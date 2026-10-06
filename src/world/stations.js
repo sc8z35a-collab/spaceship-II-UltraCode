@@ -9,7 +9,7 @@ import { elevatorAxis } from './elevator.js';
 import { LOBBY, lobbyShellExterior } from './stationLobby.js';
 import { PROM, promenadeShellExterior } from './stationPromenade.js';
 import { atriumExterior } from './stationAtrium.js';
-import { originModel, originAnimate } from './originStation.js';
+import { originModel, originAnimate, ORIGIN } from './originStation.js';
 
 /** reference plane defined from the canonical start state (deterministic) */
 export function referenceFrame(startTime) {
@@ -48,6 +48,16 @@ export const STATION_DEFS = [
  * orientation as the station. Nothing else of the station comes near that parking space.
  */
 export const LOBBY_AT = new THREE.Vector3(-24, 0, 0);
+// H8's own port on a hub: on top of the forward spine truss (the surface it stands on)
+const H8_PORT_HUB = { y: 2.47, z: -50 };
+
+/** H8's docking port: a collar on the surface (y0 its foot), the yellow target ring, two floods */
+function h8Collar(b, x, y0, z) {
+  b.cyl(1.7, 1.9, 1.4, 'hullOrange', [x, y0 + 0.5, z], null, 18);
+  b.torus(1.75, 0.12, 'plasticY', [x, y0 + 1.22, z], [Math.PI / 2, 0, 0], 18);
+  for (const s of [-1, 1]) b.box(0.3, 0.12, 3.0, 'plasticY', [x + s * 2.6, y0 + 0.3, z], null, 0);
+  for (const s of [-1, 1]) b.cyl(0.3, 0.3, 0.12, 'flood', [x + s * 3.2, y0 + 0.4, z + 2.4], null, 10);
+}
 export const DOCK_AT = new THREE.Vector3(LOBBY_AT.x - LOBBY.xc, LOBBY_AT.y - LOBBY.yc, LOBBY_AT.z - (LOBBY.z0 + LOBBY.z1) / 2);
 
 // ---------------------------------------------------------------------------- station models
@@ -218,6 +228,7 @@ function stationModel(def, M) {
     b.pop();
   }
   b.pop();
+  h8Collar(b, 0, 3.4 * s, -5 * s);
   const g = b.build(M, { castShadow: false });
   // rotating habitat ring (hubs and the dock)
   let ring = null;
@@ -383,6 +394,8 @@ function hubModel(def, M) {
     }
   }
   for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); }
+  // ---- H8's port on the forward truss
+  h8Collar(b, 0, H8_PORT_HUB.y, H8_PORT_HUB.z);
   // ---- antennas, dishes, docked visitor, nav lights, strobes
   dish(b, 5.0, [6, 7, -100], [0, 0, -0.6]);
   dish(b, 3.0, [-6, 6, -96], [0.3, 0, 0.7]);
@@ -712,6 +725,19 @@ export class Stations {
   }
 
   byId(id) { return this.list.find((s) => s.id === id); }
+
+  /**
+   * Where H8's origin sits when it lies at a station's own H8 port (station-local, upright in the
+   * station's frame): the port's collar stands on the hub's forward truss, on the core module of a
+   * relay or the dock, on the Origin's spine; H8's mating ring is 4.3 m under its origin.
+   */
+  h8PortOf(s) {
+    if (s.h8Port) return s.h8Port;
+    if (s.origin) s.h8Port = ORIGIN.h8Port.clone();
+    else if (s.kind === 'hub') s.h8Port = new THREE.Vector3(0, H8_PORT_HUB.y + 1.2 + 4.3, H8_PORT_HUB.z);
+    else s.h8Port = new THREE.Vector3(0, 3.4 * s.size + 1.2 + 4.3, -5 * s.size);
+    return s.h8Port;
+  }
 
   /** station orientation (ECI): y radial up, -z along its motion, x = y cross z */
   frameOf(s, out = new THREE.Quaternion()) {

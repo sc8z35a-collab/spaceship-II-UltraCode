@@ -46,8 +46,11 @@ export class StatusLine {
       const sp = f.vel.clone().sub(f.refVelocity(f.pos, _v)).length();
       const tags = f.maxMode ? ' MAX' : f.ultra ? ' ULTRA' : '';
       let dest = '手動操縦';
-      if (P.state === 'dock') dest = '→ B-29 へドッキング中';
-      else if (P.state === 'undock') dest = 'B-29 から離脱中';
+      const hs = P.dock && P.dock.host && P.dock.host.s;
+      const nm = (st) => st.name.replace('（修理基地）', '');
+      if (h.berthAt) dest = `${nm(h.berthAt)} に係留中`;
+      else if (P.state === 'dock') dest = `→ ${hs ? nm(hs) : 'B-29'} へドッキング中`;
+      else if (P.state === 'undock') dest = `${hs ? nm(hs) : 'B-29'} から離脱中`;
       else if (P.goal) dest = `→ ${P.goal.name}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '（' + fmtEta(P.eta) + '）' : ''}${P.state === 'hold' ? '  到着' : ''}`;
       return { who: 'H8', speed: sp, tags, dest };
     }

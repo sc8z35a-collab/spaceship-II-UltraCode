@@ -23,7 +23,7 @@ export const ORIGIN = {
   // B-29 swings round outside this, comes in along the berth line
   berthR: 900,
   // H8's docking port on the spine (its root sits there, upright)
-  h8Port: V(48, 14 + 4.5 + 4.65, 0.95),
+  h8Port: V(48, 14 + 4.5 + 1.2 + 4.3, 0.95),
 };
 
 /** a square lattice truss from a to b (w wide) */

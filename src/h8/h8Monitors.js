@@ -16,6 +16,7 @@ function stateJP(h) {
   if (h.mode === 'docked') return 'B-29 と結合中';
   if (h.mode === 'parked') return '停泊（待機）';
   const P = h.pilot;
+  if (h.berthAt) return h.berthAt.name.replace('（修理基地）', '') + ' に係留中';
   if (P.state === 'dock') return 'ドッキング進入';
   if (P.state === 'undock') return '離脱中';
   if (h.goalKind === 'b29') return 'B-29 へ向かう';
@@ -137,7 +138,7 @@ export const H8_PAGES = {
     K.text(`推力 ×${mul}   最高 ${(fl.vUltra / 1000).toFixed(1)} km/s   推進剤 ${Math.round(h.flight.fuel * 100)}%`, 14, 108, { size: 10, color: AMBER, mono: true });
     // B-29 relation
     const L = h.linkState();
-    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合中' : `B-29 まで ${fmtDist(L.d)}  ${L.ok ? 'リンク良好' : '通信圏外'}`, 14, 126, { size: 11, color: L.ok ? COL.text : COL.red });
+    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合中' : h.berthAt ? `${h.berthAt.name.replace('（修理基地）', '')} に係留中` : `B-29 まで ${fmtDist(L.d)}  ${L.ok ? 'リンク良好' : '通信圏外'}`, 14, 126, { size: 11, color: h.berthAt ? COL.cyan : L.ok ? COL.text : COL.red });
     // HACHI's state line
     const P = h.pilot;
     if (P.goal || P.state === 'dock' || P.state === 'undock') K.text(`HACHI: ${stateJP(h)}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '  残り ' + fmtEta(P.eta) : ''}`, 14, 144, { size: 10.5, color: COL.cyan });
@@ -168,7 +169,10 @@ export const H8_PAGES = {
       K.text('上のタブで B-29 の航法・システムも操作できます', X + 120, y + 12, { size: 9, color: COL.dim, align: 'center' });
     } else {
       if (h.mode === 'parked') btn('H8 起動（B-29 へ）', () => h.call(), 'warn');
-      else {
+      else if (h.berthAt) {
+        btn(`${h.berthAt.name.replace('（修理基地）', '')} から離脱`, () => h.unberth('free'), 'danger', 34);
+        btn('B-29 へ帰還・ドッキング', () => h.call(), 'warn');
+      } else {
         btn(h.goalKind === 'b29' ? 'B-29 へ帰還中…（中止）' : 'B-29 へ帰還・ドッキング', () => (h.goalKind === 'b29' ? h.goal('hold') : h.call()), h.goalKind === 'b29' ? 'on' : 'warn');
         const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
         btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ（ここへ）', () => (coming ? ap.disengage() : h.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled');
@@ -181,19 +185,21 @@ export const H8_PAGES = {
           y += 30;
         }
       }
-      // stations (HACHI flies there and holds)
+      // stations (HACHI flies there and holds; 接続: and docks H8 with it, straight in)
       if (h.crew && y < H - 40) {
-        K.text('自律航行先', X + 4, y + 10, { size: 10, color: COL.dim });
+        K.text('自律航行先 / 接続でドッキング', X + 4, y + 10, { size: 10, color: COL.dim });
         y += 16;
         for (const s of g.stations.list) {
           if (y > H - 30) break;
           const st = s.dmg ? s.dmg.status : 'ok';
           const dd = s.pos.distanceTo(h.flight.pos);
           const sel = h.goalKind === s.id;
-          K.rect(X, y, 240, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
+          const here = h.berthAt === s, dg = h.dockGoal === s;
+          K.rect(X, y, 186, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
           K.text(s.name.replace('（修理基地）', ''), X + 8, y + 14, { size: 10, color: st === 'ok' ? COL.text : COL.dim });
-          K.text(fmtDist(dd), X + 232, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
-          K.buttons.push({ x: X, y, w: 240, h: 20, onTap: () => h.goal(s.id) });
+          K.text(fmtDist(dd), X + 180, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
+          K.buttons.push({ x: X, y, w: 186, h: 20, onTap: () => h.goal(s.id) });
+          K.button(X + 190, y, 50, 20, here ? '係留中' : dg ? '接続中' : '接続', () => h.dockWith(s.id), { style: here || dg ? 'on' : st === 'ok' || st === 'damaged' ? 'normal' : 'disabled', size: 9 });
           y += 23;
         }
       }

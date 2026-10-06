@@ -30,7 +30,7 @@ import { H8_PAGES } from './h8Monitors.js';
 import { Flight } from '../ship/flight.js';
 import { LAYER_NEAR, LAYER_MID, LAYER_FAR, assignLayers } from '../core/layers.js';
 import { LAYER_PROXY } from '../player/interact.js';
-import { MU_EARTH, R_EARTH } from '../core/astro.js';
+import { MU_EARTH, R_EARTH, OMEGA_EARTH } from '../core/astro.js';
 import { STATUS_JP } from '../world/worldDamage.js';
 import { rockId } from '../combat/combat.js';
 
@@ -44,7 +44,7 @@ function fmtEta(sec) {
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DOCK = H8.dockAt;
 const COL_DIM = 'rgba(150,190,230,0.55)';
-const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
+const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
 const Y = new THREE.Vector3(0, 1, 0);
 
 /** H8 and B-29 hear each other within this distance (m) */
@@ -466,6 +466,7 @@ export class H8Vessel {
     const was = this.mode;
     this.wake();
     const d = L.d;
+    if (this.berthAt) { this.unberth('b29'); this.say('hachi_coming', { d: fmtDist(d) }); return; }
     this.goal('b29');
     if (was === 'parked') {
       this.asphalt('h8_call', { d: fmtDist(d) });
@@ -515,6 +516,8 @@ export class H8Vessel {
     if (!L.ok) { this.say('hachi_no_link', { d: fmtDist(L.d) }); return; }
     if (fb.landed) { this.say('hachi_b29_landed'); return; }
     if (ap.state !== 'off' && ap.target && ap.target.id === 'h8') { this.say('hachi_b29_coming', { d: fmtDist(L.d) }); return; }
+    // (B-29 cannot come into a station's structure: H8 casts off and waits clear of it)
+    if (this.berthAt) { this.unberth('callb29'); return; }
     const need = this.tripFuel(fb, L.d);
     if (fb.tank && fb.tank.kg < need) { this.say('hachi_b29_nofuel', { need: Math.ceil(need), kg: Math.floor(fb.tank.kg) }); return; }
     this.wake();
@@ -590,6 +593,9 @@ export class H8Vessel {
    * or a station id */
   goal(kind) {
     const g = this.g, P = this.pilot;
+    // lying at a station's port: cast off first, then go
+    if (this.berthAt && kind && kind !== 'hold') { this.unberth(kind); return; }
+    if (kind !== this.goalKind) this.dockGoal = null;
     const b29 = (t, pos, vel) => { pos.copy(g.flight.pos); vel.copy(g.flight.vel); return pos; };
     if (kind === 'b29') {
       P.setGoal({ kind, name: 'B-29', posOf: b29, standoff: 90, onArrive: null });
@@ -716,7 +722,72 @@ export class H8Vessel {
   afterUndock(after) {
     if (after === 'home') { this.goal('home'); this.say('hachi_home'); }
     else if (after === 'free') { this.goal('hold'); this.say('hachi_manual'); }
+    else if (after === 'callb29') { this.goal('hold'); this.b29Go(); }
+    else if (typeof after === 'string' && after.startsWith('dock:')) this.dockWith(after.slice(5));
+    else if (after && after !== 'escort') this.goal(after);
     else { this.goal('escort'); }
+  }
+
+  // ==================================================================== H8 alone at a station
+  /**
+   * Dock H8 by itself with a station: HACHI flies there at full pace and, once within reach,
+   * goes straight into the docking (no stop at the hold point): round the station to its top and
+   * down onto its H8 port. Lying there H8 rides with the station and is charged and refuelled.
+   */
+  dockWith(id) {
+    const g = this.g, s = g.stations.byId(id);
+    if (!s || this.mode === 'docked' || this.mode === 'pod' || this.mode === 'lost') return false;
+    if (s.dmg && (s.dmg.status === 'destroyed' || s.dmg.status === 'failed')) { this.say('hachi_dock_dead', { name: s.name }, { minGap: 3 }); return false; }
+    if (this.berthAt === s) return true;
+    if (this.berthAt) { this.unberth('dock:' + id); return true; }
+    this.wake();
+    this.goal(id);
+    this.dockGoal = s;
+    this.say('hachi_berth_go', { name: s.name }, { minGap: 2 });
+    return true;
+  }
+
+  /** the pilot's final approach touched the station's port: latches close */
+  berth(s) {
+    const g = this.g;
+    this.resetDrive();
+    this.berthAt = s;
+    this.dockGoal = null;
+    this.pilot.setGoal(null);
+    this.goalKind = null;
+    this.holdBerth();
+    this.latchT = 1.2;
+    if (this.crew) { g.audio.impact(V(0, -3.5, 0.8).add(DOCK), 0.3); g.shake = Math.max(g.shake, 0.45); }
+    this.say('hachi_berthed', { name: s.name });
+  }
+
+  /** cast off from the station's port (then: after, as for an undocking from B-29) */
+  unberth(after = 'free') {
+    const s = this.berthAt;
+    if (!s) return;
+    this.berthAt = null;
+    this.pilot.startUndockStation(s, this.g.stations.h8PortOf(s), after);
+    this.say('hachi_unberth', { name: s.name }, { minGap: 2 });
+  }
+
+  /** lying at the port: H8 rides with the station (in place of a flight step) */
+  holdBerth() {
+    const g = this.g, s = this.berthAt, f = this.flight;
+    const pose = g.docking.stationPose(s, g.time, this._bpose || (this._bpose = {}));
+    f.pos.copy(g.stations.h8PortOf(s)).applyQuaternion(pose.quat).add(pose.pos);
+    g.docking.frameVel(s, pose, f.pos, f.vel);
+    f.quat.copy(pose.quat);
+    f.qRel.copy(f.lvlhQuat(f.pos, _q2).invert().multiply(pose.quat));
+    f.wRel.set(0, 0, 0);
+    f.setSpeed = 0;
+    f.autopilot = null;
+    // what a point riding the station feels: weightless in orbit, ~0.88 g on the elevator
+    const r = f.pos.length();
+    const grav = _v.copy(f.pos).multiplyScalar(-MU_EARTH / (r * r * r));
+    const pr = pose.pos.length();
+    const aFrame = s.tether ? _v2.set(-OMEGA_EARTH * OMEGA_EARTH * f.pos.x, 0, -OMEGA_EARTH * OMEGA_EARTH * f.pos.z) : _v2.copy(pose.pos).multiplyScalar(-MU_EARTH / (pr * pr * pr));
+    f.properAcc.copy(aFrame).sub(grav);
+    f.thrustAcc.set(0, 0, 0);
   }
 
   /** HACHI's speed and braking (H8's drive, on its own reactor or with the storage boost) */
@@ -1063,15 +1134,19 @@ export class H8Vessel {
   preStep(sdt, flightIn) {
     const g = this.g;
     this.t += sdt;
+    this.lastDt = sdt;
     // adrift in the shelter: nothing to fly with (and B-29 is not his to fly from here)
     if (this.mode === 'pod') return null;
     if (this.mode !== 'free') return flightIn;
+    if (this.berthAt) { this.holdBerth(); this.flightInput = null; return this.crew ? null : flightIn; }
     // Kaito at the controls of a free H8: the sticks fly H8 (B-29 holds its course)
     const seated = g.player.state === 'seated' && this.isH8Seat(g.player.seat);
     let input = null;
     if (this.crew && seated && (g.mode === 'pilot' || g.mode === 'camera') && !this.pilot.goal && this.pilot.state !== 'undock' && this.pilot.state !== 'dock') input = flightIn;
     this.flightInput = input;
     this.pilot.update(sdt, g.time - sdt * 1000);
+    // (latched onto a station's port this very step: no flight step on top of it)
+    if (this.berthAt) { this.holdBerth(); return this.crew ? null : flightIn; }
     this.flight.step(sdt, input, (pos) => g.terrainAt(pos));
     this.collide(sdt);
     return this.crew ? null : flightIn;
@@ -1121,6 +1196,22 @@ export class H8Vessel {
       if (d < 900 && steady && !(g.docking && (g.docking.state === 'approach' || g.docking.state === 'leaving'))) {
         this.pilot.startDock();
         this.say('hachi_final');
+      }
+    }
+    // ---- docking with a station: straight in once within reach (no stop at the hold point)
+    if (this.mode === 'free' && this.dockGoal && !this.berthAt && this.pilot.state !== 'dock' && this.pilot.state !== 'undock') {
+      const s = this.dockGoal;
+      const sp = g.stations.posOf(s, g.time, _v3);
+      const R0 = ((s.model && s.model.userData.radius) || 150) + 200;
+      if (sp.distanceTo(this.flight.pos) < R0 + 2500) { this.pilot.startDockStation(s, g.stations.h8PortOf(s)); this.say('hachi_final'); }
+    }
+    // ---- at a station's port: its power and propellant lines
+    if (this.berthAt) {
+      const s = this.berthAt, ok = !s.dmg || s.dmg.status === 'ok' || s.dmg.status === 'damaged';
+      if (ok) {
+        this.power.smes = Math.min(H8.smesMJ, this.power.smes + (s.supply ? 600 : 300) * sdt);
+        const T = this.flight.tank;
+        T.kg = Math.min(T.cap, T.kg + (s.supply ? 120 : 50) * sdt);
       }
     }
     // ---- radiators fold up while B-29 docks at (or lies at) a station's berth
@@ -1588,10 +1679,13 @@ export class H8Vessel {
         }
       }
     }
-    // stations
+    // stations (not the one H8 is docking with or lies at: the way in is clear by design, and the
+    // last metres are the port itself)
+    const host = this.pilot.dock && this.pilot.dock.host && this.pilot.dock.host.s;
     for (const s of g.stations.list) {
       const P = s.model && s.model.userData.proxies;
       if (!P) continue;
+      if (s === this.berthAt || (s === host && (this.pilot.state === 'dock' || this.pilot.state === 'undock'))) continue;
       const d0 = s.pos.distanceTo(f.pos);
       if (d0 > 600) continue;
       const pose = g.docking.stationPose(s, g.time, this._pose || (this._pose = {}));
@@ -2436,7 +2530,7 @@ export class H8Vessel {
       met: !!this.metAsphalt, hits: this.hits,
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)), drive: this.driveMode,
-      shelter: this.shelter.serialize(), structure: +this.structure.toFixed(3),
+      shelter: this.shelter.serialize(), structure: +this.structure.toFixed(3), berth: this.berthAt ? this.berthAt.id : null,
       learn: +this.mind.learn.toFixed(3),
     };
   }
@@ -2481,6 +2575,8 @@ export class H8Vessel {
       else if (d.goal) this.goal(d.goal);
     }
     this.crew = !!d.crew && (this.mode === 'free' || this.mode === 'pod');
+    this.berthAt = this.mode === 'free' && d.berth ? this.g.stations.byId(d.berth) || null : null;
+    if (this.berthAt) { this.pilot.setGoal(null); this.goalKind = null; this.holdBerth(); }
     if (this.mode === 'pod' || this.mode === 'lost') this.setLamps(this.mode === 'pod');
     this.driveMode = ['ultra', 'max'].includes(d.drive) ? d.drive : 'normal';
     // saved before H8 waited above B-29 on a new game, and never woken: it does now

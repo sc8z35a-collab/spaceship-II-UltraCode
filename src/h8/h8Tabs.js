@@ -493,6 +493,7 @@ export class H8Tabs {
       if (!v.crew) { btn('分離して停泊軌道へ', () => v.release('home'), 'normal', 10, 492); y += 40; }
     } else {
       const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      if (v.berthAt) { btn(`${v.berthAt.name.replace('（修理基地）', '')} から離脱（係留中）`, () => v.unberth('free'), 'danger', 10, 492); y += 40; }
       btn(v.goalKind === 'b29' ? 'B-29 へ帰還中（中止）' : 'B-29 へ帰還・結合', () => (v.goalKind === 'b29' ? v.goal('hold') : v.call()), v.goalKind === 'b29' ? 'on' : 'warn', 10, 243);
       btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ', () => (coming ? ap.disengage() : v.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled', 259, 243);
       y += 40;
@@ -509,15 +510,17 @@ export class H8Tabs {
       const RH = 29, rows = Math.max(1, Math.floor((H - y - 26) / RH));
       const pages = Math.ceil(list.length / rows);
       t.page = Math.min(t.page, pages - 1);
-      K.text('自律航行先', 14, y + 15, { size: 13.5, color: COL.dim });
+      K.text('自律航行先（右：ドッキング）', 14, y + 15, { size: 13.5, color: COL.dim });
       if (pages > 1) K.button(402, y - 1, 100, 22, `${t.page + 1}/${pages} ▸`, () => { t.page = (t.page + 1) % pages; }, { size: 12 });
       y += 24;
       list.slice(t.page * rows, t.page * rows + rows).forEach((s) => {
-        const sel = v.goalKind === s.id;
-        K.rect(10, y, 492, 25, { fill: sel ? 'rgba(95,208,255,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.16)', r: 6 });
-        K.text(fit(K, s.name.replace('（修理基地）', ''), 330, 15), 20, y + 18, { size: 15, color: (s.dmg ? s.dmg.status : 'ok') === 'ok' ? COL.text : COL.dim });
-        K.text(fmtDist(s.pos.distanceTo(v.flight.pos)), 494, y + 18, { size: 14, color: COL.dim, align: 'right', mono: true });
-        K.buttons.push({ x: 10, y, w: 492, h: 25, onTap: () => v.goal(s.id) });
+        const sel = v.goalKind === s.id, st = s.dmg ? s.dmg.status : 'ok';
+        const here = v.berthAt === s, dg = v.dockGoal === s;
+        K.rect(10, y, 404, 25, { fill: sel ? 'rgba(95,208,255,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.16)', r: 6 });
+        K.text(fit(K, s.name.replace('（修理基地）', ''), 270, 15), 20, y + 18, { size: 15, color: st === 'ok' ? COL.text : COL.dim });
+        K.text(fmtDist(s.pos.distanceTo(v.flight.pos)), 406, y + 18, { size: 14, color: COL.dim, align: 'right', mono: true });
+        K.buttons.push({ x: 10, y, w: 404, h: 25, onTap: () => v.goal(s.id) });
+        K.button(418, y, 84, 25, here ? '係留中' : dg ? '接続中' : 'ドッキング', () => v.dockWith(s.id), { style: here || dg ? 'on' : st === 'ok' || st === 'damaged' ? 'normal' : 'disabled', size: 12 });
         y += RH;
       });
     }

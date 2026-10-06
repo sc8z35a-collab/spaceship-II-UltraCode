@@ -183,7 +183,7 @@ export class HachiPilot {
 
   update(dt, tNow) {
     const f = this.v.flight;
-    if (this.state === 'dock' || this.state === 'undock') { this.steerB29(dt); return; }
+    if (this.state === 'dock' || this.state === 'undock') { this.steerHost(dt, tNow); return; }
     if (!this.goal || !f.autopilot) return;
     const goal = this.goal;
     goal.posOf(tNow, this._tgt.pos, this._tgt.vel);
@@ -227,6 +227,7 @@ export class HachiPilot {
         { p: at.clone(), v: 1.6, a: 3, tol: 0.05, final: true },
       ],
       t: 0,
+      host: { kind: 'b29' },
     };
     // coming in from below or the side: first well clear above B-29's back (the straight line
     // would run through B-29)
@@ -248,16 +249,84 @@ export class HachiPilot {
         { p: new THREE.Vector3(at.x, at.y + 30, at.z), v: 4, tol: 2, last: true },
       ],
       t: 0,
+      host: { kind: 'b29' },
     };
     f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
   }
 
-  /** proximity operations in B-29's frame: fly the waypoint list, matching B-29's attitude */
-  steerB29(dt) {
-    const g = this.v.g, f = this.v.flight, fb = g.flight;
+  // ---------------------------------------------------------------- docking at a station
+  /**
+   * H8 alone onto a station's H8 port (port: where H8's origin sits once docked, station-local,
+   * upright in the station's frame). From wherever it arrives it swings round the station at a
+   * safe radius to the top, then comes straight down onto the port — at full pace all the way, the
+   * path planned as a whole like the docking onto B-29.
+   */
+  startDockStation(s, port) {
+    const g = this.v.g, f = this.v.flight;
+    const R0 = ((s.model && s.model.userData.radius) || 150) + 200;
+    const pose = g.docking.stationPose(s, g.time - (this.v.lastDt || 0) * 1000);
+    const cur = f.pos.clone().sub(pose.pos).applyQuaternion(pose.quat.clone().invert());
+    const Rs = cur.length();
+    const from = cur.clone().divideScalar(Math.max(Rs, 1e-6)), to = new THREE.Vector3(0, 1, 0);
+    const wp = [];
+    const ang = from.angleTo(to);
+    if (ang > 0.15) {
+      const steps = Math.max(1, Math.ceil(ang / (30 * Math.PI / 180)));
+      const qa = new THREE.Quaternion().setFromUnitVectors(from, to);
+      for (let k = 1; k <= steps; k++) {
+        const q = new THREE.Quaternion().slerp(qa, k / steps);
+        wp.push({ p: from.clone().applyQuaternion(q).multiplyScalar(Math.max(R0, Rs + (R0 - Rs) * (k / steps))), v: 300, a: 45, tol: 30, pass: true });
+      }
+    }
+    const top = Math.max(port.y + 60, R0 * 0.6);
+    wp.push({ p: new THREE.Vector3(port.x, top, port.z), v: 250, a: 45, tol: 8, pass: true });
+    wp.push({ p: new THREE.Vector3(port.x, port.y + 8, port.z), v: 50, a: 28, tol: 1.5, pass: true });
+    wp.push({ p: new THREE.Vector3(port.x, port.y + 0.6, port.z), v: 8, a: 10, tol: 0.15, pass: true });
+    wp.push({ p: port.clone(), v: 1.6, a: 3, tol: 0.05, final: true });
+    this.state = 'dock';
+    this.dock = { wp, t: 0, host: { kind: 'station', s } };
+    f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true, tau: 0.3 };
+  }
+
+  /** off a station's port: straight up, then hand over */
+  startUndockStation(s, port, after) {
+    const f = this.v.flight;
+    this.state = 'undock';
+    this.after = after;
+    this.dock = {
+      wp: [
+        { p: new THREE.Vector3(port.x, port.y + 2.5, port.z), v: 0.8, tol: 0.25 },
+        { p: new THREE.Vector3(port.x, port.y + 40, port.z), v: 8, tol: 2, last: true },
+      ],
+      t: 0,
+      host: { kind: 'station', s },
+    };
+    f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
+  }
+
+  /**
+   * the frame H8 docks in: B-29's, or a station's, at time t (the time H8's own state belongs to:
+   * an orbiting station moves 770 m in a tenth of a second)
+   */
+  hostPose(host, t = this.v.g.time) {
+    const g = this.v.g, H = this._host || (this._host = { pos: new THREE.Vector3(), vel: new THREE.Vector3(), quat: new THREE.Quaternion(), pose: {} });
+    H.s = host && host.kind === 'station' ? host.s : null;
+    if (!H.s) { const fb = g.flight; H.pos.copy(fb.pos); H.vel.copy(fb.vel); H.quat.copy(fb.quat); return H; }
+    const pose = g.docking.stationPose(H.s, t, H.pose);
+    H.pos.copy(pose.pos); H.vel.copy(pose.vel); H.quat.copy(pose.quat);
+    return H;
+  }
+
+  hostVelAt(H, p, out) { return H.s ? this.v.g.docking.frameVel(H.s, H.pose, p, out) : out.copy(H.vel); }
+
+  /** proximity operations in the host's frame (B-29 or a station): fly the waypoint list, matching
+   * the host's attitude */
+  steerHost(dt, tNow) {
+    const f = this.v.flight;
     const d = this.dock;
     const w = d && d.wp[0];
     if (!w) return;
+    const fb = this.hostPose(d.host, tNow);
     if (!f.autopilot) f.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
     f.autopilot.tau = 0.3;
     d.t += dt;
@@ -271,7 +340,7 @@ export class HachiPilot {
     // moment from now, or it would brake late and swing past the corner / onto the latches.)
     const a = w.a || (w.final ? 0.8 : 4.0);
     const dirE = err.clone().divideScalar(Math.max(dist, 1e-6));
-    const closing = Math.max(0, f.vel.clone().sub(fb.vel).dot(dirE));
+    const closing = Math.max(0, f.vel.clone().sub(this.hostVelAt(fb, f.pos, new THREE.Vector3())).dot(dirE));
     const lag = closing * 0.4;
     let v = w.v;
     if (w.pass) {
@@ -296,20 +365,21 @@ export class HachiPilot {
       // the last few decimetres at a steady creep (no slow exponential tail) onto the latches
       v = Math.min(v, Math.max(0.1, Math.min(Math.sqrt(2 * a * Math.max(0, dist - 0.02 - lag)), dist * 3)));
     } else v = Math.min(v, Math.sqrt(2 * a * Math.max(0, dist - w.tol * 0.4 - lag)), dist * 2.2);
-    const vDes = fb.vel.clone().addScaledVector(dirE, v);
+    const vDes = this.hostVelAt(fb, f.pos, new THREE.Vector3()).addScaledVector(dirE, v);
     f.autopilot.vRel.copy(vDes).sub(f.refVelocity(f.pos, new THREE.Vector3()));
     f.autopilot.aff = null;
     f.autopilot.fast = true;
     f.setSpeed = v;
     // attitude: B-29's own (H8 sits on its back in the same orientation)
     const r = ratesToward(f.quat, fb.quat, 45 * Math.PI / 180, 2.4, f.autopilot.wDes);
-    const relV = f.vel.clone().sub(fb.vel).length();
+    const relV = f.vel.clone().sub(this.hostVelAt(fb, f.pos, new THREE.Vector3())).length();
     if (w.final) {
       // (soft capture: the latches take up a closing speed of up to 15 cm/s)
       if ((dist < w.tol && relV < 0.15 && r.ang < 0.04) || (dist < 0.25 && d.t > 8)) {
         d.wp.length = 0;
         this.state = 'idle';
-        this.v.latch();
+        if (d.host && d.host.kind === 'station') this.v.berth(d.host.s);
+        else this.v.latch();
       }
       return;
     }
