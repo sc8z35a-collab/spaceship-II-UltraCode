@@ -12,6 +12,11 @@ import { LAYER_NEAR, LAYER_MID, setLayersDeep } from '../core/layers.js';
 import { R_EARTH } from '../core/astro.js';
 import { HULL_BOTTOM } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
+import { H8 } from '../h8/h8Spec.js';
+
+// rations aboard B-29 (days for one): eaten day by day, restocked at the Origin's berth
+export const FOOD_FULL = 60;
+const KIT_FULL = { patches: 6, clamps: 5, sealant: 8, parts: 4 };
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DIRS = [[V(0, 0, -1), '前方'], [V(0, 0, 1), '後方'], [V(1, 0, 0), '右舷'], [V(-1, 0, 0), '左舷'], [V(0, 1, 0), '上方'], [V(0, -1, 0), '下方']];
@@ -27,6 +32,8 @@ export class Gameplay {
   constructor(game) {
     this.g = game;
     this.kit = { patches: 6, clamps: 5, sealant: 8, parts: 4 };
+    this.food = 30;
+    this.foodSaid = 99;
     this.held = null;
     this.coffeeLevel = 0;
     this.repairing = null;
@@ -1181,7 +1188,8 @@ export class Gameplay {
     if (!T) return;
     if (g.docking && g.docking.state === 'docked' && T.kg < T.cap - 0.5) {
       if (!this.refueling) { this.refueling = true; g.asphalt.say('b29_refuel', {}, { minGap: 120 }); }
-      T.kg = Math.min(T.cap, T.kg + 40 * dt);
+      // (the Origin pumps six times faster)
+      T.kg = Math.min(T.cap, T.kg + (g.docking.station && g.docking.station.supply ? 240 : 40) * dt);
       if (T.kg >= T.cap - 0.5) { T.kg = T.cap; this.refueling = false; g.asphalt.say('b29_refueled', {}, { minGap: 120 }); }
     } else this.refueling = false;
     // the station's crew loads ammunition too (a while after the berth is made)
@@ -1190,6 +1198,7 @@ export class Gameplay {
       this.rearmT = (this.rearmT || 0) + dt;
       if (this.rearmT > 25) { this.rearmT = 0; W.rearm(withH8); g.asphalt.say('b29_rearm', {}, { minGap: 60 }); }
     } else this.rearmT = 0;
+    this.updateSupply(dt);
     const fr = f.fuel;
     if (fr < 0.15 && !this.fuelWarned) { this.fuelWarned = true; g.asphalt.say('b29_fuel_low', { pct: Math.round(fr * 100) }, { force: true }); }
     else if (fr > 0.25) this.fuelWarned = false;
@@ -1308,11 +1317,58 @@ export class Gameplay {
     if (this.g.running) { this.updateViewmodel(dt); this.updateArms(); }
   }
 
+  // ================================================================== supplies
+  /**
+   * The rations run down a day at a time. At the Origin's berth its robots bring everything else
+   * aboard: power and propellant for H8, the air reserves, water, the repair kit, food.
+   */
+  updateSupply(dt) {
+    const g = this.g, ls = g.lifeSupport, dk = g.docking;
+    this.food = Math.max(0, this.food - dt / 86400);
+    const left = this.food;
+    const mark = left <= 0 ? 0 : left < 1 ? 1 : left < 3 ? 3 : left < 7 ? 7 : 99;
+    if (mark < this.foodSaid) { this.foodSaid = mark; g.asphalt.say(mark === 0 ? 'food_out' : 'food_low', { d: Math.max(1, Math.ceil(left)) }, { force: true }); }
+    else if (left > 10) this.foodSaid = 99;
+    const st = dk && dk.state === 'docked' ? dk.station : null;
+    if (!st || !st.supply || (st.dmg && st.dmg.status !== 'ok' && st.dmg.status !== 'damaged')) { this.supplying = false; this.supplyT = 0; return; }
+    if (!this.supplying) { this.supplying = true; this.supplySaid = false; g.asphalt.say('origin_supply', {}, { force: true }); }
+    this.supplyT = (this.supplyT || 0) + dt;
+    const h = g.h8;
+    if (h && h.docked) {
+      h.power.smes = Math.min(H8.smesMJ, h.power.smes + 600 * dt);
+      const T = h.flight.tank;
+      if (T) T.kg = Math.min(T.cap, T.kg + 120 * dt);
+    }
+    ls.reserve.o2 = Math.min(9100, ls.reserve.o2 + 60 * dt);
+    ls.reserve.n2 = Math.min(17000, ls.reserve.n2 + 110 * dt);
+    ls.water = Math.min(180, ls.water + 1.5 * dt);
+    this.food = Math.min(FOOD_FULL, this.food + dt * FOOD_FULL / 90);
+    // the repair kit: the supply robots bring a fresh one a while after the berth is made
+    if (this.supplyT > 20) for (const [k, n] of Object.entries(KIT_FULL)) this.kit[k] = Math.max(this.kit[k] || 0, n);
+    if (!this.supplySaid && this.supplyItems().every((it) => it.k > 0.995)) { this.supplySaid = true; g.asphalt.say('origin_supply_done', {}, { force: true }); }
+  }
+
+  /** what the supply board shows: name, fill 0..1, being filled */
+  supplyItems() {
+    const g = this.g, f = g.flight, ls = g.lifeSupport, h = g.h8, on = !!this.supplying;
+    const kitK = Object.entries(KIT_FULL).reduce((a, [k, n]) => a + Math.min(1, (this.kit[k] || 0) / n), 0) / Object.keys(KIT_FULL).length;
+    const items = [];
+    const add = (name, k) => items.push({ name, k: Math.max(0, Math.min(1, k)), active: on && k < 0.995 });
+    add('推進剤 B-29', f.tank ? f.tank.kg / f.tank.cap : 1);
+    if (h && h.docked) { add('電力 H8', h.power.smes / H8.smesMJ); if (h.flight.tank) add('推進剤 H8', h.flight.tank.kg / h.flight.tank.cap); }
+    add('酸素', ls.reserve.o2 / 9100);
+    add('窒素', ls.reserve.n2 / 17000);
+    add('水', ls.water / 180);
+    add('食料', this.food / FOOD_FULL);
+    add('修理部材', kitK);
+    return items;
+  }
+
   // ================================================================== persistence
   serialize() {
     const g = this.g;
     return {
-      kit: this.kit, held: this.held, coffee: this.coffeeLevel,
+      kit: this.kit, held: this.held, coffee: this.coffeeLevel, food: +this.food.toFixed(4),
       valves: (g.layout.valves || []).map((v) => v.open),
       airlockMode: g.airlockMode || 'idle',
     };
@@ -1321,6 +1377,7 @@ export class Gameplay {
   restore(d) {
     const g = this.g;
     if (d.kit) this.kit = d.kit;
+    if (d.food !== undefined) this.food = d.food;
     if (d.held) this.hold(d.held);
     if (d.coffee !== undefined) this.coffeeLevel = d.coffee;
     (d.valves || []).forEach((o, i) => { const v = (g.layout.valves || [])[i]; if (v) v.open = o; });

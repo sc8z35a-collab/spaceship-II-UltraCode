@@ -103,6 +103,8 @@ export class Builder {
 
   /** rounded box centred at pos (with autoRound, chunky boxes get soft, well-rounded edges) */
   box(w, h, d, key, pos = [0, 0, 0], rot, r = 0.02, seg = 2, col = false) {
+    // (a builder can ask for plain boxes below some rounding: bulk props, far structures)
+    if (this.plainUpTo !== undefined && r <= this.plainUpTo && seg < 3) r = 0;
     const m = Math.min(w, h, d);
     if (this.autoRound && m > 0.12) { r = Math.max(r, Math.min(0.075, m * 0.17)); seg = Math.max(seg, 3); }
     if (lowQ()) seg = 1;

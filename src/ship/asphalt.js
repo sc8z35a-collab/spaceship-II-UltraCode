@@ -185,6 +185,10 @@ const LINES = {
   pd_ammo_out: ['防衛機銃、弾切れです。'],
   w_shot: ['{name}に命中しています。撃たないで。'],
   b29_rearm: ['弾薬を補給しました。'],
+  origin_supply: ['オリジンの自動補給システムと接続。電力、推進剤、空気、水、食料、修理部材を補給します。'],
+  origin_supply_done: ['補給完了。すべて満載です。'],
+  food_low: ['食料が残り{d}日分です。オリジン国際宇宙ステーションで補給できます。'],
+  food_out: ['食料が尽きました。オリジンで補給してください。'],
   asp_relay_h8: ['H8被弾。外部装甲{pct}%。'],
   asp_split: ['{b}は私が撃ちます。'],
   h8_leak_port: ['H8から空気が漏れています。ハッチを閉めて。'],
@@ -323,6 +327,7 @@ const VOICE = new Set([
   'breach', 'breach_big', 'window_broken', 'pressure_low', 'o2_low', 'co2_high', 'danger3', 'reentry_hot', 'reentry_burn',
   'breakup', 'dying', 'crash', 'impact_big', 'asteroid', 'drones_contact', 'eva_o2', 'st_breach_here', 'st_gone', 'st_gone_suit',
   'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue', 'h8_lost_pod',
+  'food_out',
   // refusals
   'autopilot_fail', 'ap_wreck', 'ap_dark', 'st_dock_far', 'st_dock_ultra', 'st_docked_ultra', 'st_docked_ap', 'st_dock_hatch',
   'st_dock_crew', 'ultra_denied', 'ultra_nofuel', 'need_kit', 'kit_empty', 'repair_cannot', 'hatch_nosuit', 'hatch_press',

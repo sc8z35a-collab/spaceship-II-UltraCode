@@ -144,6 +144,7 @@ export class Autopilot {
       this.eta = len / Math.max(v, 1);
     }
     f.autopilot.aff = null;
+    this.avoid(f, tShip);
     // attitude: nose along the direction of travel (or hold when stationary)
     const want = v > 1 ? moveDir : null;
     const w = f.autopilot.wDes;
@@ -162,5 +163,44 @@ export class Autopilot {
     }
     // display speed along nose for gauges
     f.setSpeed = v;
+  }
+
+  /**
+   * Steer clear of the stations on the way: the straight line to a target ahead on the same orbit
+   * runs through whatever lies in between (Shirasagi sits 1.3 km ahead of the start, on the line
+   * to the Origin). Where the course we want would pass one closer than its size and a margin,
+   * add the sideways speed that takes us round it in time (head on: up, away from the planet).
+   */
+  avoid(f, tShip) {
+    const g = this.g;
+    if (!g.stations || !f.autopilot) return;
+    const T = this._av || (this._av = { vr: new THREE.Vector3(), vi: new THREE.Vector3(), p: new THREE.Vector3(), vo: new THREE.Vector3(), add: new THREE.Vector3(), r: new THREE.Vector3(), u: new THREE.Vector3(), m: new THREE.Vector3() });
+    f.refVelocity(f.pos, T.vr);
+    T.vi.copy(f.autopilot.vRel).add(T.vr);
+    T.add.set(0, 0, 0);
+    this.avoiding = null;
+    for (const o of g.stations.list) {
+      if (o === this.target) continue;
+      g.stations.posOf(o, tShip, T.p, T.vo);
+      const r = T.r.copy(f.pos).sub(T.p), d = r.length();
+      if (d > 80000) continue;
+      const R = ((o.model && o.model.userData.radius) || 150) + 350;
+      const u = T.u.copy(T.vi).sub(T.vo), uu = u.lengthSq();
+      const tc = uu > 1 ? -r.dot(u) / uu : -1;
+      let push = 0;
+      const n = T.m;
+      if (tc > 0 && tc < 500) {
+        n.copy(r).addScaledVector(u, tc);
+        const miss = n.length();
+        if (miss < R) {
+          if (miss > 1) n.divideScalar(miss); else n.copy(f.pos).normalize();
+          push = Math.min(800, 2 * (R - miss) / Math.max(tc, 4));
+        }
+      }
+      // already inside the margin: straight out
+      if (d < R) { n.copy(r).divideScalar(Math.max(d, 1)); push = Math.max(push, (R - d) * 0.2); }
+      if (push > 0) { T.add.addScaledVector(n, push); this.avoiding = o; }
+    }
+    if (T.add.lengthSq() > 0) f.autopilot.vRel.add(T.add);
   }
 }

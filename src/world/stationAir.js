@@ -12,9 +12,15 @@ export class StationAir {
     this.lobby = lobby;
     this.station = station;
     const sec = (name, vol) => ({ name, vol, p: P0, o2: P0 * O2F });
-    this.sec = { lobby: sec('ロビー', 2500), promenade: sec('プロムナード', 900) };
-    if (lobby.hasAtrium) this.sec.atrium = sec('中央アトリウム', 2300);
-    if (lobby.ring) this.sec.ring = sec('リング居住区', 12000);
+    if (lobby.sections) {
+      // a station of its own plan (the Origin): its sections as it lists them ('lobby' is the port)
+      this.sec = {};
+      for (const s of lobby.sections) this.sec[s.id] = sec(s.name, s.vol);
+    } else {
+      this.sec = { lobby: sec('ロビー', 2500), promenade: sec('プロムナード', 900) };
+      if (lobby.hasAtrium) this.sec.atrium = sec('中央アトリウム', 2300);
+      if (lobby.ring) this.sec.ring = sec('リング居住区', 12000);
+    }
     this.ringContains = null;
     // links between sections through the station doors
     this.links = [];

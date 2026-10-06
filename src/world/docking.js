@@ -13,6 +13,7 @@ import * as THREE from 'three';
 import { MU_EARTH, OMEGA_EARTH } from '../core/astro.js';
 import { DOCK_AT } from './stations.js';
 import { buildLobby, setGlobeTexture } from './stationLobby.js';
+import { buildOriginInterior } from './originInterior.js';
 import { StationAir } from './stationAir.js';
 import { RING } from './stationRing.js';
 
@@ -146,7 +147,7 @@ export class Docking {
     // swing around at a safe radius to the berth side, then in along the berth line
     // (about four times quicker than it used to be: the drive works harder during the manoeuvre,
     // with the inertial damper on so the cabin stays calm)
-    const Rs = cur.length(), R0 = 200;
+    const Rs = cur.length(), R0 = s.berthR || 200;
     const from = cur.clone().normalize(), to = V(-1, 0, 0);
     const qa = new THREE.Quaternion().setFromUnitVectors(from, to);
     const steps = Math.max(1, Math.ceil(from.angleTo(to) / (25 * Math.PI / 180)));
@@ -223,8 +224,8 @@ export class Docking {
     const g = this.g, s = this.station;
     let lobby = this.lobbies.get(s.id);
     if (!lobby) {
-      lobby = buildLobby(g.engine.renderer, s);
-      if (g.earth && g.earth.color) setGlobeTexture(lobby, g.earth.color);
+      lobby = s.origin ? buildOriginInterior(g.engine.renderer, s) : buildLobby(g.engine.renderer, s);
+      if (g.earth && g.earth.color && lobby.globeMat) setGlobeTexture(lobby, g.earth.color);
       this.lobbies.set(s.id, lobby);
     }
     this.lobby = lobby;
@@ -460,7 +461,7 @@ export class Docking {
     f.heatFlux = 0;
     f.groundAlt = 1e9;
     f.vertSpeed = 0;
-    if (this.lobby) this.lobby.globe.rotation.y += 0.0015;
+    if (this.lobby && this.lobby.globe) this.lobby.globe.rotation.y += 0.0015;
   }
 
   /** dock instantly (restoring a save) */
@@ -619,6 +620,7 @@ export class Docking {
       for (const e of this.air.events.splice(0)) if (e.type === 'recovered') g.asphalt.say('st_air_ok', { sec: this.air.sec[e.sec].name }, { minGap: 20 });
     }
     for (const d of this.lobby.doors || []) d.update(dt, who, g.audio, g.fx);
+    if (this.lobby.update) this.lobby.update(dt, g);
     this.emergencyLights(dt, st);
   }
 

@@ -636,6 +636,8 @@ export class Monitors {
     K.text('予備 O2', X, 176, { size: 9, color: COL.dim }); K.bar(X, 181, 104, 6, ls.reserve.o2 / 9100, COL.green);
     K.text('予備 N2', X, 202, { size: 9, color: COL.dim }); K.bar(X, 207, 104, 6, ls.reserve.n2 / 17000, COL.cyan);
     K.text('水 ' + ls.water.toFixed(0) + ' L', X, 228, { size: 9, color: COL.dim }); K.bar(X, 233, 104, 6, ls.water / 180, '#5f9cff');
+    const food = g.gameplay.food ?? 0;
+    K.text('食料 ' + food.toFixed(1) + ' 日', X, 254, { size: 9, color: food < 3 ? COL.amber : COL.dim }); K.bar(X, 259, 104, 6, food / 60, food < 3 ? COL.amber : COL.green);
   }
 
   draw_status(K, m, H) {
