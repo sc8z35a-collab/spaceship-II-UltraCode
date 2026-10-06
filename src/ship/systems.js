@@ -145,6 +145,8 @@ export class ShipSystems {
   exitPressed() {
     const g = this.g;
     if (g.mode === 'camera') { this.cameraPressed(); return; }
+    // H8's shelter adrift: there is nothing but vacuum outside its door
+    if (g.player.state === 'seated' && g.player.seat && g.player.seat.shelter && g.h8 && g.h8.mode === 'pod') { g.h8.say('hachi_pod_vacuum', {}, { minGap: 5 }); return; }
     if (g.player.state === 'seated') {
       g.player.stand();
       g.mode = 'walk';
@@ -156,7 +158,8 @@ export class ShipSystems {
   cameraPressed() {
     const g = this.g;
     if (g.mode === 'camera') { g.mode = g.player.state === 'seated' && g.player.seat.kind === 'pilot' ? 'pilot' : 'walk'; g.input.setMode(g.mode === 'pilot' ? 'pilot' : 'walk'); this.emit('camOff'); return; }
-    if (g.mode === 'pilot') { g.mode = 'camera'; g.input.setMode('camera'); this.emit('camOn'); }
+    // (from H8's shelter the only view out is its small screen)
+    if (g.mode === 'pilot' && !(g.player.seat && g.player.seat.shelter)) { g.mode = 'camera'; g.input.setMode('camera'); this.emit('camOn'); }
   }
 
   externalCamera(i) {

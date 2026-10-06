@@ -19,6 +19,7 @@ import { H8Display, fmtDist, altOf, FLOOR, CAM_DEAD } from './h8Display.js';
 import { H8Tabs } from './h8Tabs.js';
 import { H8Zoom, OPT_MAX, DIG_MAX } from './h8Zoom.js';
 import { H8Hud } from './h8Hud.js';
+import { H8Shelter, shelterMaterials, SHELTER } from './h8Shelter.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
@@ -83,6 +84,7 @@ export class H8Vessel {
     const M = this.M = createH8Materials();
     const extKeys = new Set(Object.keys(M));
     createH8InteriorMaterials(M);
+    shelterMaterials(M);
     this.intKeys = new Set(Object.keys(M).filter((k) => !extKeys.has(k)));
     for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k));
     this.ext = buildH8Exterior(M);
@@ -96,6 +98,11 @@ export class H8Vessel {
     this.root.name = 'H8';
     this.root.matrixAutoUpdate = false;
     this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh);
+    // the emergency shelter behind the aft panel (and what is left of it if H8 is lost)
+    this.shelter = new H8Shelter(this, M);
+    this.root.add(this.shelter.group, this.shelter.pod);
+    this.shelter.buildDoorLiner(this.display.shelterS.pivot);
+    this.structure = 1;          // the frame, once the inner armour is gone (0: H8 breaks up)
     // the tabs are drawn over the finished picture (unmagnified by the zoom)
     game.engine.uiScene.add(this.tabs.group);
     this.extMeshes = [];
@@ -282,6 +289,9 @@ export class H8Vessel {
     g.input.captureMove = (t) => this.tabMove(t);
     g.input.captureUp = (t, tap) => this.tabUp(t, tap);
     g.input.captureWheel = (x, y, dy) => this.tabWheel(x, y, dy);
+    // the shelter's screens and its door; its lamp in the light pool
+    this.shelter.init(g);
+    this.lamps.push({ pos: V(0, SHELTER.y1 - 0.05, 1.38).add(DOCK), local: V(0, SHELTER.y1 - 0.05, 1.38), color: 0xffa060, intensity: 0, base: 0, range: 1.5, room: 'h8', shelter: true });
     // ---- a new game: H8 waits right above B-29, on standby
     if (!this.park) this.initAbove();
     this.placeParked(g.time);
@@ -375,6 +385,7 @@ export class H8Vessel {
   // ==================================================================== geometry queries
   /** a physics-frame point inside H8's pressurised volume (cockpit, shaft, neck) */
   containsPF(p) {
+    if (this.shelter && this.shelter.containsPF(p)) return true;
     const x = p.x - DOCK.x, y = p.y - DOCK.y, z = p.z - DOCK.z;
     const C = H8.cockpitC;
     if ((x - C.x) ** 2 + (y - C.y) ** 2 + (z - C.z) ** 2 < (H8.cockpitR + 0.1) ** 2 && y > H8.floorY - 0.05) return true;
@@ -408,6 +419,7 @@ export class H8Vessel {
   kaitoInside() {
     const pl = this.g.player;
     if (pl.state === 'dead') return false;
+    if (pl.state === 'seated' && this.shelter && pl.seat === this.shelter.seat) return true;
     if (pl.state === 'seated' && pl.seat === this.seat) {
       if (!this.containsPF(pl.pos)) pl.teleport(this.seat.exit.clone().add(V(0, 0.85, 0)));
       return true;
@@ -420,6 +432,9 @@ export class H8Vessel {
 
   /** world (ECI) pose */
   pose() { return { pos: this.flight.pos, quat: this.flight.quat, vel: this.flight.vel }; }
+
+  /** speed against the local orbit (m/s) */
+  relSpeed() { const f = this.flight; return f.vel.clone().sub(f.refVelocity(f.pos, new THREE.Vector3())).length(); }
 
   /** HACHI's long-range target for B-29's autopilot (nav entry "H8") */
   navTarget() {
@@ -442,7 +457,7 @@ export class H8Vessel {
   /** wake H8 up (remote link) and bring it to B-29's back */
   call() {
     const g = this.g;
-    if (this.mode === 'docked') return;
+    if (this.mode === 'docked' || this.mode === 'lost' || this.mode === 'pod') return;
     const L = this.linkState();
     if (!L.ok) { this.asphalt(L.why === 'range' ? 'h8_out_of_range' : 'h8_link_down', { d: fmtDist(L.d) }); return; }
     // the flight costs H8 propellant: not enough for the trip, no trip
@@ -542,8 +557,18 @@ export class H8Vessel {
     this.say('hachi_report', { state: st, fuel: Math.round(this.flight.fuel * 100), arm: Math.round(this.armour.outer * 100), smes: Math.round(this.power.smes / H8.smesMJ * 100), d: L.d > 0 ? fmtDist(L.d) : '0 m' });
   }
 
-  /** H8's screens run on H8's own power */
-  screenPower() { return this.awake > 0.15 ? Math.min(1, 0.4 + this.awake * 0.6) : this.mode === 'docked' ? 0.35 : 0; }
+  /** H8's screens run on H8's own power (adrift, the shelter's on its battery) */
+  screenPower() {
+    if (this.mode === 'pod') return this.shelter.battery > 0 ? 0.6 : 0;
+    if (this.mode === 'lost') return 0;
+    return this.awake > 0.15 ? Math.min(1, 0.4 + this.awake * 0.6) : this.mode === 'docked' ? 0.35 : 0;
+  }
+
+  /** the shelter's door (0 shut .. 1 open) */
+  get shelterOpen() { return this.shelter ? this.shelter.open : 0; }
+
+  /** one of H8's seats: the pilot's in the middle of the cockpit, or the shelter's */
+  isH8Seat(seat) { return !!seat && (seat === this.seat || (this.shelter && seat === this.shelter.seat)); }
 
   /** move propellant between the two through the docking port's lines (docked only) */
   setXfer(mode) {
@@ -802,6 +827,186 @@ export class H8Vessel {
     this.say(this.power.boost ? 'hachi_boost_on' : 'hachi_boost_off', {}, { minGap: 3 });
   }
 
+  // ==================================================================== lost: the shelter adrift
+  /**
+   * H8 breaks up: a fireball, its pieces tumbling away (B-29 badly hurt if it is on its back).
+   * Kaito sealed in the shelter drifts on in it; anywhere else aboard he goes with H8.
+   */
+  destroy() {
+    const g = this.g, f = this.flight, pl = g.player;
+    if (this.mode === 'pod' || this.mode === 'lost') return;
+    const docked = this.mode === 'docked';
+    // (strapped into the shelter's seat: its door slams shut on the emergency closure)
+    const inShelter = pl.state === 'seated' && pl.seat === this.shelter.seat;
+    if (inShelter) { this.shelter.target = 0; this.shelter.open = 0; }
+    const aboard = !inShelter && pl.state !== 'dead' && (this.crew || (docked && this.kaitoInside()));
+    const pos = docked ? DOCK.clone().applyQuaternion(g.flight.quat).add(g.flight.pos) : f.pos.clone();
+    const vel = (docked ? g.flight.vel : f.vel).clone();
+    if (g.combat) {
+      g.combat.explode(pos, vel, 2.8, true);
+      // pieces of the armoured sphere
+      const parts = this.ext.group.children.filter((m) => m.isMesh).slice(0, 18);
+      for (let k = 0; k < 5; k++) {
+        const piece = new THREE.Group();
+        parts.forEach((m, i) => { if ((i + k) % 5 === 0) { const c = m.clone(); c.material = m.material; piece.add(c); } });
+        piece.scale.setScalar(0.35 + 0.15 * k);
+        g.combat.addWreck(piece, pos, vel.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(6 + Math.random() * 14)), 90, 3 + 4 * piece.scale.x);
+      }
+    }
+    g.shake = Math.max(g.shake, docked || inShelter ? 3 : 1);
+    if (docked) {
+      // the blast on B-29's back
+      g.damage.impact(V(0, 3.2, PORT.z), V(0, -1, 0), 5.0e6, { normal: V(0, 1, 0) });
+      g.systems.onImpact(5.0e6, V(0, 3.2, PORT.z));
+      g.flight.mul = 1; g.flight.aExtra = 0; g.flight.extMass = 0; g.flight.extTank = null; g.flight.extHealth = 0; g.flight.boostDamp = false; g.flight.turnK = g.flight.spec.turnK;
+    }
+    this.resetDrive();
+    this.attachTo(false);
+    this.pilot.setGoal(null);
+    this.goalKind = null;
+    f.autopilot = null; f.ultra = false; f.ultraDown = null; f.setSpeed = 0;
+    this.umb = 0; this.umbTarget = 0;
+    if (this.hatch) { this.hatch.setTarget(0); this.hatch.open = 0; }
+    this.neckTarget = 0; this.neckOpen = 0;
+    if (inShelter) {
+      // the shelter goes on alone, thrown clear by the blast, turning slowly
+      this.mode = 'pod';
+      this.crew = true;
+      f.pos.copy(pos); f.vel.copy(vel).add(new THREE.Vector3().randomDirection().multiplyScalar(1.5 + Math.random() * 1.5));
+      f.wRel.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12);
+      f.updateAttitude();
+      this.shelter.target = 0; this.shelter.open = 0;
+      setTimeout(() => this.say('hachi_pod', { t: this.shelter.o2Text() }, { force: true }), 2500);
+      if (this.link.ok || docked) setTimeout(() => this.asphalt('h8_lost_pod', {}, { force: true }), 6500);
+    } else {
+      this.mode = 'lost';
+      this.crew = false;
+      if (aboard) setTimeout(() => g.gameplay.die(), 2200);
+      else setTimeout(() => this.asphalt('h8_lost', {}, { force: true }), 2000);
+    }
+    this.setColliders(false);
+    this.setLamps(this.mode === 'pod');
+    for (const id of ['h8hum', 'h8fans', 'h8drive']) g.audio.stopLoop && g.audio.stopLoop(id);
+    this._snd = false;
+    this.syncAway();
+  }
+
+  /** B-29's walls are there for Kaito unless he is away (in H8 or its shelter) */
+  syncAway() {
+    const g = this.g, away = this.solo;
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
+    if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
+  }
+
+  /** per step while H8 is gone: the shelter drifting (gravity only), B-29 coming for it */
+  updateWreck(dt) {
+    const g = this.g, f = this.flight;
+    if (this.mode === 'pod') {
+      // coasting: nothing but gravity on it, a slow tumble
+      const r = f.pos.length(), k = -MU_EARTH / (r * r * r);
+      const ax = f.pos.x * k, ay = f.pos.y * k, az = f.pos.z * k;
+      f.pos.x += f.vel.x * dt + 0.5 * ax * dt * dt; f.pos.y += f.vel.y * dt + 0.5 * ay * dt * dt; f.pos.z += f.vel.z * dt + 0.5 * az * dt * dt;
+      f.vel.x += ax * dt; f.vel.y += ay * dt; f.vel.z += az * dt;
+      const w = f.wRel.length();
+      if (w > 1e-6) f.qRel.multiply(_q.setFromAxisAngle(_v.copy(f.wRel).divideScalar(w), w * dt)).normalize();
+      f.updateAttitude();
+      f.thrustAcc.set(0, 0, 0); f.properAcc.set(0, 0, 0);
+      this.gLocal.set(0, 0, 0);
+      this.shelter.update(dt);
+      // B-29 alongside and matched (its autopilot holds 150 m off), slow: Asphalt takes the
+      // shelter in with the manipulator
+      const fb = g.flight;
+      const d = fb.pos.distanceTo(f.pos), rv = fb.vel.distanceTo(f.vel);
+      if (d < 220 && rv < 4) this.recoverPod();
+    } else if (this.mode === 'lost') {
+      // the repair base builds another one while B-29 lies at its berth
+      const dk = g.docking;
+      if (dk && dk.state === 'docked' && dk.station && dk.station.kind === 'dock') {
+        this.rebuildT = (this.rebuildT || 0) + dt;
+        if (this.rebuildT > 8) this.rebuild();
+      } else this.rebuildT = 0;
+    }
+    this.syncAway();
+  }
+
+  /** from B-29's screens: go and fetch the shelter (B-29's autopilot to it) */
+  rescuePod() {
+    const g = this.g;
+    if (this.mode !== 'pod') return;
+    if (g.autopilot.engage('h8')) {
+      const d = g.flight.pos.distanceTo(this.flight.pos);
+      if (d > 30000 && !g.flight.ultra && g.flight.driveHealth >= 0.45) g.flight.setUltra(true);
+      this.asphalt('pod_go', { d: fmtDist(d) }, { force: true });
+    }
+  }
+
+  /** B-29 has the shelter alongside: Kaito comes through B-29's airlock */
+  recoverPod() {
+    const g = this.g, pl = g.player;
+    const withKaito = this.crew && pl.state !== 'dead';
+    this.mode = 'lost';
+    this.crew = false;
+    if (g.autopilot.state !== 'off' && g.autopilot.target && g.autopilot.target.id === 'h8') g.autopilot.disengage(true);
+    if (g.flight.ultra) { g.flight.ultraAuto = false; g.flight.setUltra(false); }
+    this.setLamps(false);
+    this.syncAway();
+    if (withKaito) {
+      g.gameplay.fadeAction(() => {
+        pl.seat = null;
+        pl.state = 'float';
+        pl.colStand.setEnabled(true);
+        pl.teleport(V(1.7, 0.95, -1.0));
+        g.mode = 'walk';
+        g.input.setMode('walk');
+      });
+      setTimeout(() => this.asphalt('pod_rescue', {}, { force: true }), 1500);
+    }
+  }
+
+  /** a new H8 from the repair base: as it was on the first day, waiting above B-29 */
+  rebuild() {
+    const g = this.g;
+    this.rebuildT = 0;
+    this.mode = 'parked';
+    this.crew = false;
+    this.structure = 1;
+    this.armour.outer = 1; this.armour.inner = 1;
+    for (const k of Object.keys(this.circuits)) this.circuits[k] = 1;
+    this.hull.repairAll();
+    if (this._leak) { g.lifeSupport.removeLeak(this._leak); this._leak = null; }
+    this.power.smes = H8.smesMJ * 0.85;
+    this.flight.tank.kg = this.flight.tank.cap;
+    this.shelter.o2 = 10 * 3600 * 7.4e-4; this.shelter.lioh = 1; this.shelter.battery = 1;
+    this.hits = 0;
+    this.awake = 0; this.wakeTarget = 0;
+    this.initAbove();
+    this.placeParked(g.time);
+    this.asphalt('h8_rebuilt', {}, { force: true });
+  }
+
+  /** per drawn frame while H8 is gone: only the shelter (adrift) shows */
+  wreckVisual(dt, eyePF, dCam) {
+    const g = this.g;
+    this.ext.group.visible = false;
+    this.ext.far.visible = false;
+    this.int.group.visible = false;
+    this.display.mesh.visible = false;
+    this.beacon.visible = false;
+    if (this.neckHatch) this.neckHatch.visible = false;
+    if (this.umbMesh) this.umbMesh.visible = this.umbHead.visible = false;
+    this.tabs.place(dt, false);
+    g.engine.uiOn = false;
+    if (this.zoom.z !== 1) { this.zoom.z = 1; this.zoom.zT = 1; g.engine.setZoom(1); this.display.setZoom(1); g.engine.grade.set('uPixel', 1); }
+    this.hud.frame(dt, [], null, false, false);
+    this.zoom.drawHud(false);
+    if (this.mode === 'lost') { this.shelter.group.visible = false; this.shelter.pod.visible = false; return; }
+    this.shelter.updateVisual(eyePF);
+    const d = Math.max(0, dCam);
+    this.shelter.pod.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - 3), d + 3); });
+    for (const l of this.lamps) l.intensity = l.shelter ? this.shelter.lampIntensity() : 0;
+  }
+
   // ==================================================================== docked: the pair as one
   attachTo(docked) {
     const g = this.g;
@@ -858,9 +1063,11 @@ export class H8Vessel {
   preStep(sdt, flightIn) {
     const g = this.g;
     this.t += sdt;
+    // adrift in the shelter: nothing to fly with (and B-29 is not his to fly from here)
+    if (this.mode === 'pod') return null;
     if (this.mode !== 'free') return flightIn;
     // Kaito at the controls of a free H8: the sticks fly H8 (B-29 holds its course)
-    const seated = g.player.state === 'seated' && g.player.seat === this.seat;
+    const seated = g.player.state === 'seated' && this.isH8Seat(g.player.seat);
     let input = null;
     if (this.crew && seated && (g.mode === 'pilot' || g.mode === 'camera') && !this.pilot.goal && this.pilot.state !== 'undock' && this.pilot.state !== 'dock') input = flightIn;
     this.flightInput = input;
@@ -873,6 +1080,8 @@ export class H8Vessel {
   /** after B-29's flight step */
   update(sdt, dt) {
     const g = this.g;
+    if (this.mode === 'pod' || this.mode === 'lost') { this.updateWreck(sdt); return; }
+    this.shelter.update(sdt);
     // an old save whose H8 was never woken: it now waits right above B-29 like on a new game
     if (this.relocate) { this.relocate = false; this.initAbove(); this.placeParked(g.time); }
     if (this.mode === 'parked') this.placeParked(g.time);
@@ -1408,7 +1617,16 @@ export class H8Vessel {
     const outer = Math.min(A.outer, k);
     A.outer -= outer;
     const rest = k - outer + (A.outer < 0.3 ? k * 0.3 : 0);
+    const innerBefore = A.inner;
     if (rest > 0) A.inner = Math.max(0, A.inner - rest * 0.6);
+    // with the inner armour gone the blows go into the frame itself; when that gives, H8 breaks up
+    if (innerBefore <= 0.001 && this.mode !== 'parked') {
+      const sb = this.structure;
+      this.structure = Math.max(0, this.structure - E / 4.0e7);
+      const aboard = this.crew || (this.mode === 'docked' && this.kaitoInside());
+      if (sb >= 0.6 && this.structure < 0.6) { this.say('hachi_breakup', {}, { force: true }); if (aboard && !this.shelter.occupied) setTimeout(() => this.say('hachi_shelter_go', {}, { force: true }), 1500); }
+      if (this.structure <= 0) { this.destroy(); return; }
+    }
     this.hits++;
     // the hull itself: a dent (or a hole) where it was hit, sparks, a blinded camera
     const res = this.hull.hit(dirLocal, E, { outer: outerBefore, shot: !!opts.shot });
@@ -1452,6 +1670,7 @@ export class H8Vessel {
 
   /** a rock's swept path against H8's sphere (called by the asteroid field) */
   rockCheck(a, prevPos, dt) {
+    if (this.mode === 'lost' || this.mode === 'pod') return false;
     if (a.hit || a.dead || this.mode === 'parked' && this.flight.pos.distanceTo(a.pos) > 5000) return false;
     const f = this.flight;
     // both moved this step (~0.1 km along the orbit): compare at the same instants
@@ -1574,6 +1793,7 @@ export class H8Vessel {
       this.root.updateMatrixWorld(true);
       dCam = rel.distanceTo(camWorld);
     }
+    if (this.mode === 'pod' || this.mode === 'lost') { this.wreckVisual(dt, eyePF, dCam); return; }
     // where H8 is this frame, for the dents (they are worked out in H8's own frame)
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
     DENT_U.uH8Root.value.copy(rw);
@@ -1674,7 +1894,7 @@ export class H8Vessel {
     // lamps: dim on standby; they stutter when a hit shakes the wiring
     this.flickT = Math.max(0, this.flickT - dt);
     const stut = this.flickT > 0 ? (Math.random() < 0.35 ? 0.15 : 0.6 + Math.random() * 0.4) : 1;
-    for (const l of this.lamps) l.intensity = l.locker ? 0.9 * this.locker.open * aw : l.base * (0.25 + 0.75 * aw) * stut;
+    for (const l of this.lamps) l.intensity = l.shelter ? this.shelter.lampIntensity() : l.locker ? 0.9 * this.locker.open * aw : l.base * (0.25 + 0.75 * aw) * stut;
     // the junction panels: green when sound, red and blinking when cut; a cut one spits sparks
     if (this.jLamps) {
       for (const [k, mat] of Object.entries(this.jLamps)) {
@@ -1732,6 +1952,7 @@ export class H8Vessel {
     this.zoom.drawHud(inCockpit && seatedHere && (g.mode === 'pilot' || g.mode === 'camera'));
     // a photograph is taken of the outside alone: the cockpit is out of the cameras' picture
     if (g.photos && g.photos.pending && inCockpit) { this.int.group.visible = false; this.display.mesh.visible = false; }
+    this.shelter.updateVisual(eyePF);
     // the shaft below the floor is out of sight (and not drawn) while the hatch is shut
     const eyeUp = eyePF && this.inCockpit(eyePF) && eyePF.y > FLOOR.y + DOCK.y;
     this.int.shaft.visible = !(eyeUp && this.floorHatch < 0.01);
@@ -1941,6 +2162,7 @@ export class H8Vessel {
   /** the drones have found Kaito: HACHI gets ready, and comes to cover B-29 if it can */
   onThreat(T) {
     const g = this.g;
+    if (this.mode === 'lost' || this.mode === 'pod') return;
     this.threatT = g.time;
     if (T.kind !== 'b29' || this.mode === 'docked' || this.crew) return;
     const L = this.linkState();
@@ -2214,6 +2436,7 @@ export class H8Vessel {
       met: !!this.metAsphalt, hits: this.hits,
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)), drive: this.driveMode,
+      shelter: this.shelter.serialize(), structure: +this.structure.toFixed(3),
       learn: +this.mind.learn.toFixed(3),
     };
   }
@@ -2238,8 +2461,14 @@ export class H8Vessel {
     if (d.leak && !this._leak && this.g.lifeSupport.z.h8) this._leak = this.g.lifeSupport.addLeak('h8', 3e-4, 'h8armour');
     this.awake = this.wakeTarget;
     if (d.flight) this.flight.restore(d.flight);
-    this.mode = d.mode === 'docked' ? 'docked' : d.mode === 'free' ? 'free' : 'parked';
-    if (this.mode === 'docked') {
+    this.mode = ['docked', 'free', 'pod', 'lost'].includes(d.mode) ? d.mode : 'parked';
+    this.shelter.restore(d.shelter);
+    this.structure = d.structure ?? 1;
+    if (this.mode === 'pod' || this.mode === 'lost') {
+      this.attachTo(false);
+      this.crew = this.mode === 'pod' && !!d.crew;
+      this.setColliders(false);
+    } else if (this.mode === 'docked') {
       this.attachTo(true);
       this.syncDocked();
       this.umb = this.power.feedOn ? 1 : 0;
@@ -2251,7 +2480,8 @@ export class H8Vessel {
       if (this.mode === 'parked') this.placeParked(this.g.time);
       else if (d.goal) this.goal(d.goal);
     }
-    this.crew = !!d.crew && this.mode === 'free';
+    this.crew = !!d.crew && (this.mode === 'free' || this.mode === 'pod');
+    if (this.mode === 'pod' || this.mode === 'lost') this.setLamps(this.mode === 'pod');
     this.driveMode = ['ultra', 'max'].includes(d.drive) ? d.drive : 'normal';
     // saved before H8 waited above B-29 on a new game, and never woken: it does now
     if (!d.v2 && this.mode === 'parked' && !this.metAsphalt) this.relocate = true;
@@ -2259,6 +2489,8 @@ export class H8Vessel {
 
   /** the time away from the game: a parked H8 needs nothing; a free one coasts or parks */
   catchUp(gap) {
+    // adrift in the shelter while the game was away: Asphalt fetched it meanwhile
+    if (this.mode === 'pod' && gap > 60) { this.recoverPod(); return; }
     if (this.mode === 'free') {
       if (this.crew) {
         // Kaito stayed aboard: HACHI held station (circular coast)

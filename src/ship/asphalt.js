@@ -164,6 +164,9 @@ const LINES = {
   h8_called_undock: ['離脱してからH8へ向かいます。'],
   h8_lost: ['H8の反応が消えました…'],
   pod_rescue: ['シェルターを回収しました。カイト、おかえりなさい。'],
+  pod_go: ['シェルターの回収に向かいます。{d}。'],
+  h8_lost_pod: ['H8の反応が消えました…でも、シェルターのビーコンは生きています！'],
+  h8_rebuilt: ['修理基地でH8を造り直しました。上で待機しています。'],
   pod_coming: ['シェルターへ向かいます。{d}。'],
   b29_report: ['B-29、{state}。推進剤{fuel}%、船体{integ}%、電力{pw}%。'],
   ultra_nofuel: ['推進剤不足。ULTRAは使えません。'],
@@ -294,6 +297,8 @@ const HACHI = {
   hachi_shelter_go: ['シェルターに入れ、カイト。'],
   hachi_shelter_o2: ['シェルターの酸素、残り{t}。'],
   hachi_breakup: ['H8がもたない…！'],
+  hachi_pod: ['H8を失った。シェルターだけ残った。酸素は{t}。'],
+  hachi_pod_vacuum: ['外は真空だ。出られない。'],
   // HACHI's mind: the air, the drones, the order of repairs, B-29 over the link, questions
   hachi_free: ['{text}'],
   hachi_port_leak: ['B-29の空気まで抜けている。ハッチを閉めろ。'],
@@ -317,7 +322,7 @@ const VOICE = new Set([
   // danger
   'breach', 'breach_big', 'window_broken', 'pressure_low', 'o2_low', 'co2_high', 'danger3', 'reentry_hot', 'reentry_burn',
   'breakup', 'dying', 'crash', 'impact_big', 'asteroid', 'drones_contact', 'eva_o2', 'st_breach_here', 'st_gone', 'st_gone_suit',
-  'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue',
+  'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue', 'h8_lost_pod',
   // refusals
   'autopilot_fail', 'ap_wreck', 'ap_dark', 'st_dock_far', 'st_dock_ultra', 'st_docked_ultra', 'st_docked_ap', 'st_dock_hatch',
   'st_dock_crew', 'ultra_denied', 'ultra_nofuel', 'need_kit', 'kit_empty', 'repair_cannot', 'hatch_nosuit', 'hatch_press',
@@ -326,7 +331,7 @@ const VOICE = new Set([
   'b29_report',
   // HACHI: danger
   'hachi_leak', 'hachi_air_danger', 'hachi_air_suit', 'hachi_fuel_out', 'hachi_port_leak', 'hachi_drones_contact',
-  'hachi_power_out', 'hachi_shelter_go', 'hachi_breakup', 'hachi_shelter_o2',
+  'hachi_power_out', 'hachi_shelter_go', 'hachi_breakup', 'hachi_shelter_o2', 'hachi_pod', 'hachi_pod_vacuum',
   // HACHI: refusals
   'hachi_no_link', 'hachi_vestibule', 'hachi_busy', 'hachi_eva_nosuit', 'hachi_suit_keep', 'hachi_no_target', 'hachi_rail_blocked',
   'hachi_hatch_pressure', 'hachi_follow_none', 'hachi_b29_nofuel', 'hachi_b29_landed', 'hachi_kit_empty', 'hachi_ammo_out',

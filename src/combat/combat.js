@@ -202,7 +202,7 @@ export class Combat {
       out.push({ kind, ref, pos, vel, R, p1 });
     };
     add('b29', g.flight, g.flight.pos, g.flight.vel, 20);
-    if (g.h8 && g.h8.mode !== 'parked') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
+    if (g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'pod' && g.h8.mode !== 'lost') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
     if (g.drones) for (const d of g.drones.list) if (d.alive) add('drone', d, d.pos, d.vel, d.R);
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) add('rock', a, a.pos, a.vel, a.radius);
     // stations: their exact pose now and a step on (their drawn position is a frame old)
@@ -440,11 +440,11 @@ export class Combat {
   }
 
   /** pieces of something that broke apart (meshes tumbling away) */
-  addWreck(mesh, pos, vel, life = 40) {
+  addWreck(mesh, pos, vel, life = 40, r = 3) {
     mesh.matrixAutoUpdate = false;
     mesh.frustumCulled = false;
     this.g.engine.scene.add(mesh);
-    this.wrecks.push({ mesh, pos: pos.clone(), vel: vel.clone(), q: new THREE.Quaternion().random(), axis: new THREE.Vector3().randomDirection(), spin: 0.5 + Math.random() * 3, t: 0, life });
+    this.wrecks.push({ mesh, pos: pos.clone(), vel: vel.clone(), q: new THREE.Quaternion().random(), axis: new THREE.Vector3().randomDirection(), spin: 0.5 + Math.random() * 3, t: 0, life, r });
   }
 
   // ------------------------------------------------------------------ per render frame
@@ -528,11 +528,11 @@ export class Combat {
     // tumbling wreckage
     for (const w of this.wrecks) {
       const rel = _v.copy(w.pos).sub(origin);
-      w.mesh.matrix.compose(rel, w.q, _v2.set(1, 1, 1));
+      w.mesh.matrix.compose(rel, w.q, w.mesh.scale);
       w.mesh.matrixWorld.copy(w.mesh.matrix);
       w.mesh.updateMatrixWorld(true);
       const d = rel.distanceTo(camWorld);
-      w.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - 3), d + 3); });
+      w.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - w.r), d + w.r); });
     }
   }
 }

@@ -102,7 +102,7 @@ export class Drones {
   /** the vessel the drones are after: the one Kaito is in */
   target() {
     const g = this.g;
-    if (g.h8 && g.h8.solo) return { kind: 'h8', ref: g.h8, pos: g.h8.flight.pos, vel: g.h8.flight.vel, acc: g.h8.flight.properAcc, R: 3.6 };
+    if (g.h8 && g.h8.solo && g.h8.mode === 'free') return { kind: 'h8', ref: g.h8, pos: g.h8.flight.pos, vel: g.h8.flight.vel, acc: g.h8.flight.properAcc, R: 3.6 };
     return { kind: 'b29', ref: g.flight, pos: g.flight.pos, vel: g.flight.vel, acc: g.flight.properAcc, R: 14 };
   }
 

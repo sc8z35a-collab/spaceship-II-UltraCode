@@ -79,7 +79,7 @@ export class SaveSystem {
     if (p.outside) { g.player.outside = true; g.player.state = 'eva'; }
     // H8 before the seat: Kaito may have been sitting in H8's cockpit
     if (d.h8 && g.h8) g.h8.restore(d.h8);
-    if (p.seat) { const seat = g.layout.seats.find((s) => s.id === p.seat) || (g.h8 && p.seat === g.h8.seat.id ? g.h8.seat : null); if (seat) g.systems.sit(seat); }
+    if (p.seat) { const seat = g.layout.seats.find((s) => s.id === p.seat) || (g.h8 && p.seat === g.h8.seat.id ? g.h8.seat : g.h8 && g.h8.shelter && p.seat === g.h8.shelter.seat.id ? g.h8.shelter.seat : null); if (seat) g.systems.sit(seat); }
     g.systems.restoreState(d.sys || {});
     if (d.ast) { g.asteroids.timer = d.ast.timer; g.asteroids.microTimer = d.ast.micro; }
     if (d.world && g.worldDamage) g.worldDamage.restore(d.world);

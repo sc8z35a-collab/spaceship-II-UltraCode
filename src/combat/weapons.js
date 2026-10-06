@@ -279,7 +279,7 @@ export class Weapons {
     } else this.fireHeld = false;
     // H8's guns
     const h8 = g.h8;
-    if (h8 && h8.mode !== 'parked' && h8.awake > 0.5) {
+    if (h8 && h8.mode !== 'parked' && h8.mode !== 'pod' && h8.mode !== 'lost' && h8.awake > 0.5) {
       this.railCharge = Math.min(1, this.railCharge + dt / 3.5);
       // the sensors: H8's own (worse with the sensor circuit cut); HACHI reads the drones' runs
       const sens = (1 + 6 * (1 - h8.circ('sensor', 0.1))) * (h8.mind ? h8.mind.spread('h8') : 1);
@@ -428,7 +428,7 @@ export class Weapons {
       return _v.copy(p).addScaledVector(dir, t).distanceTo(c) < r;
     };
     // the other ship: close by, its real shape; further off, its size
-    const other = which === 'h8' ? { pos: g.flight.pos, quat: g.flight.quat, spheres: g.docking.shipSpheres, R: 24, kind: 'b29' } : g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'docked' ? { pos: g.h8.flight.pos, quat: g.h8.flight.quat, spheres: [{ c: V(0, 0, 0), r: H8.R + 0.6 }], R: H8.R + 2, kind: 'h8' } : null;
+    const other = which === 'h8' ? { pos: g.flight.pos, quat: g.flight.quat, spheres: g.docking.shipSpheres, R: 24, kind: 'b29' } : g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'docked' && g.h8.mode !== 'lost' ? { pos: g.h8.flight.pos, quat: g.h8.flight.quat, spheres: [{ c: V(0, 0, 0), r: H8.R + 0.6 }], R: H8.R + 2, kind: 'h8' } : null;
     if (other && !(T && T.kind === other.kind)) {
       const d0 = other.pos.distanceTo(p);
       if (d0 < 200) {
