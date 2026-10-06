@@ -164,6 +164,10 @@ const LINES = {
   h8_called_undock: ['離脱してからH8へ向かいます。'],
   h8_lost: ['H8の反応が消えました…'],
   pod_rescue: ['シェルターを回収しました。カイト、おかえりなさい。'],
+  pod_station: ['B-29は{why}動けません。{name}に救助を要請しました。救助艇が向かっています。到着まで約{eta}。'],
+  pod_station_capture: ['{name}の救助艇がシェルターを確保しました。'],
+  pod_station_done: ['救助完了。B-29も{name}に曳航され、係留されました。カイト、おかえりなさい。'],
+  pod_nobody: ['救助を出せるステーションがありません…酸素を節約してください。'],
   pod_go: ['シェルターの回収に向かいます。{d}。'],
   h8_lost_pod: ['H8の反応が消えました…でも、シェルターのビーコンは生きています！'],
   h8_rebuilt: ['修理基地でH8を造り直しました。上で待機しています。'],
@@ -331,6 +335,7 @@ const VOICE = new Set([
   'breach', 'breach_big', 'window_broken', 'pressure_low', 'o2_low', 'co2_high', 'danger3', 'reentry_hot', 'reentry_burn',
   'breakup', 'dying', 'crash', 'impact_big', 'asteroid', 'drones_contact', 'eva_o2', 'st_breach_here', 'st_gone', 'st_gone_suit',
   'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue', 'h8_lost_pod',
+  'pod_station', 'pod_station_capture', 'pod_station_done', 'pod_nobody',
   'food_out',
   // refusals
   'autopilot_fail', 'ap_wreck', 'ap_dark', 'st_dock_far', 'st_dock_ultra', 'st_docked_ultra', 'st_docked_ap', 'st_dock_hatch',

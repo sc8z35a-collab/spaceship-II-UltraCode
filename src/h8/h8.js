@@ -20,6 +20,7 @@ import { H8Tabs } from './h8Tabs.js';
 import { H8Zoom, OPT_MAX, DIG_MAX } from './h8Zoom.js';
 import { H8Hud } from './h8Hud.js';
 import { H8Shelter, shelterMaterials, SHELTER } from './h8Shelter.js';
+import { RescueTug } from './rescueTug.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
@@ -943,6 +944,8 @@ export class H8Vessel {
       // the shelter goes on alone, thrown clear by the blast, turning slowly
       this.mode = 'pod';
       this.crew = true;
+      this.podT = 0;
+      if (this.rescue) { this.rescue.dispose(); this.rescue = null; }
       f.pos.copy(pos); f.vel.copy(vel).add(new THREE.Vector3().randomDirection().multiplyScalar(1.5 + Math.random() * 1.5));
       f.wRel.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12);
       f.updateAttitude();
@@ -985,11 +988,23 @@ export class H8Vessel {
       f.thrustAcc.set(0, 0, 0); f.properAcc.set(0, 0, 0);
       this.gLocal.set(0, 0, 0);
       this.shelter.update(dt);
+      // who comes for it: B-29 if it can (Asphalt sets off by itself after a little while), else
+      // the nearest station's rescue craft
+      this.podT = (this.podT || 0) + dt;
+      const ap = g.autopilot, b29Coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      if (this.rescue) {
+        this.rescue.step(dt);
+        if (this.rescue.state === 'latched' && this.rescue.t - this.rescue.latchedAt > 5) { this.finishStationRescue(); return; }
+      } else if (b29Coming) {
+        // on the way, B-29 may no longer be able to make it
+        const can = this.b29Rescue();
+        if (!can.ok) { ap.disengage(true); this.startStationRescue(can.why); }
+      } else if (this.podT > 20 && this.crew) this.requestRescue();
       // B-29 alongside and matched (its autopilot holds 150 m off), slow: Asphalt takes the
       // shelter in with the manipulator
       const fb = g.flight;
       const d = fb.pos.distanceTo(f.pos), rv = fb.vel.distanceTo(f.vel);
-      if (d < 220 && rv < 4) this.recoverPod();
+      if (!this.rescue && d < 220 && rv < 4) this.recoverPod();
     } else if (this.mode === 'lost') {
       // the repair base builds another one while B-29 lies at its berth
       const dk = g.docking;
@@ -999,6 +1014,75 @@ export class H8Vessel {
       } else this.rebuildT = 0;
     }
     this.syncAway();
+  }
+
+  /** can B-29 go and fetch the shelter itself? { ok, why } */
+  b29Rescue() {
+    const g = this.g, f = g.flight;
+    if (f.landed) return { ok: false, why: '地上に降りていて' };
+    if (f.dry) return { ok: false, why: '推進剤が尽きて' };
+    if (f.driveHealth < 0.3) return { ok: false, why: '推進系の損傷で' };
+    const integ = g.damage.integrityNow ?? g.damage.integrity();
+    if (integ < 0.3) return { ok: false, why: '船体の損傷で' };
+    if (g.systems.serversHealth !== undefined && g.systems.serversHealth < 0.25) return { ok: false, why: '自動操縦が壊れて' };
+    return { ok: true, why: null };
+  }
+
+  /** a call for help from the drifting shelter: B-29 if it can, else the nearest station */
+  requestRescue() {
+    const g = this.g, ap = g.autopilot;
+    if (this.mode !== 'pod' || this.rescue) return;
+    if (ap.state !== 'off' && ap.target && ap.target.id === 'h8') return;
+    const can = this.b29Rescue();
+    if (can.ok) this.rescuePod();
+    else this.startStationRescue(can.why);
+  }
+
+  /** the nearest working station with a berth sends its rescue craft */
+  startStationRescue(why) {
+    const g = this.g;
+    if (this.rescue) return;
+    let best = null;
+    const p = new THREE.Vector3();
+    for (const s of g.stations.list) {
+      if (s.kind !== 'hub') continue;
+      if (s.dmg && s.dmg.status !== 'ok' && s.dmg.status !== 'damaged') continue;
+      const d = g.stations.posOf(s, g.time, p).distanceTo(this.flight.pos);
+      if (!best || d < best.d) best = { s, d };
+    }
+    if (!best) { this.asphalt('pod_nobody', {}); return; }
+    this.rescue = new RescueTug(this, best.s);
+    const min = Math.max(1, Math.round((best.d / 2500 + 90) / 60));
+    this.asphalt('pod_station', { why: why || '', name: best.s.name, eta: min + ' 分' });
+  }
+
+  /** the rescue craft holds the shelter: brought in, and B-29 too (its tugs fetched it), to the
+   * station's berth; Kaito comes through B-29's airlock */
+  finishStationRescue() {
+    const g = this.g, pl = g.player, s = this.rescue.s;
+    const withKaito = this.crew && pl.state !== 'dead';
+    this.rescue.dispose();
+    this.rescue = null;
+    this.mode = 'lost';
+    this.crew = false;
+    if (g.autopilot.state !== 'off') g.autopilot.disengage(true);
+    if (g.flight.ultra) { g.flight.ultraAuto = false; g.flight.setUltra(false); }
+    this.setLamps(false);
+    this.syncAway();
+    if (!withKaito) return;
+    g.gameplay.fadeAction(() => {
+      const dk = g.docking;
+      if (dk.state !== 'free') { dk.despawn(); dk.state = 'free'; dk.wp = []; }
+      g.flight.autopilot = null;
+      dk.redock(s.id);
+      pl.seat = null;
+      pl.state = 'float';
+      pl.colStand.setEnabled(true);
+      pl.teleport(V(1.7, 0.95, -1.0));
+      g.mode = 'walk';
+      g.input.setMode('walk');
+    });
+    setTimeout(() => this.asphalt('pod_station_done', { name: s.name }), 1800);
   }
 
   /** from B-29's screens: go and fetch the shelter (B-29's autopilot to it) */
@@ -1016,6 +1100,7 @@ export class H8Vessel {
   recoverPod() {
     const g = this.g, pl = g.player;
     const withKaito = this.crew && pl.state !== 'dead';
+    if (this.rescue) { this.rescue.dispose(); this.rescue = null; }
     this.mode = 'lost';
     this.crew = false;
     if (g.autopilot.state !== 'off' && g.autopilot.target && g.autopilot.target.id === 'h8') g.autopilot.disengage(true);
@@ -1887,6 +1972,7 @@ export class H8Vessel {
       this.root.updateMatrixWorld(true);
       dCam = rel.distanceTo(camWorld);
     }
+    if (this.rescue) this.rescue.updateVisual(dt, origin, camWorld);
     if (this.mode === 'pod' || this.mode === 'lost') { this.wreckVisual(dt, eyePF, dCam); return; }
     // where H8 is this frame, for the dents (they are worked out in H8's own frame)
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;

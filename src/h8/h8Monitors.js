@@ -295,10 +295,19 @@ export const H8_PAGES = {
     if (z) { const p = z.n2 + z.o2 + z.co2; K.text(`内部 ${p.toFixed(1)} kPa   O2 ${z.o2.toFixed(1)}   CO2 ${z.co2.toFixed(2)}`, 12, y + 10, { size: 10.5, color: p > 90 && z.o2 > 17 ? COL.text : COL.red, mono: true }); y += 20; }
     K.text('推進なし・発電なし。H8 が失われてもここだけは残る。', 12, y + 10, { size: 10, color: COL.dim }); y += 18;
     if (pod) {
-      const L = h.linkState(), d = g.flight.pos.distanceTo(h.flight.pos);
+      const d = g.flight.pos.distanceTo(h.flight.pos);
       const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
-      K.text(`B-29 まで ${fmtDist(d)}  ${coming ? '回収に向かっています' : L.ok ? 'ビーコン受信中' : '通信圏外'}`, 12, y + 12, { size: 12, color: coming ? COL.green : L.ok ? COL.text : COL.red, weight: 600 });
-      K.button(10, H - 34, 240, 28, coming ? 'B-29 が回収に向かっています' : 'B-29 に回収を要請', () => { if (!coming && L.ok) h.rescuePod(); }, { style: coming ? 'on' : L.ok ? 'warn' : 'disabled', size: 11 });
+      const R = h.rescue, can = h.b29Rescue();
+      let line, col;
+      if (R) {
+        const nm = R.s.name.replace('（修理基地）', '');
+        line = R.state === 'latched' ? `${nm}の救助艇が確保 — 曳航中` : R.state === 'dock' ? `${nm}の救助艇 ドッキング中  ${fmtDist(R.dist)}` : `${nm}の救助艇 接近中  ${fmtDist(R.dist)}${R.eta > 1 ? '  約' + Math.max(1, Math.round(R.eta / 60)) + '分' : ''}`;
+        col = COL.green;
+      } else if (coming) { line = `B-29 が回収に向かっています  ${fmtDist(d)}`; col = COL.green; }
+      else { line = `B-29 まで ${fmtDist(d)}  ${can.ok ? 'ビーコン受信中' : 'B-29 は' + can.why + '動けない'}`; col = can.ok ? COL.text : COL.amber; }
+      K.text(line, 12, y + 12, { size: 12, color: col, weight: 600 });
+      const busy = !!R || coming;
+      K.button(10, H - 34, 260, 28, R ? '救助艇が向かっています' : coming ? 'B-29 が回収に向かっています' : can.ok ? 'B-29 に回収を要請' : '最寄りのステーションに救助を要請', () => { if (!busy) h.requestRescue(); }, { style: busy ? 'on' : 'warn', size: 11 });
     } else {
       K.button(10, H - 34, 200, 28, S.target > 0.5 ? '扉を閉める' : '扉を開ける', () => S.toggle(), { style: S.target > 0.5 ? 'on' : 'warn', size: 11 });
     }
