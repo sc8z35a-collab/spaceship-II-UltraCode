@@ -3,8 +3,10 @@
 // his feet (the floor is a sheet of display glass; the hatch in it slides away under the glass).
 // While he is inside, H8's own hull is left out of the picture (the cameras look past it), so the
 // world shows as if there were no walls at all — through faint panel seams. On top, drawn by the
-// display itself: the horizon and pitch ladder (always sharp). The markers, lock boxes and the
-// focus frame are drawn by h8Hud.js; the information tabs (h8Tabs.js) sit on the glass.
+// display itself: the horizon and pitch ladder (always sharp), and the information tabs (h8Tabs.js
+// lays them out and draws their pictures; the display shows them in its own pixels, on the glass —
+// behind the seat and the hands, under the panels' seams and faults). The markers, lock boxes and
+// the focus frame are drawn by h8Hud.js.
 //
 // Damage, as the glass shows it:
 //   - a hurt camera: its sector of the picture goes grainy, tears, drops blocks, slips its colours;
@@ -12,18 +14,23 @@
 //     colour slips, blocks of garbage, whole frames dropping out), then the picture folds into a
 //     bright line like an old tube, the line shrinks to a dot, the dot glows out — and that part
 //     of the display is black. Nothing shows there any more: no world, no markers, no tabs;
-//   - a hard knock through the armour can kill single display panels: black, with the crack star
-//     of the broken glass and backlight bleeding at its edges, or flickering, discoloured, striped;
-//     the shock runs through the whole frame, so panels all round go too, not only on the side hit;
-//   - and the worse H8 is hurt overall, the more of the display all round is worn: panels in every
-//     direction knocked out or flickering in proportion, the whole picture grainy, its backlight
-//     unsteady, colours drifting in bands, a line slipping now and then.
+//   - a hard knock through the armour hurts the glass round the point it came through — not panel
+//     by panel but as one wound that runs on across the seams: the liquid crystal bleeds dark from
+//     it, its edge glowing red (hot and bright when fresh), red all round it, pulsing; the backlight
+//     dims in bursts; the cover glass cracks — runs that wander out and fork, broken rings round the
+//     point — the cracks carrying the red light out along them; lines from the drivers, mostly red,
+//     run on far across the display. The shock runs through the whole frame, so lighter hurts come
+//     up all round too;
+//   - and the worse H8 is hurt overall, the more of the display all round is worn: hurts come up
+//     in every direction in proportion, the whole picture clouds, its backlight unsteady, red
+//     creeping in all round and pulsing, a red line slipping round it now and then.
 // Big hits make the whole display stutter. Dark when H8 is powered down; the panels come up one
 // by one.
 import * as THREE from 'three';
 import { H8, CAMERAS } from './h8Spec.js';
 import { R_EARTH } from '../core/astro.js';
 import { LAYER_NEAR } from '../core/layers.js';
+import { SEAT } from './h8Seat.js';
 
 const VERT = /* glsl */`
 varying vec3 vP;
@@ -39,165 +46,14 @@ void main(){
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
 /**
- * The display's damage at a point of the glass, shared by the display itself and the tabs on it.
- * displayFx(P (H8-local point on the glass), d (line of sight through it), sp (screen pixel), ui (1:
- * for something drawn on the glass, which a hurt camera's noise does not touch)) gives the colour
- * laid over the picture there, how opaque it is, and whether the display is dead there (1: black —
- * nothing drawn on it shows).
+ * What the display draws at a point of its glass, back to front: its own dark film; the cameras'
+ * picture as it reaches it (a hurt camera's corrupted, a dead one's broken down and black); the
+ * horizon and pitch ladder; the tabs (h8Tabs.js hands it their pictures: the display draws them in
+ * its own pixels — the cockpit's fittings stand in front of them, the zoom does not touch them);
+ * then what is wrong with the panel itself — a dark bleed through its liquid-crystal layer, stuck
+ * lines from its drivers, an unsteady backlight leaking at its edges, cracks in its cover glass —
+ * over everything it shows; the seams between the panels last.
  */
-export const DISPLAY_FX = /* glsl */`
-uniform vec3 uCam[4];
-uniform float uCamH[4];     // camera health (1 fine .. 0 gone)
-uniform float uCamFail[4];  // seconds since that camera died (-1: alive)
-uniform sampler2D tPanel;   // the sphere's 30 x 15 panels (r: health, g: seed)
-uniform sampler2D tFloorP;  // the floor's 0.24 m tiles (16 x 16)
-uniform vec3 uC;            // cockpit centre
-uniform float uFloorY;
-uniform float uTime;
-uniform float uWear;        // how worn the whole display is by H8's damage (0 .. 1)
-float dhs(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
-
-void displayFx(vec3 P, vec3 d, vec2 sp, float ui, out vec3 fc, out float fa, out float dead){
-  fc = vec3(0.0); fa = 0.0; dead = 0.0;
-  float tt = floor(uTime * 24.0);
-  // ---- which camera's picture this is (nearest axis), its health and its own sector coordinates
-  float b1 = -2.0, b2 = -2.0, h = 1.0, f = -1.0;
-  vec3 ax = vec3(0.0, 1.0, 0.0);
-  for (int i = 0; i < 4; i++){
-    float k = dot(d, uCam[i]);
-    if (k > b1){ b2 = b1; b1 = k; h = uCamH[i]; f = uCamFail[i]; ax = uCam[i]; } else if (k > b2){ b2 = k; }
-  }
-  vec3 rgt = normalize(cross(ax, abs(ax.y) > 0.9 ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 1.0, 0.0)));
-  vec3 upv = cross(rgt, ax);
-  vec2 sc = vec2(dot(d, rgt), dot(d, upv)) / 0.85;
-  // ---- the display panel here (sphere: by direction from the centre; floor: square tiles)
-  float ph = 1.0, pseed = 0.0; vec2 pf;
-  if (P.y < uFloorY + 0.004){
-    vec2 g = P.xz / 0.24; vec2 pan = floor(g); pf = fract(g);
-    vec4 t = texture2D(tFloorP, (pan + 8.5) / 16.0); ph = t.r; pseed = t.g;
-  } else {
-    vec3 dC = normalize(P - uC);
-    vec2 g = vec2(atan(dC.x, -dC.z) / 6.28318 * 30.0, asin(clamp(dC.y, -1.0, 1.0)) / 3.14159 * 15.0);
-    vec2 pan = floor(g); pf = fract(g);
-    vec4 t = texture2D(tPanel, (pan + vec2(16.5, 8.5)) / vec2(32.0, 16.0)); ph = t.r; pseed = t.g;
-  }
-  // ---- a camera that died: its sector breaks down, then stays black
-  if (f >= 0.0){
-    if (f < 0.09){ fc = vec3(1.3, 1.26, 1.2); fa = 0.93; return; }
-    if (f < 0.95){
-      float k = (f - 0.09) / 0.86;
-      float rh = 3.0 + 14.0 * dhs(vec2(tt, 3.1));
-      float row = floor(sp.y / rh);
-      float tear = step(0.62 - 0.35 * k, dhs(vec2(row, tt)));
-      vec2 blkP = floor(sp / (10.0 + 34.0 * dhs(vec2(tt, 5.0))));
-      float blk = step(1.0 - 0.8 * k, dhs(blkP + tt * 0.37));
-      float n = dhs(floor(sp / 2.0) + vec2(tt * 1.3, tt * 0.7));
-      vec3 c = vec3(0.15 + 0.7 * n);
-      c = mix(c, vec3(0.75, 0.05, 0.6), step(0.86, dhs(vec2(row * 1.7, tt))));
-      c = mix(c, vec3(0.05, 0.75, 0.3), step(0.9, dhs(vec2(row * 2.3, tt + 1.0))));
-      c = mix(c, vec3(0.02), blk);
-      float drop = step(0.82, dhs(vec2(tt, 9.0)));            // whole frames drop out
-      fc = mix(c, vec3(0.0), drop);
-      fa = max(max(tear * (0.55 + 0.4 * k), blk), drop);
-      fa = max(fa, 0.25 + 0.6 * k);
-      return;
-    }
-    dead = 1.0; fa = 1.0;
-    if (f < 1.35){
-      // the picture folds up into a line, like an old tube: what is left of it squeezes into a
-      // narrowing band that grows brighter as it narrows (streaks of the last frame in it)
-      float s = (f - 0.95) / 0.4;
-      float band = mix(0.9, 0.006, smoothstep(0.0, 1.0, s));
-      float inBand = 1.0 - smoothstep(band, band + 0.012, abs(sc.y));
-      float streak = 0.55 + 0.45 * dhs(vec2(floor(sp.y / 2.0), tt));
-      float lum = min(3.0, 0.07 / max(band, 0.02));
-      fc = vec3(0.85, 0.92, 1.0) * lum * streak * inBand;
-      return;
-    }
-    if (f < 1.75){
-      // the line shrinks to a dot
-      float s = (f - 1.35) / 0.4;
-      float w = mix(1.0, 0.004, s);
-      float line = (1.0 - smoothstep(0.004, 0.014, abs(sc.y))) * (1.0 - smoothstep(w * 0.85, w, abs(sc.x)));
-      fc = vec3(0.95, 0.97, 1.0) * line * (3.2 - 1.6 * s);
-      return;
-    }
-    if (f < 2.9){
-      // the dot glows out; a few pixels spark as the panels let go
-      float s = (f - 1.75) / 1.15;
-      float dotg = exp(-dot(sc, sc) * 1400.0) * (1.0 - s) * 2.5;
-      float spark = step(0.9994, dhs(floor(sp / 2.0) + floor(uTime * 9.0))) * (1.0 - s);
-      fc = vec3(0.7, 0.8, 1.0) * (dotg + spark);
-      return;
-    }
-    return;
-  }
-  // ---- a dead or broken panel
-  if (ph < 0.35){
-    dead = 1.0; fa = 1.0;
-    // the crack star of the broken glass, backlight bleeding at the edges, a few stuck pixels
-    vec2 c0 = vec2(0.3 + 0.4 * fract(pseed * 7.13), 0.3 + 0.4 * fract(pseed * 3.71));
-    vec2 q = pf - c0;
-    float a = atan(q.y, q.x), r = length(q);
-    float rays = 0.0;
-    for (int k = 0; k < 6; k++){
-      float ak = fract(pseed * (13.0 + float(k) * 5.0)) * 6.28318;
-      float da = abs(mod(a - ak + 3.14159, 6.28318) - 3.14159);
-      rays = max(rays, (1.0 - smoothstep(0.0, 0.02 + 0.03 * r, da * r)) * step(r, 0.25 + 0.5 * fract(pseed * float(k + 3) * 1.9)));
-    }
-    float ring = 1.0 - smoothstep(0.0, 0.012, abs(r - 0.08 - 0.06 * fract(pseed * 2.3)));
-    float bleed = smoothstep(0.42, 0.5, max(abs(pf.x - 0.5), abs(pf.y - 0.5)));
-    float stuck = step(0.9985, dhs(floor(sp / 1.5) + pseed * 100.0));
-    fc = vec3(0.32, 0.34, 0.36) * max(rays, ring * 0.7) + vec3(0.1, 0.25, 0.45) * bleed * 0.45 + vec3(0.8, 0.2, 0.9) * stuck;
-    return;
-  }
-  // ---- a hurt camera: grain, tearing, dropped blocks, slipping colours (screen pixels: stays
-  // fine when zoomed)
-  // (not over what the display draws itself — the tabs: they are not in the camera's picture)
-  float dmg = smoothstep(0.995, 0.3, h) * (1.0 - ui);
-  if (dmg > 0.01){
-    float px = 1.0 + floor(dmg * 3.5);
-    float n = dhs(floor(sp / px) + vec2(tt * 1.37, tt * 0.71));
-    float snow = smoothstep(0.08, 1.0, dmg) * (0.2 + 0.8 * dmg);
-    float row = floor(sp.y / (2.0 + 7.0 * dmg));
-    float tear = step(1.0 - 0.22 * dmg * dmg, dhs(vec2(row, tt)));
-    float blk = step(1.0 - dmg * dmg * 0.6, dhs(floor(sp / 22.0) * 1.7 + floor(uTime * (1.5 + 5.0 * dmg)) * 0.37));
-    float murk = smoothstep(0.25, 0.85, dmg) * 0.55;
-    vec3 c = mix(vec3(0.03, 0.035, 0.04), vec3(0.08 + 0.6 * n), snow);
-    float a = max(murk, snow * (0.3 + 0.45 * n));
-    c += vec3(0.35, 0.0, 0.25) * step(0.985 - 0.04 * dmg, dhs(vec2(floor(sp.y / 3.0), tt + 7.0))) * dmg;
-    if (tear > 0.5){ c = mix(c, vec3(0.65, 0.7, 0.75) * dhs(vec2(row, tt + 3.0)), 0.85); a = max(a, 0.45 + 0.45 * dmg); }
-    if (blk > 0.5 && dmg > 0.3){ c = vec3(0.012) + vec3(0.07 * n); a = max(a, 0.94); }
-    // now and then the sector drops out for a few frames
-    if (dmg > 0.5 && dhs(vec2(floor(uTime * 6.0), ax.x * 13.0 + ax.z * 7.0)) > 1.08 - dmg * 0.25){ c = vec3(0.0); a = 1.0; }
-    fc = c; fa = a;
-  }
-  // ---- a panel that took a knock: flickering, a colour cast, a stripe of dead pixels
-  if (ph < 0.95){
-    float k = (0.95 - ph) / 0.6;
-    float flick = step(0.75 - 0.3 * k, dhs(vec2(floor(uTime * (4.0 + 10.0 * pseed)), pseed * 50.0)));
-    vec3 tint = mix(vec3(0.25, 0.0, 0.3), vec3(0.0, 0.25, 0.1), step(0.5, pseed));
-    float stripe = 1.0 - smoothstep(0.0, 0.015, abs(pf.x - fract(pseed * 3.3)));
-    fc = mix(fc, tint + vec3(0.6) * stripe, 0.6);
-    fa = max(fa, max(flick * (0.4 + 0.5 * k), stripe * 0.9) * k + 0.12 * k);
-  }
-  // ---- the whole display worn, everywhere alike (what the display draws itself a little less)
-  if (uWear > 0.01){
-    float w = uWear * (1.0 - 0.5 * ui);
-    float n2 = dhs(floor(sp / (1.0 + floor(w * 2.5))) + vec2(tt * 0.91, tt * 1.13));
-    float rh = 3.0 + 6.0 * dhs(vec2(tt, 2.0));
-    float slip = step(1.0 - 0.05 * w, dhs(vec2(floor(sp.y / rh), tt + 11.0)));
-    vec3 drift = mix(vec3(0.2, 0.03, 0.16), vec3(0.03, 0.17, 0.13), dhs(vec2(floor(sp.y / 48.0), floor(uTime * 0.7))));
-    float dip = step(1.0 - 0.06 * w * w, dhs(vec2(floor(uTime * 7.0), pseed * 31.0)));   // a panel's backlight dips
-    float wa = (0.04 + 0.22 * n2) * w * w + slip * 0.55 * w + dip * 0.7 * w + 0.1 * w * smoothstep(0.4, 1.0, w);
-    vec3 wc = mix(vec3(0.55 * n2) + drift * 0.8, vec3(0.7, 0.72, 0.76) * dhs(vec2(floor(sp.y / rh), tt + 5.0)), slip);
-    wc = mix(wc, vec3(0.0), dip);
-    wa = clamp(wa, 0.0, 0.9);
-    fc = mix(fc, wc, wa * (1.0 - fa * 0.5));
-    fa = max(fa, wa);
-  }
-}`;
-
 const FRAG = /* glsl */`
 uniform float uPower;     // 0 off .. 1 on (the boot sweeps through it)
 uniform vec3 uEye;        // Kaito's eye (H8-local)
@@ -205,10 +61,236 @@ uniform vec3 uUp;         // local vertical (H8-local), for the horizon
 uniform float uLadder;    // 0..1 horizon / ladder brightness
 uniform float uZoom;      // view magnification (the fine lines fade while zoomed)
 uniform float uGlitch;    // the whole display stutters (power dips after hits)
+uniform vec3 uCam[4];
+uniform float uCamH[4];     // camera health (1 fine .. 0 gone)
+uniform float uCamFail[4];  // seconds since that camera died (-1: alive)
+uniform vec4 uImp[16];      // hits on the display: the direction from the cockpit's middle (xyz), how
+                            // far round it the hurt reaches (w, rad; 0: none)
+uniform vec4 uImpK[16];     // each hit's severity (x, 0..1), its seed (y), seconds since it (z)
+uniform vec3 uC;            // cockpit centre
+uniform float uFloorY;
+uniform float uTime;
+uniform float uWear;        // how worn the whole display is by H8's damage (0 .. 1)
+// the tabs: up to four surfaces (headers and bodies), each a rectangle of the plane square to uTabC
+// at unit distance from the eye point uTabE (x0, x1, y0, y1 along uTabX, uTabY); later over earlier
+uniform sampler2D tTab0; uniform sampler2D tTab1; uniform sampler2D tTab2; uniform sampler2D tTab3;
+uniform vec3 uTabC[4]; uniform vec3 uTabX[4]; uniform vec3 uTabY[4];
+uniform vec4 uTabR[4];
+uniform float uTabA[4];
+uniform vec3 uTabE;
+uniform float uTabK;        // how bright the display draws its own things (as the eye sees them)
+uniform sampler2D tLum;     // the eye's adaptation: the picture's mean luminance (engine.js)
+uniform float uExpBias;
 varying vec3 vP;
-${DISPLAY_FX}
+
+float dhs(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+float vn(vec2 p){
+  vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+  return mix(mix(dhs(i), dhs(i + vec2(1.0, 0.0)), f.x), mix(dhs(i + vec2(0.0, 1.0)), dhs(i + vec2(1.0, 1.0)), f.x), f.y);
+}
+float fbm(vec2 p){ float s = 0.0, a = 0.5; for (int i = 0; i < 4; i++){ s += a * vn(p); p = p * 2.07 + 5.3; a *= 0.5; } return s; }
 // a line where x == 0, w pixels wide, antialiased by its size on screen (no shimmer when moving)
 float aline(float x, float w){ float fw = max(fwidth(x), 1e-6); return 1.0 - smoothstep(w * 0.5, w * 0.5 + 1.0, abs(x) / fw); }
+// layers, premultiplied: (P, A) <- c with alpha a over it; or a premultiplied layer (Q, B) over it
+void over(inout vec3 P, inout float A, vec3 c, float a){ a = clamp(a, 0.0, 1.0); P = c * a + P * (1.0 - a); A = a + A * (1.0 - a); }
+void overP(inout vec3 P, inout float A, vec3 Q, float B){ B = clamp(B, 0.0, 1.0); P = Q + P * (1.0 - B); A = B + A * (1.0 - B); }
+
+// ---- the camera whose picture this is (nearest axis): hurt, its picture corrupts in its own
+// pixels — blocks that smear into a wrong colour or drop out, torn lines, sensor noise, the sector
+// dropping out for a moment; dead, a white flash, a few frames of chaos, the picture folding into a
+// line like an old tube, the line to a dot, the dot glowing out — then black (dead = 1)
+void camFx(vec3 d, out vec3 fc, out float fa, out float dead){
+  fc = vec3(0.0); fa = 0.0; dead = 0.0;
+  float tt = floor(uTime * 24.0);
+  float b1 = -2.0, h = 1.0, f = -1.0;
+  vec3 ax = vec3(0.0, 1.0, 0.0);
+  for (int i = 0; i < 4; i++){ float k = dot(d, uCam[i]); if (k > b1){ b1 = k; h = uCamH[i]; f = uCamFail[i]; ax = uCam[i]; } }
+  vec3 rgt = normalize(cross(ax, abs(ax.y) > 0.9 ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 1.0, 0.0)));
+  vec3 upv = cross(rgt, ax);
+  vec2 sc = vec2(dot(d, rgt), dot(d, upv)) / 0.85;
+  vec2 px = sc * 640.0;                                   // that camera's own pixels
+  if (f >= 0.0){
+    if (f < 0.09){ fc = vec3(1.5, 0.7, 0.6); fa = 0.93; return; }
+    if (f < 0.95){
+      float k = (f - 0.09) / 0.86;
+      float rh = 3.0 + 14.0 * dhs(vec2(tt, 3.1));
+      float row = floor(px.y / rh);
+      float tear = step(0.62 - 0.35 * k, dhs(vec2(row, tt)));
+      vec2 blkP = floor(px / (10.0 + 34.0 * dhs(vec2(tt, 5.0))));
+      float blk = step(1.0 - 0.8 * k, dhs(blkP + tt * 0.37));
+      float n = dhs(floor(px / 2.0) + vec2(tt * 1.3, tt * 0.7));
+      vec3 c = vec3(0.15 + 0.7 * n) * vec3(1.0, 0.45, 0.4);
+      c = mix(c, vec3(0.95, 0.05, 0.03), step(0.8, dhs(vec2(row * 1.7, tt))));
+      c = mix(c, vec3(0.8, 0.05, 0.45), step(0.9, dhs(vec2(row * 2.3, tt + 1.0))));
+      c = mix(c, vec3(0.02), blk);
+      float drop = step(0.82, dhs(vec2(tt, 9.0)));
+      fc = mix(c, vec3(0.0), drop);
+      fa = max(max(max(tear * (0.55 + 0.4 * k), blk), drop), 0.25 + 0.6 * k);
+      return;
+    }
+    dead = 1.0; fa = 1.0;
+    if (f < 1.35){
+      float s = (f - 0.95) / 0.4;
+      float band = mix(0.9, 0.006, smoothstep(0.0, 1.0, s));
+      float inBand = 1.0 - smoothstep(band, band + 0.012, abs(sc.y));
+      float streak = 0.55 + 0.45 * dhs(vec2(floor(px.y / 2.0), tt));
+      fc = vec3(1.0, 0.22, 0.12) * min(3.0, 0.07 / max(band, 0.02)) * streak * inBand;
+      return;
+    }
+    if (f < 1.75){
+      float s = (f - 1.35) / 0.4;
+      float w = mix(1.0, 0.004, s);
+      float line = (1.0 - smoothstep(0.004, 0.014, abs(sc.y))) * (1.0 - smoothstep(w * 0.85, w, abs(sc.x)));
+      fc = vec3(1.0, 0.3, 0.18) * line * (3.2 - 1.6 * s);
+      return;
+    }
+    if (f < 2.9){
+      float s = (f - 1.75) / 1.15;
+      float dotg = exp(-dot(sc, sc) * 1400.0) * (1.0 - s) * 2.5;
+      float spark = step(0.9994, dhs(floor(px / 2.0) + floor(uTime * 9.0))) * (1.0 - s);
+      fc = vec3(1.0, 0.25, 0.15) * (dotg + spark);
+    }
+    return;
+  }
+  float dmg = smoothstep(0.995, 0.3, h);
+  if (dmg < 0.01) return;
+  vec2 mb = floor(px / vec2(56.0, 5.0));                   // the picture smears in long strips
+  float tq = floor(uTime * (3.0 + 9.0 * dmg));             // the corruption changes a few times a second
+  float n = dhs(floor(px / (1.0 + floor(dmg * 2.0))) + vec2(tt * 1.37, tt * 0.71));
+  vec3 c = vec3(0.5 * n) * vec3(1.0, 0.5, 0.45);
+  float a = (0.04 + 0.3 * n) * smoothstep(0.1, 1.0, dmg);
+  // smeared blocks: a flat wash of a wrong colour, what was left of the block going off
+  if (dhs(mb * 1.37 + tq * 0.71) > 1.0 - 0.45 * dmg * dmg){
+    vec3 hue = mix(vec3(1.0, 0.07, 0.04), vec3(0.9, 0.12, 0.5), dhs(mb + tq));
+    c = mix(vec3(0.3, 0.1, 0.1), hue * 0.8, 0.75 * dmg) * (0.45 + 0.55 * dhs(mb * 3.1 + tq));
+    a = max(a, 0.5 + 0.4 * dmg);
+  }
+  // dropped blocks: black, or a decoder's green
+  if (dhs(mb * 2.11 + tq * 1.3 + 4.0) > 1.0 - 0.2 * dmg * dmg){ c = mix(vec3(0.0), vec3(0.3, 0.0, 0.0), step(0.6, dhs(mb + tq * 0.3))); a = 0.97; }
+  // a torn line
+  float row = floor(px.y / 3.0);
+  if (dhs(vec2(row, tt)) > 1.0 - 0.05 * dmg){ c = vec3(1.0, 0.3, 0.22) * dhs(vec2(row, tt + 3.0)); a = max(a, 0.5 + 0.4 * dmg); }
+  // the whole sector drops out now and then
+  if (dmg > 0.5 && dhs(vec2(floor(uTime * 6.0), ax.x * 13.0 + ax.z * 7.0)) > 1.08 - dmg * 0.25){ c = vec3(0.0); a = 1.0; }
+  fc = c; fa = a;
+}
+
+// ---- a crack pattern round a hit (q: round it, in units of the hit's size; px: a screen pixel
+// there, in the same units): runs that wander out and fork, broken arcs round the point, the
+// crushed spot in the middle. It is in the glass, not in one panel: it runs on across the seams
+float cracksQ(vec2 q, float seed, float size, float px){
+  float a = atan(q.y, q.x), r = length(q);
+  float c = 0.0;
+  for (int k = 0; k < 7; k++){
+    float fk = float(k);
+    float ak = fract(seed * (13.1 + fk * 5.7)) * 6.28318;
+    float len = size * (0.35 + 0.65 * fract(seed * (fk + 3.0) * 1.93));
+    float wig = (vn(vec2(r * 3.0 + fk * 3.1, seed * 17.0 + fk)) - 0.5) * 0.5 + (vn(vec2(r * 14.0, fk * 7.3)) - 0.5) * 0.07;
+    float da = abs(mod(a - ak - wig + 3.14159, 6.28318) - 3.14159) * r;
+    c = max(c, (1.0 - smoothstep(px * 0.4, px * 1.2, da)) * (1.0 - smoothstep(len * 0.7, len, r)));
+    if (fract(seed * (fk + 11.0)) > 0.5){
+      float af = ak + (fract(seed * (fk + 13.0)) - 0.5) * 0.9;
+      float rf = len * (0.2 + 0.35 * fract(seed * (fk + 5.0)));
+      float daf = abs(mod(a - af - wig * 0.8 + 3.14159, 6.28318) - 3.14159) * r;
+      c = max(c, (1.0 - smoothstep(px * 0.4, px * 1.2, daf)) * step(rf, r) * (1.0 - smoothstep(len * 0.45, len * 0.7, r)) * 0.85);
+    }
+  }
+  for (int k = 0; k < 2; k++){
+    float fk = float(k);
+    float rk = size * (0.12 + 0.16 * fk + 0.05 * fract(seed * (fk + 7.0)));
+    float arc = smoothstep(0.48, 0.56, vn(vec2(a * 1.8 + fk * 4.0, seed * 9.0 + fk)));
+    float wig = (vn(vec2(a * 6.0, fk + seed * 5.0)) - 0.5) * 0.05;
+    c = max(c, (1.0 - smoothstep(px * 0.4, px * 1.2, abs(r - rk + wig))) * arc * 0.85);
+  }
+  c = max(c, (1.0 - smoothstep(0.04, 0.09, r)) * (0.5 + 0.5 * vn(q * 160.0)));
+  return c;
+}
+
+// ---- the damage, as one field over the whole glass (n: the direction from the cockpit's middle;
+// pxa: a screen pixel's angle; gain: how bright the display draws its own light): round each hit
+// the liquid crystal bleeds dark, glowing red at its edge (hot and bright when fresh) and red all
+// round it, pulsing; the backlight dims in bursts; the cover glass cracks, the cracks carrying the
+// red light out along them; lines from the drivers — mostly red — run on far across the panels.
+// Nothing of it stops at a panel's edge. The crystal layer as a premultiplied layer (lP, lA), the
+// glass as another (gP, gA)
+void damageFx(vec3 n, float pxa, vec3 d, float gain, out vec3 lP, out float lA, out vec3 gP, out float gA){
+  lP = vec3(0.0); lA = 0.0; gP = vec3(0.0); gA = 0.0;
+  float az = atan(n.x, -n.z), el = asin(clamp(n.y, -1.0, 1.0));
+  float cel = max(0.05, sqrt(max(0.0, 1.0 - n.y * n.y)));
+  // the drivers' lines: from each hit a column or two (now and then a row) of the display stuck on
+  for (int i = 0; i < 16; i++){
+    vec4 I = uImp[i];
+    if (I.w <= 0.0) continue;
+    vec4 K = uImpK[i];
+    float iaz = atan(I.x, -I.z), iel = asin(clamp(I.y, -1.0, 1.0));
+    float nl = 1.0 + floor(K.x * 1.6);
+    for (int j = 0; j < 3; j++){
+      float fj = float(j);
+      if (fj >= nl) break;
+      float s = fract(K.y * (17.3 + fj * 7.9));
+      float off = (fract(s * 31.0) - 0.5) * 1.6 * I.w;
+      float span = I.w * 2.0 + (0.3 + 0.9 * fract(s * 13.0)) * K.x;
+      float dl, along;
+      if (fract(s * 5.0) > 0.25){ dl = abs(mod(az - iaz - off / cel + 3.14159, 6.28318) - 3.14159) * cel; along = abs(el - iel); }
+      else { dl = abs(el - iel - off); along = abs(mod(az - iaz + 3.14159, 6.28318) - 3.14159) * cel; }
+      float on = (1.0 - smoothstep(pxa * 0.5, pxa * 1.4, dl)) * (1.0 - smoothstep(span * 0.6, span, along));
+      float hue = fract(s * 23.0);
+      vec3 col = hue < 0.65 ? vec3(1.0, 0.06, 0.03) : hue < 0.85 ? vec3(0.95, 0.08, 0.55) : vec3(1.0, 0.85, 0.8);
+      float fl = step(0.2, dhs(vec2(floor(uTime * (4.0 + 7.0 * s)), fj + K.y * 10.0)));
+      over(lP, lA, col * gain * 1.25, on * (0.5 + 0.3 * fl));
+    }
+  }
+  // round each hit
+  for (int i = 0; i < 16; i++){
+    vec4 I = uImp[i];
+    if (I.w <= 0.0) continue;
+    float c = dot(n, I.xyz);
+    if (c < cos(min(1.35, I.w * 3.6))) continue;
+    vec4 K = uImpK[i];
+    float k = K.x, seed = K.y;
+    vec3 t1 = normalize(cross(I.xyz, abs(I.y) > 0.9 ? vec3(1.0, 0.0, 0.0) : vec3(0.0, 1.0, 0.0)));
+    vec3 t2 = cross(I.xyz, t1);
+    vec2 qs = vec2(dot(n, t1), dot(n, t2)) / max(c, 0.2) / I.w;      // round the hit, in its size
+    float px = pxa / (max(c * c, 0.04) * I.w);
+    float r = length(qs);
+    float Rb = 0.3 + 0.7 * k;                                          // the bleed
+    float e = r * (1.0 + 0.65 * (fbm(qs * 1.5 + seed * 31.0) - 0.5)) + (fbm(qs * 4.5 + seed * 7.0) - 0.5) * 0.22;
+    float blot = 1.0 - smoothstep(Rb * 0.86, Rb, e);
+    float rim = smoothstep(Rb * 0.7, Rb, e) * (1.0 - smoothstep(Rb, Rb * 1.3, e));
+    float halo = 1.0 - smoothstep(Rb, Rb * 1.8 + 0.3, e);
+    float hot = exp(-K.z / 5.0);
+    float pulse = 0.7 + 0.3 * sin(uTime * (2.6 + 2.0 * seed) + seed * 20.0);
+    float burst = step(0.8 - 0.25 * k, dhs(vec2(floor(uTime * (3.0 + 9.0 * seed)), seed * 50.0)));
+    // (red pixels flickering in it: fine, many, changing)
+    float spk = step(0.9, dhs(floor(qs * 110.0) + floor(uTime * 11.0) * 0.37)) * halo;
+    over(lP, lA, vec3(0.0), halo * (0.08 + 0.18 * burst) * k);
+    over(lP, lA, vec3(1.0, 0.04, 0.02) * gain * (0.9 + 1.2 * hot), halo * (0.08 + 0.16 * k) * pulse);
+    over(lP, lA, vec3(1.0, 0.06, 0.03) * gain * 1.3, spk * 0.45);
+    over(lP, lA, vec3(1.0, 0.14, 0.05) * gain * (1.2 + 2.0 * hot), rim * 0.8);
+    over(lP, lA, vec3(0.025, 0.0, 0.0), blot * 0.97);
+    // the glass
+    if (k > 0.25){
+      float cr = cracksQ(qs, seed, 1.2 + 2.2 * k, px);
+      float glint = smoothstep(0.62, 0.9, vn(qs * 7.0 + d.xy * 30.0 + d.z * 17.0));
+      float near = 1.0 - smoothstep(Rb, Rb * 3.2, r);
+      vec3 col = mix(vec3(1.0, 0.09, 0.04) * gain * (0.45 + 0.9 * near + 1.2 * hot), vec3(1.1, 0.75, 0.7) * gain * 1.1, glint * 0.3);
+      over(gP, gA, col, cr * (0.32 + 0.25 * near + 0.25 * glint));
+    }
+  }
+}
+
+// ---- the tabs: one surface (its picture tex, its rectangle) seen along u from their eye point
+vec4 tabOne(sampler2D tex, vec3 u, vec3 c, vec3 ex, vec3 ey, vec4 R, float a){
+  if (a < 0.004) return vec4(0.0);
+  float dd = dot(u, c);
+  if (dd < 0.2) return vec4(0.0);
+  vec2 xy = vec2(dot(u, ex), dot(u, ey)) / dd;
+  vec2 uv = (xy - R.xz) / (R.yw - R.xz);
+  if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return vec4(0.0);
+  vec4 s = textureLod(tex, uv, 0.0);
+  return vec4(s.rgb, s.a * a);
+}
+
 void main(){
   // the line of sight through this point: what is seen here lies that way
   vec3 d = normalize(vP - uEye);
@@ -216,25 +298,23 @@ void main(){
   // magnified picture)
   float zoomFade = 1.0 - 0.5 * smoothstep(1.4, 3.0, uZoom);
   // the panel grid: on the sphere by direction from its centre, on the floor square tiles
+  vec3 n = normalize(vP - uC);
 #ifdef FLOOR
   vec2 g = vP.xz / 0.24;
 #else
-  vec3 dC = normalize(vP - uC);
-  vec2 g = vec2(atan(dC.x, -dC.z) / 6.28318 * 30.0, asin(clamp(dC.y, -1.0, 1.0)) / 3.14159 * 15.0);
+  vec2 g = vec2(atan(n.x, -n.z) / 6.28318 * 30.0, asin(clamp(n.y, -1.0, 1.0)) / 3.14159 * 15.0);
 #endif
   vec2 pan = floor(g);
   vec2 fg = fract(g) - 0.5;
   float bez = max(aline(fg.x, 1.3), aline(fg.y, 1.3)) * zoomFade;
+  // a screen pixel's angle as seen from the cockpit's middle (what a fine line is drawn at)
+  float pxa = clamp(length(fwidth(n)), 1e-5, 0.02);
   float bootK = uPower * 1.15 - dhs(pan) * 0.9;
   float on = smoothstep(0.0, 0.08, bootK);
-  vec3 col = vec3(0.0);
-  float alpha = mix(1.0, 0.035, on);
-  // ---- damage over the picture (a dead part is black: no ladder, no seams)
-  vec3 fc; float fa, dead;
-  displayFx(vP, d, gl_FragCoord.xy, 0.0, fc, fa, dead);
-  if (dead > 0.5 && on > 0.5){ gl_FragColor = vec4(fc, 1.0); return; }
-  col = mix(col, fc, fa);
-  alpha = max(alpha, fa * on);
+  // how bright the display draws its own things: steady to the eye whatever it has adapted to
+  // (bright text against the sun, not blinding in the dark)
+  float lum = texture2D(tLum, vec2(0.5)).r;
+  float gain = uTabK * clamp(lum, 0.05, 3.0) / max(0.02, uExpBias * 0.34);
   // horizon and pitch ladder, seen from the eye
   float s = dot(d, uUp);
   vec3 e1 = normalize(cross(uUp, abs(uUp.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
@@ -248,22 +328,56 @@ void main(){
     float dn = aline(el + a, 1.0) * step(0.5, fract(az * 18.0 / 3.14159));
     lad = max(lad, (up + dn) * 0.38);
   }
-  lad *= uLadder * mix(0.35, 1.0, zoomFade) * (1.0 - fa);
-  // the whole display stutters
-  vec2 sp = gl_FragCoord.xy;
-  float tt = floor(uTime * 24.0);
-  if (uGlitch > 0.0){
-    float gb = step(1.0 - 0.35 * uGlitch, dhs(vec2(floor(sp.y / 4.0), tt)));
-    col = mix(col, vec3(0.75), gb * 0.7);
-    alpha = max(alpha, gb * 0.65 * uGlitch);
+  lad *= uLadder * mix(0.35, 1.0, zoomFade);
+  // the parts
+  vec3 cc; float ca, cdead;
+  camFx(d, cc, ca, cdead);
+  vec3 lP, gP; float lA, gA;
+  damageFx(n, pxa, d, gain, lP, lA, gP, gA);
+  // ---- back to front
+  vec3 P = vec3(0.0); float A = 0.0;
+  over(P, A, vec3(0.0), mix(1.0, 0.035, on));            // its own film (black while off)
+  if (cdead > 0.5) over(P, A, cc, on);                   // the camera gone: black (its breakdown)
+  else {
+    over(P, A, cc, ca * on);
+    over(P, A, vec3(0.5, 0.9, 1.0) * gain * 0.6, lad * 0.8 * on * (1.0 - ca));
+    // the tabs, in the display's own pixels
+    vec3 u = normalize(vP - uTabE);
+    vec4 t0 = tabOne(tTab0, u, uTabC[0], uTabX[0], uTabY[0], uTabR[0], uTabA[0]);
+    vec4 t1 = tabOne(tTab1, u, uTabC[1], uTabX[1], uTabY[1], uTabR[1], uTabA[1]);
+    vec4 t2 = tabOne(tTab2, u, uTabC[2], uTabX[2], uTabY[2], uTabR[2], uTabA[2]);
+    vec4 t3 = tabOne(tTab3, u, uTabC[3], uTabX[3], uTabY[3], uTabR[3], uTabA[3]);
+    vec3 TP = vec3(0.0); float TA = 0.0;
+    over(TP, TA, t0.rgb, t0.a); over(TP, TA, t1.rgb, t1.a); over(TP, TA, t2.rgb, t2.a); over(TP, TA, t3.rgb, t3.a);
+    if (TA > 0.002) over(P, A, min(TP / TA * gain, vec3(0.97)), TA * on);
   }
-  col += vec3(0.5, 0.9, 1.0) * lad * on;
-  alpha = max(alpha, lad * 0.8 * on);
-  alpha = max(alpha, bez * (0.45 * on + 0.75 * (1.0 - on)));
-  col = mix(col, vec3(0.012), bez * 0.85);
+  // the damage over all it shows
+  overP(P, A, lP * on, lA * on);
+  // the whole display worn by H8's damage: clouded, unsteady, red creeping in all round (pulsing
+  // slowly the worse it gets), a red line slipping round it now and then
+  if (uWear > 0.01){
+    float w = uWear;
+    float tt = floor(uTime * 24.0);
+    float eln = asin(clamp(n.y, -1.0, 1.0)), azm = atan(n.x, -n.z);
+    float cloud = max(0.0, fbm(vec2(azm * 2.2, eln * 2.6) + floor(uTime * 0.5) * 0.37) - 0.5) * 0.7 * w;
+    float dip = step(1.0 - 0.05 * w * w, dhs(vec2(floor(uTime * 7.0), floor(eln * 5.0))));
+    float slip = step(1.0 - 0.035 * w, dhs(vec2(floor(eln * 300.0), tt + 11.0)));
+    float red = smoothstep(0.2, 0.9, w) * (0.55 + 0.45 * sin(uTime * 2.1)) * (0.06 + 0.12 * vn(vec2(azm * 1.5, eln * 1.5) + uTime * 0.05));
+    over(P, A, vec3(0.0), (cloud + dip * 0.5 * w) * on);
+    over(P, A, vec3(1.0, 0.06, 0.03) * gain, red * on);
+    over(P, A, vec3(1.0, 0.2, 0.12) * gain * (0.5 + 0.5 * dhs(vec2(floor(eln * 300.0), tt + 5.0))), slip * 0.55 * w * on);
+  }
+  // the whole display stutters (in bands round it), red
+  if (uGlitch > 0.0){
+    float gb = step(1.0 - 0.35 * uGlitch, dhs(vec2(floor(asin(clamp(n.y, -1.0, 1.0)) * 120.0), floor(uTime * 24.0))));
+    over(P, A, vec3(0.9, 0.18, 0.12) * gain, gb * 0.6 * uGlitch);
+  }
+  // the seams between the panels, the cracked glass over all of it
+  over(P, A, vec3(0.012), bez * mix(0.75, 0.45, on));
+  overP(P, A, gP, gA);
   // a booting panel: a brief edge glow as it comes up
-  col += vec3(0.4, 0.7, 1.0) * smoothstep(0.08, 0.0, abs(bootK - 0.04)) * (1.0 - step(0.999, uPower)) * 0.6;
-  gl_FragColor = vec4(col, clamp(alpha, 0.0, 1.0));
+  P += vec3(0.4, 0.7, 1.0) * smoothstep(0.08, 0.0, abs(bootK - 0.04)) * (1.0 - step(0.999, uPower)) * 0.6;
+  gl_FragColor = vec4(P / max(A, 1e-4), clamp(A, 0.0, 1.0));
 }`;
 
 export const HUD_COL = { cyan: 'rgba(130,232,255,0.95)', dim: 'rgba(150,215,245,0.62)', red: 'rgba(255,92,64,0.98)', amber: 'rgba(255,190,90,0.97)', green: 'rgba(120,255,170,0.95)', white: 'rgba(225,242,255,0.96)' };
@@ -280,20 +394,17 @@ export function altOf(pos) { return pos.length() - R_EARTH; }
 /** the camera health below which a camera is gone (its part of the display goes black) */
 export const CAM_DEAD = 0.3;
 
-/** the floor: a disc of display glass at H8.floorY with the round hatch opening behind the seat */
+/** the floor: a disc of display glass at H8.floorY with the round hatch opening behind the seat;
+ * under the seat the seat carriage's slot (x +- slot.x, z slot.z0 .. slot.z1), covered by two
+ * leaves of the same glass that slide apart (round the seat's column: a notch of radius slot.r) */
 export const FLOOR = (() => {
   const Cc = H8.cockpitC, R = H8.cockpitR;
   const r = Math.sqrt(R * R - (Cc.y - H8.floorY) ** 2);
-  return { y: H8.floorY, r, c: new THREE.Vector3(Cc.x, H8.floorY, Cc.z), hatch: new THREE.Vector3(0, H8.floorY, H8.shaftZ), hatchR: H8.shaftR + 0.02 };
+  return {
+    y: H8.floorY, r, c: new THREE.Vector3(Cc.x, H8.floorY, Cc.z), hatch: new THREE.Vector3(0, H8.floorY, H8.shaftZ), hatchR: H8.shaftR + 0.02,
+    slot: { x: 0.3, z0: -0.56, z1: -0.145, cz: SEAT.G.z, r: 0.085, open: 0.33 },
+  };
 })();
-
-const inLocker = (az, el) => {
-  const L = H8.locker;
-  let d = az - L.az;
-  while (d > Math.PI) d -= Math.PI * 2;
-  while (d < -Math.PI) d += Math.PI * 2;
-  return Math.abs(d) < L.hw && el > L.el0 && el < L.el1;
-};
 
 const inShelterDoor = (az, el) => {
   const S = H8.shelter;
@@ -303,8 +414,7 @@ const inShelterDoor = (az, el) => {
   return Math.abs(d) < S.hw && el > S.el0 && el < S.el1;
 };
 
-/** the inside of the cockpit sphere above the floor (facing in), less the suit locker's and the
- * shelter's panels */
+/** the inside of the cockpit sphere above the floor (facing in), less the shelter's panel */
 function sphereGeometry() {
   const Cc = H8.cockpitC, R = H8.cockpitR;
   const pos = [], idx = [];
@@ -321,7 +431,7 @@ function sphereGeometry() {
     if (Cc.y + Math.sin(elTop) * R < H8.floorY - 0.005) continue;      // under the floor
     for (let i = 0; i < NA; i++) {
       const az = -Math.PI + (i + 0.5) / NA * Math.PI * 2, el = -Math.PI / 2 + Math.PI * (j + 0.5) / NE;
-      if (inLocker(az, el) || inShelterDoor(az, el)) continue;
+      if (inShelterDoor(az, el)) continue;
       const a = j * (NA + 1) + i, b = a + 1, c = a + NA + 1, d = c + 1;
       idx.push(a, b, c, b, d, c);
     }
@@ -356,41 +466,67 @@ function patchGeometry(az0, hw, el0, el1) {
   return g;
 }
 
-/** the floor glass with the hatch opening */
+/** the floor glass with the hatch opening and the carriage's slot */
 function floorGeometry() {
   const sh = new THREE.Shape();
   sh.absarc(0, 0, FLOOR.r, 0, Math.PI * 2, false);
   const hole = new THREE.Path();
   hole.absarc(FLOOR.hatch.x - FLOOR.c.x, -(FLOOR.hatch.z - FLOOR.c.z), FLOOR.hatchR, 0, Math.PI * 2, true);
   sh.holes.push(hole);
+  const S = FLOOR.slot, sy = (z) => -(z - FLOOR.c.z);
+  const slot = new THREE.Path();
+  slot.moveTo(-S.x, sy(S.z0)); slot.lineTo(-S.x, sy(S.z1)); slot.lineTo(S.x, sy(S.z1)); slot.lineTo(S.x, sy(S.z0)); slot.lineTo(-S.x, sy(S.z0));
+  sh.holes.push(slot);
   const g = new THREE.ShapeGeometry(sh, 64);
   g.rotateX(-Math.PI / 2);
   g.translate(FLOOR.c.x, FLOOR.y, FLOOR.c.z);
   return g;
 }
 
-function panelTexture(w, h) {
-  const data = new Uint8Array(w * h * 4);
-  for (let i = 0; i < w * h; i++) { data[i * 4] = 255; data[i * 4 + 1] = Math.floor(Math.random() * 255); data[i * 4 + 2] = 0; data[i * 4 + 3] = 255; }
-  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
-  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
-  t.generateMipmaps = false;
-  t.needsUpdate = true;
-  return t;
+/** one leaf of the slot's cover (side: -1 port, +1 starboard), in place (H8-local) */
+function leafGeometry(side) {
+  const S = FLOOR.slot, sh = new THREE.Shape();
+  // (shape coordinates: x, -z; the notch round the column on the inner edge)
+  sh.moveTo(0, -S.z0); sh.lineTo(side * S.x, -S.z0); sh.lineTo(side * S.x, -S.z1); sh.lineTo(0, -S.z1);
+  for (let i = 0; i <= 12; i++) { const a = Math.PI * i / 12; sh.lineTo(side * S.r * Math.sin(a), -(S.cz + S.r * Math.cos(a))); }
+  sh.lineTo(0, -S.z0);
+  const g = new THREE.ShapeGeometry(sh, 12);
+  g.rotateX(-Math.PI / 2);
+  g.translate(0, FLOOR.y + 0.0015, 0);
+  return g;
+}
+
+/** how many hits the display keeps track of (more merge into the nearest, or push out the least) */
+const MAX_IMP = 16;
+
+/** a direction from the cockpit's middle: the middle of a sphere panel (ia 0..31, ie 0..15) */
+function panelDir(ia, ie, out) {
+  const az = (ia - 16 + 0.5) / 30 * Math.PI * 2, el = (ie - 8 + 0.5) / 15 * Math.PI;
+  return out.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el));
 }
 
 export class H8Display {
   constructor() {
-    this.panelTex = panelTexture(32, 16);
-    this.floorTex = panelTexture(16, 16);
     const uniforms = {
       uPower: { value: 0 },
       uCam: { value: CAMERAS.map((c) => c.dir.clone()) }, uCamH: { value: [1, 1, 1, 1] }, uCamFail: { value: [-1, -1, -1, -1] },
-      tPanel: { value: this.panelTex }, tFloorP: { value: this.floorTex }, uFloorY: { value: H8.floorY },
+      uImp: { value: Array.from({ length: MAX_IMP }, () => new THREE.Vector4()) },
+      uImpK: { value: Array.from({ length: MAX_IMP }, () => new THREE.Vector4()) },
+      uFloorY: { value: H8.floorY },
       uC: { value: H8.cockpitC.clone() }, uEye: { value: H8.cockpitC.clone() },
       uUp: { value: new THREE.Vector3(0, 1, 0) }, uLadder: { value: 1 },
       uTime: { value: 0 }, uZoom: { value: 1 }, uGlitch: { value: 0 }, uDoorM: { value: new THREE.Matrix4() },
       uWear: { value: 0 },
+      // the tabs the display draws (h8Tabs.js fills these in), and how bright it draws its own things
+      tTab0: { value: null }, tTab1: { value: null }, tTab2: { value: null }, tTab3: { value: null },
+      uTabC: { value: [0, 1, 2, 3].map(() => new THREE.Vector3(0, 0, -1)) },
+      uTabX: { value: [0, 1, 2, 3].map(() => new THREE.Vector3(1, 0, 0)) },
+      uTabY: { value: [0, 1, 2, 3].map(() => new THREE.Vector3(0, 1, 0)) },
+      uTabR: { value: [0, 1, 2, 3].map(() => new THREE.Vector4(-1, 1, -1, 1)) },
+      uTabA: { value: [0, 0, 0, 0] },
+      uTabE: { value: SEAT.G.clone().add(SEAT.eye) },
+      uTabK: { value: 1.75 },
+      tLum: { value: null }, uExpBias: { value: 1 },
     };
     this.uniforms = uniforms;
     // (a piece that moves — a sliding panel, the hatch cover — has its own placement: uDoorM)
@@ -421,8 +557,15 @@ export class H8Display {
     this.hatchMesh = add(hg, this.matHatch, 19);
     this.hatchOpen = 0;
     this.setHatch(0);
-    // the suit locker's panel and the shelter's: pieces of the display that slide aside along the
-    // sphere (each with its own placement)
+    // the leaves over the carriage's slot under the seat: they slide apart, out over the floor
+    this.leaves = [-1, 1].map((side) => {
+      const mat = mk({ FLOOR: 1 }, true);
+      const m = add(leafGeometry(side), mat, 19);
+      return { m, mat, side };
+    });
+    this.setFloorSlot(0);
+    // the shelter's panel: a piece of the display that slides aside along the sphere (with its own
+    // placement)
     const slider = (az, hw, el0, el1) => {
       const pivot = new THREE.Group();
       pivot.position.set(H8.cockpitC.x, 0, H8.cockpitC.z);
@@ -437,8 +580,7 @@ export class H8Display {
       pivot.add(edge);
       return { pivot, door, edge, mat, hw };
     };
-    const L = H8.locker, S = H8.shelter;
-    this.lockerS = slider(L.az, L.hw, L.el0, L.el1);
+    const S = H8.shelter;
     this.shelterS = slider(S.az, S.hw, S.el0, S.el1);
     this.power = 0;
     this.t = 0;
@@ -446,9 +588,12 @@ export class H8Display {
     this.zoom = 1;
     this.camH = [1, 1, 1, 1];
     this.failT = [null, null, null, null];
+    // the damage: hits on the glass (each spreads over as many panels as it reaches), and from them
+    // each panel's health (what can still be touched there, what the hull tab counts)
+    this.impacts = [];          // { dir (from the cockpit's middle), R (rad), k (0..1), seed, t, wear }
     this.panelHP = new Float32Array(32 * 16).fill(1);
     this.floorHP = new Float32Array(16 * 16).fill(1);
-    this.wornTo = 0;            // the wear the panels have been knocked out for so far
+    this.wornTo = 0;            // the wear the display has been hurt for so far
     this.eye = H8.cockpitC.clone();
   }
 
@@ -472,8 +617,16 @@ export class H8Display {
     S.door.visible = e < 0.999;
   }
 
-  /** the suit locker's panel: 0 shut .. 1 slid aside (toward the bow, over the display next to it) */
-  setLocker(e) { this.slide(this.lockerS, e, -1); }
+  /** the leaves over the seat carriage's slot: 0 shut .. 1 slid apart */
+  setFloorSlot(e) {
+    this.slotOpen = e;
+    const k = e * e * (3 - 2 * e);
+    for (const L of this.leaves) {
+      L.m.position.set(L.side * k * FLOOR.slot.open, 0.0012 * Math.min(1, e * 8), 0);
+      L.m.updateMatrix();
+      L.mat.uniforms.uDoorM.value.copy(L.m.matrix);
+    }
+  }
 
   /** the shelter's panel (at the back of the cockpit): 0 shut .. 1 slid aside */
   setShelter(e) { this.slide(this.shelterS, e, 1); }
@@ -552,97 +705,119 @@ export class H8Display {
   stutter(k) { this.glitch = Math.min(1, Math.max(this.glitch, k)); }
 
   /**
-   * A blow through the armour shakes the display panels on that side (dirLocal: H8-local, toward
-   * the blow): some flicker, some go dark with their glass cracked
+   * A hit on the glass: dir (from the cockpit's middle), R (how far round it the hurt reaches, rad),
+   * k (how bad, 0..1). Near one already there, that one grows instead
    */
-  panelHit(dirLocal, E) {
-    if (E < 6e5) return;
-    const n = Math.min(9, Math.floor(1 + E / 2.5e6));
-    const d = dirLocal.clone().normalize();
-    for (let k = 0; k < n; k++) {
-      const j = d.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.35)).normalize();
-      this.hurtDir(j, Math.min(1, 0.25 + Math.random() * 0.5 + E / 3e7));
+  addImpact(dir, R, k, wear = false) {
+    const d = dir.clone().normalize();
+    let near = null, best = Infinity;
+    for (const I of this.impacts) { const a = I.dir.angleTo(d); if (a < Math.max(I.R, R) * 0.9 && a < best) { best = a; near = I; } }
+    if (near) {
+      near.k = Math.min(1, near.k + k * 0.6);
+      near.R = Math.min(0.34, Math.max(near.R, R) * 1.08);
+      if (!wear) { near.t = this.t; near.wear = false; }
+      return near;
     }
-    // the shock runs through the frame: panels anywhere round the cockpit go too (fewer, lighter)
-    const m = Math.min(8, Math.floor(E / 3e6 + Math.random() * 1.5));
-    for (let k = 0; k < m; k++) this.hurtDir(new THREE.Vector3().randomDirection(), Math.min(0.9, 0.12 + Math.random() * 0.45 + E / 6e7));
-    this.syncPanels();
-  }
-
-  /** a panel hurt along a direction from the cockpit's middle (the floor below the equator) */
-  hurtDir(j, hurt) {
-    if (j.y < -0.55) {
-      // the floor: where that line meets it
-      const t = (FLOOR.y - H8.cockpitC.y) / j.y;
-      const x = H8.cockpitC.x + j.x * t, z = H8.cockpitC.z + j.z * t;
-      const ix = Math.floor(x / 0.24) + 8, iz = Math.floor(z / 0.24) + 8;
-      if (ix >= 0 && ix < 16 && iz >= 0 && iz < 16) this.floorHP[iz * 16 + ix] = Math.max(0, this.floorHP[iz * 16 + ix] - hurt);
-    } else {
-      const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
-      const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
-      if (ia >= 0 && ia < 32 && ie >= 0 && ie < 16) this.panelHP[ie * 32 + ia] = Math.max(0, this.panelHP[ie * 32 + ia] - hurt);
-    }
+    const I = { dir: d, R: Math.min(0.34, R), k: Math.min(1, k), seed: Math.random(), t: wear ? this.t - 60 : this.t, wear };
+    if (this.impacts.length >= MAX_IMP) {
+      // the least of them gives way
+      let wi = 0;
+      for (let i = 1; i < this.impacts.length; i++) if (this.impacts[i].k * this.impacts[i].R < this.impacts[wi].k * this.impacts[wi].R) wi = i;
+      this.impacts[wi] = I;
+    } else this.impacts.push(I);
+    return I;
   }
 
   /**
-   * The display worn as far as H8 is hurt (0 .. 1), all the way round: the share of panels out
-   * or flickering grows with it — panels anywhere are knocked until the display shows that much —
-   * and the whole picture wears with it. Damage only adds up (the repair dock clears it).
+   * A blow through the armour shakes the display (dirLocal: H8-local, toward the blow): the glass
+   * on that side is hurt, and the shock runs through the whole frame — lighter hurts all round
+   */
+  panelHit(dirLocal, E) {
+    if (E < 6e5) return;
+    const s = Math.min(1, E / 3e7);
+    this.addImpact(dirLocal, 0.06 + 0.14 * s, 0.35 + 0.65 * Math.min(1, E / 2.5e7));
+    const m = Math.min(4, Math.floor(E / 6e6 + Math.random() * 1.2));
+    for (let k = 0; k < m; k++) this.addImpact(new THREE.Vector3().randomDirection(), 0.035 + 0.05 * Math.random(), 0.15 + 0.3 * Math.random() * (0.5 + s));
+    this.syncImpacts();
+  }
+
+  /**
+   * The display worn as far as H8 is hurt (0 .. 1), all the way round: hurts anywhere on the glass,
+   * more and worse the worse H8 is — and the whole picture wears with it (uWear). Damage only adds
+   * up (the repair dock clears it).
    */
   setWear(level) {
     const w = Math.max(0, Math.min(1, level));
     this.uniforms.uWear.value = w;
     if (w <= this.wornTo + 0.004) return;
     this.wornTo = w;
-    const broken = 0.4 * Math.pow(Math.max(0, (w - 0.35) / 0.65), 1.5);
-    const knocked = Math.min(0.8, broken + 0.28 * Math.min(1, w / 0.8));
-    const live = [];
-    for (let ia = 1; ia <= 30; ia++) for (let ie = 0; ie < 16; ie++) live.push(ie * 32 + ia);
-    const total = live.length;
-    let nb = 0, nk = 0;
-    for (const i of live) { const h = this.panelHP[i]; if (h < 0.35) nb++; if (h < 0.95) nk++; }
-    // (random directions over the whole sphere: every side alike)
-    let guard = 0;
-    while ((nb < broken * total || nk < knocked * total) && guard++ < 600) {
-      const j = new THREE.Vector3().randomDirection();
-      if (j.y < -0.55) { if (Math.random() < 0.25) this.hurtDir(j, nb < broken * total ? 0.7 : 0.25); continue; }
-      const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
-      const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
-      const i = ie * 32 + ia, h = this.panelHP[i];
-      const wantBroken = nb < broken * total;
-      const nh = Math.max(0, h - (wantBroken ? 0.45 + Math.random() * 0.4 : 0.07 + Math.random() * 0.2));
-      if (h >= 0.35 && nh < 0.35) nb++;
-      if (h >= 0.95 && nh < 0.95) nk++;
-      this.panelHP[i] = nh;
+    const want = Math.round(w * 10);
+    let have = this.impacts.filter((I) => I.wear).length, guard = 0;
+    while (have < want && guard++ < 30) {
+      const d = new THREE.Vector3().randomDirection();
+      if (d.y < -0.6 && Math.random() < 0.6) continue;
+      const I = this.addImpact(d, 0.04 + 0.1 * Math.random(), 0.2 + 0.6 * w * Math.random(), true);
+      if (I.wear) have++;
     }
-    this.syncPanels();
+    this.syncImpacts();
   }
 
-  syncPanels() {
-    const P = this.panelTex.image.data, F = this.floorTex.image.data;
-    for (let i = 0; i < this.panelHP.length; i++) P[i * 4] = Math.round(this.panelHP[i] * 255);
-    for (let i = 0; i < this.floorHP.length; i++) F[i * 4] = Math.round(this.floorHP[i] * 255);
-    this.panelTex.needsUpdate = true;
-    this.floorTex.needsUpdate = true;
+  /** the hits to the shader, and each panel's health from them (dark where a bleed covers its
+   * middle, hurt round it) */
+  syncImpacts() {
+    const U = this.uniforms;
+    for (let i = 0; i < MAX_IMP; i++) {
+      const I = this.impacts[i];
+      if (!I) { U.uImp.value[i].set(0, 0, 0, 0); U.uImpK.value[i].set(0, 0, 0, 0); continue; }
+      U.uImp.value[i].set(I.dir.x, I.dir.y, I.dir.z, I.R);
+      U.uImpK.value[i].set(I.k, I.seed, Math.max(0, this.t - I.t), 0);
+    }
+    const health = (dir) => {
+      let h = 1;
+      for (const I of this.impacts) {
+        const a = dir.angleTo(I.dir), core = I.R * (0.3 + 0.7 * I.k) * 0.8;
+        if (a < core) h = Math.min(h, 0.2);
+        else if (a < core * 2.4) h = Math.min(h, 0.95 - 0.5 * I.k);
+      }
+      return h;
+    };
+    const v = new THREE.Vector3(), C = H8.cockpitC;
+    for (let ie = 0; ie < 16; ie++) for (let ia = 0; ia < 32; ia++) this.panelHP[ie * 32 + ia] = health(panelDir(ia, ie, v));
+    for (let iz = 0; iz < 16; iz++) for (let ix = 0; ix < 16; ix++) {
+      v.set((ix - 8 + 0.5) * 0.24 - C.x, FLOOR.y - C.y, (iz - 8 + 0.5) * 0.24 - C.z).normalize();
+      this.floorHP[iz * 16 + ix] = health(v);
+    }
   }
 
-  /** the repair dock replaces the broken panels */
-  repairPanels() { this.panelHP.fill(1); this.floorHP.fill(1); this.wornTo = 0; this.uniforms.uWear.value = 0; this.syncPanels(); }
+  /** the repair dock replaces the hurt panels */
+  repairPanels() { this.impacts.length = 0; this.wornTo = 0; this.uniforms.uWear.value = 0; this.syncImpacts(); }
 
-  /** broken panels for the save: [[i, hp], ...] (floor indices offset by 1000) */
+  /** the hits for the save */
   serializePanels() {
-    const out = [];
-    this.panelHP.forEach((h, i) => { if (h < 0.999) out.push([i, +h.toFixed(3)]); });
-    this.floorHP.forEach((h, i) => { if (h < 0.999) out.push([1000 + i, +h.toFixed(3)]); });
-    return out;
+    return { imp: this.impacts.map((I) => [+I.dir.x.toFixed(4), +I.dir.y.toFixed(4), +I.dir.z.toFixed(4), +I.R.toFixed(4), +I.k.toFixed(3), +I.seed.toFixed(4), I.wear ? 1 : 0]) };
   }
 
-  restorePanels(list, wear = 0) {
-    this.panelHP.fill(1); this.floorHP.fill(1);
-    // (the saved panels already carry the wear)
+  restorePanels(saved, wear = 0) {
+    this.impacts.length = 0;
+    // (the saved hits already carry the wear)
     this.wornTo = wear; this.uniforms.uWear.value = wear;
-    for (const [i, h] of list || []) { if (i >= 1000) { if (i - 1000 < this.floorHP.length) this.floorHP[i - 1000] = h; } else if (i < this.panelHP.length) this.panelHP[i] = h; }
-    this.syncPanels();
+    if (saved && Array.isArray(saved.imp)) {
+      for (const [x, y, z, R, k, seed, w] of saved.imp) {
+        const d = new THREE.Vector3(x, y, z);
+        if (!(d.lengthSq() > 0.5)) continue;
+        this.impacts.push({ dir: d.normalize(), R, k, seed, t: this.t - 60, wear: !!w });
+      }
+    } else if (Array.isArray(saved)) {
+      // an older save: hurt panels, each a hit at its middle
+      const v = new THREE.Vector3(), C = H8.cockpitC;
+      for (const [i, h] of saved) {
+        if (h >= 0.95 || this.impacts.length >= MAX_IMP) continue;
+        if (i >= 1000) { const j = i - 1000, ix = j % 16, iz = Math.floor(j / 16); v.set((ix - 8 + 0.5) * 0.24 - C.x, FLOOR.y - C.y, (iz - 8 + 0.5) * 0.24 - C.z).normalize(); }
+        else panelDir(i % 32, Math.floor(i / 32), v);
+        this.addImpact(v, 0.07, Math.min(1, (0.95 - h) / 0.6), true);
+      }
+    }
+    this.syncImpacts();
   }
 
   update(dt, on) {
@@ -656,5 +831,6 @@ export class H8Display {
     U.uTime.value = this.t % 600;
     U.uGlitch.value = this.glitch;
     for (let i = 0; i < 4; i++) U.uCamFail.value[i] = this.failT[i] === null ? -1 : Math.min(1e5, this.t - this.failT[i]);
+    for (let i = 0; i < this.impacts.length; i++) U.uImpK.value[i].z = Math.min(600, Math.max(0, this.t - this.impacts[i].t));
   }
 }

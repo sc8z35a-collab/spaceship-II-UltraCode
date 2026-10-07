@@ -147,6 +147,10 @@ export class ShipSystems {
     if (g.mode === 'camera') { this.cameraPressed(); return; }
     // H8's shelter adrift: there is nothing but vacuum outside its door
     if (g.player.state === 'seated' && g.player.seat && g.player.seat.shelter && g.h8 && g.h8.mode === 'pod') { g.h8.say('hachi_pod_vacuum', {}, { minGap: 5 }); return; }
+    // in H8's shelter there is no room to stand: the seat takes him back to the cockpit
+    if (g.player.state === 'seated' && g.player.seat && g.player.seat.shelter && g.h8) { if (!g.h8.shelter.goBack()) g.h8.say('hachi_shelter_stay', {}, { minGap: 4 }); return; }
+    // H8's seat on its rail (on its way in or back): strapped in until it stops
+    if (g.player.state === 'seated' && g.h8 && g.player.seat === g.h8.seat && g.h8.shelter && !g.h8.shelter.atHome) return;
     if (g.player.state === 'seated') {
       g.player.stand();
       g.mode = 'walk';

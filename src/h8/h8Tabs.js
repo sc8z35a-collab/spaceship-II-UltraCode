@@ -1,8 +1,10 @@
-// The information on H8's all-round display, as tabs. The display draws them on its own glass:
-// each tab lies on the inside of the sphere — curved with it, bent down onto the floor glass where
-// it reaches it — and never turns toward Kaito. The display lays each one out for the pilot's eye
-// point (where the eye is in the seat): from the seat a tab looks flat and square; from anywhere
-// else, like what it is — a picture on curved glass. Two tabs, each with its pages:
+// The information on H8's all-round display, as tabs. The display draws them itself, in its own
+// pixels (h8Display.js): each tab lies on the inside of the sphere — curved with it, bent down onto
+// the floor glass where it reaches it — and never turns toward Kaito. The seat and his hands stand
+// in front of it, the panels' seams run across it, a hurt panel's faults show over it. The display
+// lays each one out for the pilot's eye point (where the eye is in the seat): from the seat a tab
+// looks flat and square; from anywhere else, like what it is — a picture on curved glass. Two
+// tabs, each with its pages:
 //   操縦 — 航法, 推進・電力, 兵装, カメラ (its header also carries the alerts);
 //   機体 — 機体, B-29, HACHI, 装備.
 // Each has a slim header (its name, the page and the figures that matter at a glance) and a body
@@ -11,15 +13,15 @@
 // header to move the tab anywhere on the glass; pinch a tab with two fingers (or turn the mouse
 // wheel over it) to make it bigger or smaller. They stay as they are left (kept in the browser).
 //
-// They are drawn after the picture is finished (engine.uiScene, with the unmagnified view): the
-// zoom magnifies the outside, not the tabs — they stay where they are, as large and as opaque, and
-// work while zoomed. Where the display is dead (its camera gone, a broken panel) nothing of them
-// shows, and where a panel of the display has slid aside (the suit locker, the shelter) neither.
+// The zoom magnifies the outside cameras' picture, not the display's own pixels: the tabs stay
+// where they are, as large and as opaque, and work while zoomed. Where the display is dead (its
+// camera gone) nothing of them shows, a broken panel shows what is left of them, and where a panel
+// of the display has slid aside (the shelter's) neither. Their text is drawn large and bright.
 import * as THREE from 'three';
 import { Kit, COL } from '../ui/monitorKit.js';
 import { H8, CAMERAS } from './h8Spec.js';
 import { SEAT } from './h8Seat.js';
-import { fmtDist, altOf, DISPLAY_FX, FLOOR, CAM_DEAD } from './h8Display.js';
+import { fmtDist, altOf, FLOOR, CAM_DEAD } from './h8Display.js';
 import { QUALITY } from '../core/quality.js';
 
 const DEG = Math.PI / 180;
@@ -32,57 +34,34 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vecto
 const RT = Math.PI * 2;
 
 /** the tabs and where they start, as seen from the seat (az: 0 = H8's bow, + = starboard; el: up;
- * w, h: size in degrees — twice what the first tabs had) */
+ * w, h: size in degrees) */
 const DEFS = [
-  { id: 'ops', title: '操縦', az: -42, el: 12, w: 50, h: 39, open: true, color: AMBER, pages: [['nav', '航法'], ['drive', '推進・電力'], ['wpn', '兵装'], ['cam', 'カメラ']] },
-  { id: 'ship', title: '機体', az: 42, el: 12, w: 50, h: 39, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['gear', '装備']] },
+  { id: 'ops', title: '操縦', az: -44, el: 12, w: 56, h: 44, open: true, color: AMBER, pages: [['nav', '航法'], ['drive', '推進・電力'], ['wpn', '兵装'], ['cam', 'カメラ']] },
+  { id: 'ship', title: '機体', az: 44, el: 12, w: 56, h: 44, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['gear', '装備']] },
 ];
+/** the tabs' text: a little larger than the pages ask for, and brighter (the dim greys lifted, the
+ * colours lit up) — drawn by the display, it has to read at a glance */
+const TEXT_SCALE = 1.07;
+const BRIGHT = {
+  [COL.dim]: 'rgba(200,226,250,0.9)',
+  'rgba(150,190,230,0.55)': 'rgba(200,226,250,0.9)',
+  [COL.text]: '#f6fbff',
+  'rgba(170,190,210,0.4)': 'rgba(205,218,232,0.6)',
+  [COL.cyan]: '#8fe2ff', [COL.green]: '#8af5b2', [COL.amber]: '#ffc870', [COL.red]: '#ff6e5e',
+  '#ff8a7a': '#ffa598', '#ffb3a6': '#ffc8bd', '#ffd0c8': '#ffe0da', '#d7e7f7': '#f6fbff',
+  '#ffd9a8': '#ffe6c4', '#7cf0a6': '#9cf8be',
+};
 /** the page row over a tab's body (units of the tab's 512-wide canvas) */
 const ROW = 44;
 
 /** the eye point the tabs are laid out for: the pilot's eye in the seat (H8-local) */
 const E0 = SEAT.G.clone().add(SEAT.eye);
 
-const VERT = /* glsl */`
-varying vec2 vUv;
-varying vec3 vP;
-void main(){ vUv = uv; vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-
-const FRAG = /* glsl */`
-uniform sampler2D map;
-uniform float uOpacity;
-uniform vec3 uEye;
-uniform vec4 uDoorL;   // the suit locker's panel: az, half-width, el0, el1 (from the cockpit's middle)
-uniform float uDoorLOpen;
-uniform vec4 uDoorS;   // the shelter's panel
-uniform float uDoorSOpen;
-varying vec2 vUv;
-varying vec3 vP;
-${DISPLAY_FX}
-float inDoor(vec3 u, vec4 D){
-  float az = atan(u.x, -u.z);
-  float da = abs(mod(az - D.x + 3.14159265, 6.28318531) - 3.14159265);
-  float el = asin(clamp(u.y, -1.0, 1.0));
-  return step(da, D.y) * step(D.z, el) * step(el, D.w);
-}
-void main(){
-  vec3 u = normalize(vP - uC);
-  if (uDoorLOpen > 0.02 && inDoor(u, uDoorL) > 0.5) discard;
-  if (uDoorSOpen > 0.02 && inDoor(u, uDoorS) > 0.5) discard;
-  vec4 c = texture2D(map, vUv);
-  vec3 fc; float fa, dead;
-  displayFx(vP, normalize(vP - uEye), gl_FragCoord.xy, 1.0, fc, fa, dead);
-  if (dead > 0.5) discard;
-  float a = c.a * uOpacity;
-  if (a < 0.003) discard;
-  gl_FragColor = vec4(mix(c.rgb, fc, fa), a);
-  #include <colorspace_fragment>
-}`;
-
-/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways */
+/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways, a little
+ * more where it can be afforded (sharper text) */
 function pxDeg() {
   const q = QUALITY.level;
-  return q === 'low2' ? 10 : q === 'low' ? 14 : 19;
+  return q === 'low2' ? 12 : q === 'low' ? 16 : 23;
 }
 
 class Tab {
@@ -142,18 +121,7 @@ function onGlass(u, out) {
 export class H8Tabs {
   constructor(vessel) {
     this.v = vessel;
-    this.group = new THREE.Group();
-    this.group.name = 'h8Tabs';
-    this.group.matrixAutoUpdate = false;
     this.z = 0;
-    const D = vessel.display.uniforms, L = H8.locker, S = H8.shelter;
-    // the display's own state (cameras, panels, eye): one set of uniforms for every tab
-    this.uniforms = {
-      uCam: D.uCam, uCamH: D.uCamH, uCamFail: D.uCamFail, tPanel: D.tPanel, tFloorP: D.tFloorP,
-      uC: D.uC, uFloorY: D.uFloorY, uTime: D.uTime, uEye: D.uEye, uWear: D.uWear,
-      uDoorL: { value: new THREE.Vector4(L.az, L.hw, L.el0, L.el1) }, uDoorLOpen: { value: 0 },
-      uDoorS: { value: new THREE.Vector4(S.az, S.hw, S.el0, S.el1) }, uDoorSOpen: { value: 0 },
-    };
     this.tabs = DEFS.map((d) => new Tab(this, d));
     this.byId = Object.fromEntries(this.tabs.map((t) => [t.id, t]));
     this.visible = false;
@@ -163,7 +131,7 @@ export class H8Tabs {
   }
 
   // ------------------------------------------------------------------ surfaces
-  /** a canvas, its texture and the curved mesh it is shown on */
+  /** a canvas and its texture (the display draws it on its glass) */
   surface(t, part) {
     const canvas = document.createElement('canvas');
     canvas.width = 4; canvas.height = 4;
@@ -172,15 +140,10 @@ export class H8Tabs {
     tex.generateMipmaps = false;
     tex.minFilter = THREE.LinearFilter;
     tex.anisotropy = 4;
-    const mat = new THREE.ShaderMaterial({
-      uniforms: Object.assign({ map: { value: tex }, uOpacity: { value: 0 } }, this.uniforms),
-      vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, depthTest: false,
-    });
-    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-    mesh.frustumCulled = false;
-    mesh.visible = false;
-    this.group.add(mesh);
-    const S = { canvas, tex, kit: new Kit(canvas), mesh, mat, part, W: 4, H: 4 };
+    const kit = new Kit(canvas);
+    kit.fs = TEXT_SCALE;
+    kit.pal = BRIGHT;
+    const S = { canvas, tex, kit, part, W: 4, H: 4 };
     this.size(t, S);
     return S;
   }
@@ -205,31 +168,9 @@ export class H8Tabs {
     t.t = 999;
   }
 
-  /** the curved meshes of a tab (after a move or a resize) */
+  /** a tab's frame on the glass, after a move or a resize */
   shape(t) {
     t.frame();
-    const mk = (S, y0, y1, nx, ny) => {
-      const pos = new Float32Array((nx + 1) * (ny + 1) * 3), uv = new Float32Array((nx + 1) * (ny + 1) * 2), idx = [];
-      for (let j = 0; j <= ny; j++) {
-        const Y = y0 + (y1 - y0) * j / ny;
-        for (let i = 0; i <= nx; i++) {
-          const X = -t.hx + 2 * t.hx * i / nx;
-          _v.copy(t.c).addScaledVector(t.ex, X).addScaledVector(t.ey, Y).normalize();
-          onGlass(_v, _v2);
-          const k = j * (nx + 1) + i;
-          pos[k * 3] = _v2.x; pos[k * 3 + 1] = _v2.y; pos[k * 3 + 2] = _v2.z;
-          uv[k * 2] = i / nx; uv[k * 2 + 1] = j / ny;
-          if (i < nx && j < ny) { const a = k, b = k + 1, c = k + nx + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
-        }
-      }
-      const g = S.mesh.geometry;
-      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-      g.setIndex(idx);
-      g.computeBoundingSphere();
-    };
-    mk(t.head, -t.hy, t.hy, 32, 2);
-    if (t.body) mk(t.body, -t.by, -t.hy, 32, 22);
     t.dirty = false;
   }
 
@@ -260,36 +201,36 @@ export class H8Tabs {
   }
 
   // ------------------------------------------------------------------ per frame
-  /** shown: Kaito in the cockpit with the display on */
+  /** shown: Kaito in the cockpit with the display on. Hands the display what it is to draw: each
+   * visible header and body (the front-most tab's last), its picture and its rectangle */
   place(dt, shown) {
     this.visible = shown;
-    this.group.visible = shown;
-    if (!shown) return;
-    const v = this.v, D = v.display;
+    const U = this.v.display.uniforms;
+    if (!shown) { for (let i = 0; i < 4; i++) { U.uTabA.value[i] = 0; U['tTab' + i].value = null; } return; }
+    const D = this.v.display;
     const pw = Math.max(0, Math.min(1, (D.power - 0.25) / 0.5));
-    this.uniforms.uDoorLOpen.value = v.locker ? v.locker.open : 0;
-    this.uniforms.uDoorSOpen.value = v.shelterOpen || 0;
+    const parts = [];
     for (const t of this.tabs) {
       if (t.open && t.h > 0 && !t.body) { t.body = this.surface(t, 'body'); t.dirty = true; }
       if (t.dirty) this.shape(t);
       const target = pw * (this.drag && this.drag.tab === t ? 0.82 : 1);
       t.fade += (target - t.fade) * Math.min(1, dt * 6);
       if (Math.abs(t.fade - target) < 0.002) t.fade = target;
-      const H = t.head;
-      H.mesh.visible = t.fade > 0.01;
-      H.mat.uniforms.uOpacity.value = t.fade;
-      H.mesh.renderOrder = t.order * 2;
-      if (t.body) {
-        const on = t.open && t.fade > 0.01;
-        t.body.mesh.visible = on;
-        t.body.mat.uniforms.uOpacity.value = t.fade;
-        t.body.mesh.renderOrder = t.order * 2 + 1;
-      }
     }
-    // the tabs ride with H8 (the scene they are drawn in has nothing else)
-    this.group.matrix.copy(v.root.matrixWorld);
-    this.group.matrixWorld.copy(v.root.matrixWorld);
-    for (const c of this.group.children) c.matrixWorld.copy(this.group.matrixWorld);
+    for (const t of this.tabs.slice().sort((a, b) => a.order - b.order)) {
+      if (t.fade < 0.01) continue;
+      parts.push({ t, S: t.head, y0: -t.hy, y1: t.hy });
+      if (t.body && t.open && t.h > 0) parts.push({ t, S: t.body, y0: -t.by, y1: -t.hy });
+    }
+    const first = Math.max(0, parts.length - 4);
+    for (let i = 0; i < 4; i++) {
+      const p = parts[first + i];
+      U['tTab' + i].value = p ? p.S.tex : null;
+      U.uTabA.value[i] = p ? p.t.fade : 0;
+      if (!p) continue;
+      U.uTabC.value[i].copy(p.t.c); U.uTabX.value[i].copy(p.t.ex); U.uTabY.value[i].copy(p.t.ey);
+      U.uTabR.value[i].set(-p.t.hx, p.t.hx, p.y0, p.y1);
+    }
   }
 
   // ------------------------------------------------------------------ drawing
@@ -314,8 +255,8 @@ export class H8Tabs {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, S.W, S.H);
     const Hk = 512 * S.H / S.W;
-    // (opaque enough to read over anything behind it)
-    K.rect(1, 1, 510, Hk - 2, { fill: warn ? 'rgba(52,9,6,0.9)' : 'rgba(5,12,21,0.88)', stroke: warn ? 'rgba(255,96,64,0.75)' : 'rgba(130,215,255,0.38)', r: S.part === 'head' ? 9 : 7, lw: 1.4 });
+    // (dark and nearly opaque: the text reads over anything behind it)
+    K.rect(1, 1, 510, Hk - 2, { fill: warn ? 'rgba(48,8,5,0.97)' : 'rgba(3,8,15,0.965)', stroke: warn ? 'rgba(255,110,80,0.85)' : 'rgba(140,220,255,0.5)', r: S.part === 'head' ? 9 : 7, lw: 1.6 });
   }
 
   drawHead(t, power) {
@@ -758,7 +699,7 @@ export class H8Tabs {
   inOpenDoor(u) {
     const az = Math.atan2(u.x, -u.z), el = Math.asin(Math.max(-1, Math.min(1, u.y)));
     const inside = (D) => { let d = az - D.az; d -= Math.round(d / RT) * RT; return Math.abs(d) < D.hw && el > D.el0 && el < D.el1; };
-    return (this.uniforms.uDoorLOpen.value > 0.02 && inside(H8.locker)) || (this.uniforms.uDoorSOpen.value > 0.02 && inside(H8.shelter));
+    return (this.v.shelterOpen || 0) > 0.02 && inside(H8.shelter);
   }
 
   /**

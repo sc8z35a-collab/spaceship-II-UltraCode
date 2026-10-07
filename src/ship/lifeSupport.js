@@ -17,7 +17,7 @@ export const ZONES = {
   h8: { name: 'H8 操縦室', vol: 8, center: [0, 8.15, 0.5] },
   h8shaft: { name: 'H8 シャフト', vol: 2.6, center: [0, 5.6, 1.15] },
   // H8's emergency shelter behind the cockpit (its own bottles and scrubber)
-  h8shelter: { name: 'H8 シェルター', vol: 1.1, center: [0, 8.22, 2.22] },
+  h8shelter: { name: 'H8 シェルター', vol: 1.3, center: [0, 8.15, 2.3] },
 };
 
 // gas constant factor: kPa*m^3/s per (m^2 * kPa) of upstream pressure, air at 293 K (choked)

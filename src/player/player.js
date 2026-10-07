@@ -119,7 +119,13 @@ export class Player {
     this.pitch = Math.max(-pLim, Math.min(pLim, this.pitch));
     if (this.state === 'seated') {
       const s = this.seat;
-      if (s.gimbal) {
+      if (s.gimbal && s.lockAim) {
+        // the seat held facing forward (H8's seat on its rail, in the shelter): only the head turns
+        this.yaw = Math.max(-1.9, Math.min(1.9, this.yaw));
+        this.pitch = Math.max(-1.0, Math.min(1.1, this.pitch));
+        if (s.eyeLocal) this.eyeLocal.copy(s.eyeLocal).add(s.dock || _v.set(0, 0, 0));
+        else this.eyeLocal.copy(s.eye);
+      } else if (s.gimbal) {
         // a seat on a gimbal: it turns all the way round after the head, and tips back or forward
         // after it too (lying back to look straight up, leaning over to look at the floor)
         // (it swings round quickly: turning to look behind used to leave the body lagging)

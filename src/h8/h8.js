@@ -50,7 +50,7 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DOCK = H8.dockAt;
 const COL_DIM = 'rgba(150,190,230,0.55)';
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
-const _v3a = new THREE.Vector3(), _v3b = new THREE.Vector3();
+const _v3a = new THREE.Vector3(), _v3b = new THREE.Vector3(), _v3c = new THREE.Vector3(), _v3d = new THREE.Vector3(), _m4b = new THREE.Matrix4();
 const Y = new THREE.Vector3(0, 1, 0);
 
 /** H8 and B-29 hear each other within this distance (m) */
@@ -104,9 +104,11 @@ export class H8Vessel {
     this.root.name = 'H8';
     this.root.matrixAutoUpdate = false;
     this.root.add(this.ext.group, this.ext.far, this.int.group, this.display.mesh);
-    // the emergency shelter behind the aft panel (and what is left of it if H8 is lost)
+    // the emergency shelter behind the aft panel (and what is left of it if H8 is lost); the slot
+    // and the rail that send the seat into it are the cockpit's
     this.shelter = new H8Shelter(this, M);
     this.root.add(this.shelter.group, this.shelter.pod);
+    this.int.group.add(this.shelter.rail);
     this.shelter.buildDoorLiner(this.display.shelterS.pivot);
     this.structure = 1;          // the frame, once the inner armour is gone (0: H8 breaks up)
     // re-entry fire round the sphere
@@ -114,8 +116,12 @@ export class H8Vessel {
     // the drive's plasma plume out of the magnetic nozzle, the auxiliary engines' flames
     this.plumeMain = new EnginePlume(this.root, { exits: [this.ext.parts.driveExit], r0: 0.9, len: 34, style: 'plasma', spread: 0.15, dia: 0.65, seed: 2.1 });
     this.plumeAux = new EnginePlume(this.root, { exits: this.ext.parts.auxExits, r0: 0.3, len: 7.5, style: 'chem', spread: 0.42, dia: 0.25, gain: 0.9, seed: 4.7 });
-    // the tabs are drawn over the finished picture (unmagnified by the zoom)
-    game.engine.uiScene.add(this.tabs.group);
+    // the display draws its own things (the tabs, the ladder) as bright as the eye needs them, from
+    // the picture's adaptation (the engine's auto exposure)
+    {
+      const E = game.engine, prev = E.exposure.onTexture, U = this.display.uniforms;
+      E.exposure.onTexture = (t) => { if (prev) prev(t); U.tLum.value = t; };
+    }
     this.extMeshes = [];
     // the outside takes no shadows (B-29 underneath would black out the earthshine on H8's belly);
     // its substrate sphere casts them: the sealed cockpit inside gets no sunlight, and H8 shades
@@ -173,7 +179,6 @@ export class H8Vessel {
     this.issueProxies = new Map();
     this.field = [];
     this.floorHatch = 0;         // the cockpit floor hatch 0 shut .. 1 open
-    this.locker = { open: 0, target: 0, out: 0 };   // the suit locker's panel, and the suit on its rail
     this.mind = new HachiMind(this);                 // what HACHI works out and acts on
     this.defence = new HachiDefence(this);           // HACHI's watch over a fight: LOW, the ammunition
   }
@@ -277,6 +282,10 @@ export class H8Vessel {
     // (h8Seat.js works out the eye and the motion's tilt every frame)
     this.seat = Object.assign({}, s, { eye: s.eye.clone().add(DOCK), exit: V(0, H8.floorY, H8.shaftZ).add(DOCK), axis: s.axis.clone().add(DOCK), h8: true, dock: DOCK.clone() });
     this.seatMotion = new SeatMotion(this.seat, this.int.seatParts);
+    // (the shelter runs the seat back into it on its rail; in there it is the shelter's seat, with
+    // the same eye and the same motion)
+    this.shelter.attachSeat(this.seat, this.int.seatParts);
+    this.shelter.seat.dynQ = this.seat.dynQ;
     // the floor hatch over the shaft: walkable while shut
     this.floorCol = g.phys.addKinematicBox(FLOOR.hatchR + 0.03, 0.03, FLOOR.hatchR + 0.03, V(FLOOR.hatch.x, FLOOR.y - 0.03, FLOOR.hatch.z).add(DOCK));
     this.floorCol.col.setEnabled(this.colsOn);
@@ -286,10 +295,7 @@ export class H8Vessel {
       this.int.group.add(m);
       return m;
     };
-    g.interact.addMesh(proxy(SEAT.G.clone().add(V(0, -0.12, -0.08)), 0.36), () => g.systems.sit(this.seat), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' });
-    // the suit locker behind the display panel on the port side
-    const LK = this.int.locker.userData;
-    g.interact.addMesh(proxy(H8.cockpitC.clone().addScaledVector(LK.n, H8.cockpitR - 0.3), 0.4), () => this.lockerTapped(), { maxDist: 2.4, enabled: () => g.player.state !== 'seated' });
+    g.interact.addMesh(proxy(SEAT.G.clone().add(V(0, -0.12, -0.08)), 0.36), () => g.systems.sit(this.seat), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' && this.shelter.atHome });
     // the floor hatch (from above; it opens by itself for Kaito coming up the shaft)
     g.interact.addMesh(proxy(V(FLOOR.hatch.x, FLOOR.y + 0.12, FLOOR.hatch.z), 0.38), () => this.floorHatchTapped(), { maxDist: 2.2, enabled: () => g.player.state !== 'seated' && g.player.pos.y > FLOOR.y + DOCK.y });
     // the port panel in B-29's corridor, and the hatch wheel seen from the shaft in H8
@@ -305,7 +311,7 @@ export class H8Vessel {
     g.input.captureWheel = (x, y, dy) => this.tabWheel(x, y, dy);
     // the shelter's screens and its door; its lamp in the light pool
     this.shelter.init(g);
-    this.lamps.push({ pos: V(0, SHELTER.y1 - 0.05, 1.38).add(DOCK), local: V(0, SHELTER.y1 - 0.05, 1.38), color: 0xffa060, intensity: 0, base: 0, range: 1.5, room: 'h8', shelter: true });
+    this.lamps.push({ pos: V(0, SHELTER.y1 - 0.05, 1.25).add(DOCK), local: V(0, SHELTER.y1 - 0.05, 1.25), color: 0xffa060, intensity: 0, base: 0, range: 1.5, room: 'h8', shelter: true });
     // ---- a new game: H8 waits right above B-29, on standby
     if (!this.park) this.initAbove();
     this.placeParked(g.time);
@@ -582,7 +588,7 @@ export class H8Vessel {
   }
 
   /** the shelter's door (0 shut .. 1 open) */
-  get shelterOpen() { return this.shelter ? this.shelter.open : 0; }
+  get shelterOpen() { return this.shelter ? this.shelter.door : 0; }
 
   /** one of H8's seats: the pilot's in the middle of the cockpit, or the shelter's */
   isH8Seat(seat) { return !!seat && (seat === this.seat || (this.shelter && seat === this.shelter.seat)); }
@@ -946,9 +952,9 @@ export class H8Vessel {
     const g = this.g, f = this.flight, pl = g.player;
     if (this.mode === 'pod' || this.mode === 'lost') return;
     const docked = this.mode === 'docked';
-    // (strapped into the shelter's seat: its door slams shut on the emergency closure)
-    const inShelter = pl.state === 'seated' && pl.seat === this.shelter.seat;
-    if (inShelter) { this.shelter.target = 0; this.shelter.open = 0; }
+    // (strapped into the shelter's seat — or on the rail most of the way in — its door slams shut
+    // on the emergency closure)
+    const inShelter = this.shelter.slam();
     const aboard = !inShelter && pl.state !== 'dead' && (this.crew || (docked && this.kaitoInside()));
     const pos = docked ? DOCK.clone().applyQuaternion(g.flight.quat).add(g.flight.pos) : f.pos.clone();
     const vel = (docked ? g.flight.vel : f.vel).clone();
@@ -987,7 +993,7 @@ export class H8Vessel {
       f.pos.copy(pos); f.vel.copy(vel).add(new THREE.Vector3().randomDirection().multiplyScalar(1.5 + Math.random() * 1.5));
       f.wRel.set((Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12, (Math.random() - 0.5) * 0.12);
       f.updateAttitude();
-      this.shelter.target = 0; this.shelter.open = 0;
+      this.shelter.door = 0;
       setTimeout(() => this.say('hachi_pod', { t: this.shelter.o2Text() }, { force: true }), 2500);
       if (this.link.ok || docked) setTimeout(() => this.asphalt('h8_lost_pod', {}, { force: true }), 6500);
     } else {
@@ -1191,6 +1197,7 @@ export class H8Vessel {
     this.power.smes = H8.smesMJ * 0.85;
     this.flight.tank.kg = this.flight.tank.cap;
     this.shelter.o2 = 10 * 3600 * 7.4e-4; this.shelter.lioh = 1; this.shelter.battery = 1;
+    this.shelter.snapHome();
     this.hits = 0;
     this.awake = 0; this.wakeTarget = 0;
     this.initAbove();
@@ -1545,12 +1552,6 @@ export class H8Vessel {
       this.floorCol.body.setNextKinematicTranslation({ x: hx + k * (FLOOR.hatchR * 2 + 0.1), y: hy - 0.03 - 0.06 * Math.min(1, this.floorHatch * 5), z: hz });
       if ((fh0 === 0 || fh0 === 1) && this.g.audio.doorMotor) this.g.audio.doorMotor(V(hx, hy, hz), want > 0.5);
     }
-    // ---- the suit locker: the display panel slides aside, then the suit rides out on its rail
-    const LK = this.locker;
-    const tOpen = LK.target > 0.5 ? 1 : (LK.out > 0.02 ? 1 : 0);
-    LK.open = Math.max(0, Math.min(1, LK.open + (tOpen > LK.open ? 1 : tOpen < LK.open ? -1 : 0) * dt / 0.8));
-    const tOut = LK.target > 0.5 && LK.open > 0.98 ? 1 : 0;
-    LK.out = Math.max(0, Math.min(1, LK.out + (tOut > LK.out ? 1 : tOut < LK.out ? -1 : 0) * dt / 1.2));
   }
 
   /** away from B-29 the shaft is an airlock: the neck hatch wheel cycles it (suit required) */
@@ -1712,32 +1713,37 @@ export class H8Vessel {
     this.g.audio.beep && this.g.audio.beep(this.floorHatchT ? 990 : 660, 0.06, 0.05, { pos: V(FLOOR.hatch.x, FLOOR.y, FLOOR.hatch.z).add(DOCK) });
   }
 
-  lockerSound() {
-    const A = this.g.audio, p = H8.cockpitC.clone().addScaledVector(this.int.locker.userData.n, H8.cockpitR).add(DOCK);
-    if (A.doorMotor) A.doorMotor(p, this.locker.target > 0.5);
-    if (A.ready && A._burst) A._burst(p, { dur: 0.5, freq: 1800, q: 1.2, gain: 0.05, type: 'white', sweep: 0.5 });
+  /** the suit's shutter in the shelter (open or shut it: 1 / 0; null: the other way) */
+  setSuitShutter(open = null) {
+    const LK = this.shelter.locker;
+    const want = open === null ? (LK.target > 0.5 ? 0 : 1) : open ? 1 : 0;
+    if (want === LK.target) return;
+    LK.target = want;
+    this.shelter.sfx('shutter');
   }
 
-  /** the suit locker: open it (the suit comes out), put the suit on, or take it off and stow it */
+  /** the suit in the shelter: open its shutter, put the suit on, or take it off and stow it (from
+   * the shelter's seat only: there is no room in there for anything else) */
   lockerTapped() {
-    const g = this.g, pl = g.player, LK = this.locker, GP = g.gameplay;
+    const g = this.g, pl = g.player, LK = this.shelter.locker, GP = g.gameplay;
+    if (!(pl.state === 'seated' && pl.seat === this.shelter.seat)) { this.say('hachi_suit_where', {}, { minGap: 6 }); return; }
     if (pl.suit && pl.suitH8) {
-      const z = g.lifeSupport.z.h8;
+      const z = g.lifeSupport.z.h8shelter;
       const kPa = z ? z.n2 + z.o2 + z.co2 : 0;
       if (kPa < 60) { g.audio.denied(pl.eyeLocal); this.say('hachi_suit_keep', {}, { minGap: 6 }); return; }
-      LK.target = 1; this.lockerSound();
-      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; pl.suitKit = { patches: 4, parts: 6 }; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1800); });
+      this.setSuitShutter(true);
+      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; pl.suitKit = { patches: 4, parts: 6 }; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => this.setSuitShutter(false), 1800); });
       return;
     }
     if (pl.suit) { g.audio.denied(pl.eyeLocal); return; }      // already in B-29's suit
-    if (LK.target < 0.5 || LK.out < 0.95) {
-      if (LK.target < 0.5) { LK.target = 1; this.lockerSound(); this.say('hachi_suit_out', {}, { minGap: 5 }); }
+    if (LK.target < 0.5 || LK.open < 0.95) {
+      if (LK.target < 0.5) { this.setSuitShutter(true); this.say('hachi_suit_out', {}, { minGap: 5 }); }
       return;
     }
     GP.fadeAction(() => {
       pl.suit = true; pl.suitH8 = true; pl.suitO2 = 1; pl.suitFuel = Math.max(pl.suitFuel, 0.98);
       this.say('hachi_suit_on', {}, { force: true });
-      setTimeout(() => { LK.target = 0; this.lockerSound(); }, 1200);
+      setTimeout(() => this.setSuitShutter(false), 1200);
     });
   }
 
@@ -2108,7 +2114,10 @@ export class H8Vessel {
       const inp = this.flightInput || (this.mode === 'docked' && g.player.seat === this.seat ? g.lastFlightIn : null);
       this.seat.input = inp;
       this.seat.occupied = g.player.state === 'seated' && g.player.seat === this.seat;
-      this.seatMotion.update(dt, acc, fl.wRel, thrust);
+      // (on its rail into the shelter or back: the carriage's own push in the springs too)
+      this.shelter.seatOffset(this.seat.rig);
+      this.seatMotion.update(dt, acc, fl.wRel, thrust, this.shelter.acc ? _v3c.set(0, 0, this.shelter.acc) : null);
+      this.shelter.seat.eyeLocal.copy(this.seat.eyeLocal);
     }
     // ---- level of detail, layers
     const inside = eyePF && (this.containsPF(eyePF) || this.inVestibule(eyePF)) && (this.mode === 'docked' || this.crew);
@@ -2206,7 +2215,7 @@ export class H8Vessel {
     // lamps: dim on standby; they stutter when a hit shakes the wiring
     this.flickT = Math.max(0, this.flickT - dt);
     const stut = this.flickT > 0 ? (Math.random() < 0.35 ? 0.15 : 0.6 + Math.random() * 0.4) : 1;
-    for (const l of this.lamps) l.intensity = l.shelter ? this.shelter.lampIntensity() : l.locker ? 0.9 * this.locker.open * aw : l.base * (0.25 + 0.75 * aw) * stut;
+    for (const l of this.lamps) l.intensity = l.shelter ? this.shelter.lampIntensity() : l.base * (0.25 + 0.75 * aw) * stut;
     // the junction panels: green when sound, red and blinking when cut; a cut one spits sparks
     if (this.jLamps) {
       for (const [k, mat] of Object.entries(this.jLamps)) {
@@ -2247,7 +2256,6 @@ export class H8Vessel {
     const inCockpit = eyePF && this.crew && this.inCockpit(eyePF);
     this.display.update(dt, inCockpit && aw > 0.5);
     this.display.setHatch(this.floorHatch);
-    this.display.setLocker(this.locker.open);
     this.display.setShelter(this.shelterOpen || 0);
     const disp = inCockpit && this.display.power > 0.01;
     if (disp) this.updateDisplay(dt, rw, camWorld);
@@ -2261,7 +2269,8 @@ export class H8Vessel {
     const cab = inCockpit && z > 1.0005;
     this.setCabinLayer(cab);
     g.engine.setCabinView(cab ? { pos: g.camWorld, quat: g.camQuat } : null, z > OPT_MAX * 1.005 ? 1 + (Math.min(DIG_MAX, z / OPT_MAX) - 1) * 0.65 : 1);
-    g.engine.uiOn = this.tabs.visible;
+    g.engine.uiOn = false;
+    this.display.uniforms.uExpBias.value = g.engine.grade.get('uExposureBias');
     // the marks over the outside: with this frame's magnification. From the seat only (standing
     // in the cockpit a tap is for the seat); looking out through the external cameras from the
     // seat they are there too (focus, and a double tap to go)
@@ -2277,15 +2286,6 @@ export class H8Vessel {
     // the shaft below the floor is out of sight (and not drawn) while the hatch is shut
     const eyeUp = eyePF && this.inCockpit(eyePF) && eyePF.y > FLOOR.y + DOCK.y;
     this.int.shaft.visible = !(eyeUp && this.floorHatch < 0.01);
-    // the suit locker: its niche shows while the panel is open; the suit is gone while worn
-    const LK = this.int.locker, LD = LK.userData;
-    LK.visible = this.locker.open > 0.002 && this.int.group.visible;
-    if (LK.visible) {
-      const e = this.locker.out * this.locker.out * (3 - 2 * this.locker.out);
-      LD.carriage.position.copy(LD.inPos).lerp(LD.outPos, e);
-      LD.suit.visible = !(g.player.suit && g.player.suitH8);
-      this.M.lockerLight.emissiveIntensity = 2.2 * this.locker.open;
-    }
     // ---- sparks, spall, venting air (H8's own particles, in H8's frame)
     const live = this.fx.add.p.length || this.fx.alpha.p.length || this.fx.emitters.length;
     if (live || !this.fxIdle) {
@@ -2410,7 +2410,7 @@ export class H8Vessel {
     if (vRel.lengthSq() > 1) { orbit.pro = vRel.normalize(); orbit.retro = orbit.pro.clone().negate(); } else { orbit.pro = orbit.retro = null; }
     // the zoom (from the seat) and the tabs
     const pl = g.player;
-    const seated = pl.state === 'seated' && pl.seat === this.seat;
+    const seated = this.seatedHere();
     const z = this.zoom.update(dt, seated ? g.lastInput : null, pl, seated && (g.mode === 'pilot' || g.mode === 'camera'));
     // a magnified (or followed) view is stabilised against the seat's lean and shiver
     // (a tilt of the head moves the magnified picture by the same angle, not z times as much)
@@ -2522,10 +2522,27 @@ export class H8Vessel {
 
   /** Kaito in H8's seat: the tabs, the locks and the zoom are worked from there only (standing
    *  in the cockpit a tap goes to the seat and the things round it) */
-  seatedHere() { const pl = this.g.player; return pl.state === 'seated' && pl.seat === this.seat; }
+  seatedHere() { const pl = this.g.player; return pl.state === 'seated' && pl.seat === this.seat && this.shelter.atHome; }
+
+  /**
+   * The shelter's red button on the armrest along a ray from the eye (H8-local { eye, dir }, the
+   * unmagnified view): the distance to it, or Infinity
+   */
+  redButtonAt(cam) {
+    const P = this.int.seatParts && this.int.seatParts.red;
+    const pl = this.g.player;
+    if (!P || pl.state !== 'seated' || (pl.seat !== this.seat && pl.seat !== this.shelter.seat)) return Infinity;
+    const c = _v3d.setFromMatrixPosition(P.at.matrixWorld).applyMatrix4(_m4b.copy(this.root.matrixWorld).invert());
+    const t = c.clone().sub(cam.eye).dot(cam.dir);
+    if (t < 0.05 || t > 1.2) return Infinity;
+    const miss = cam.eye.clone().addScaledVector(cam.dir, t).distanceTo(c);
+    return miss < 0.05 ? t : Infinity;
+  }
 
   tabTouch(x, y, touches) {
     if (!this.tabs.visible || this.g.mode === 'camera' || !this.seatedHere()) return null;
+    // (the armrest's red button is in front of the glass: a touch there is the button's)
+    if (Number.isFinite(this.redButtonAt(this.tabRay(x, y)))) return null;
     // a second finger while one is on a tab: the two pinch that tab
     if (touches) for (const o of touches.values()) {
       if (o.zone !== 'ui' || !o.cap || !o.cap.tab || o.cap.part === 'pinch') continue;
@@ -2574,6 +2591,8 @@ export class H8Vessel {
 
   /** a tap on the view (not on a tab): the locks' boxes take it */
   hudTap(tap) {
+    // the red button on the armrest (from H8's seat or in the shelter, zoomed or not)
+    if (tap.px !== undefined && this.g.mode !== 'camera' && Number.isFinite(this.redButtonAt(this.tabRay(tap.px, tap.py)))) { this.shelter.button(); return true; }
     if (!this.hud.on || tap.px === undefined || !this.seatedHere()) return false;
     return this.hud.tap(tap.px, tap.py);
   }
@@ -2668,7 +2687,7 @@ export class H8Vessel {
   suitLine() {
     const pl = this.g.player;
     if (pl.suit && pl.suitH8) return `着用中  O₂ ${Math.round(pl.suitO2 * 100)}%`;
-    return this.locker.open > 0.5 ? '収納庫 開' : '収納中';
+    return this.shelter.locker.open > 0.5 ? 'シェルター内 収納庫 開' : 'シェルター内に収納';
   }
 
   /** HACHI's tab: its log, and what it can be asked to do */
@@ -2697,27 +2716,25 @@ export class H8Vessel {
     K.button(10 + (bw2 + 9) * 2, by2, bw2, 40, 'ロック 全解除', () => this.hud.clear(), { style: this.hud.locks.length ? 'normal' : 'disabled', size: 14 });
   }
 
-  /** the equipment tab: the suit, the shelter (tabs: the tab system, for its button row) */
+  /** the equipment tab: the shelter, the suit in it (tabs: the tab system, for its button row) */
   drawGear(K, H, tabs) {
-    const g = this.g, pl = g.player;
-    const on = pl.suit && pl.suitH8;
-    K.text(on ? '小型宇宙服  着用中' : '小型宇宙服  収納庫', 14, 26, { size: 17, color: on ? '#7cf0a6' : '#d7e7f7', weight: 700 });
+    const g = this.g, pl = g.player, S = this.shelter;
+    K.text('緊急シェルター（座席ごと後部へ）', 14, 26, { size: 17, color: S.state !== 'home' ? '#ffb347' : '#d7e7f7', weight: 700 });
     let y = 36;
+    const o2 = S.o2Hours();
+    y = tabs.row(K, y, '独立酸素', o2 / 10, `${o2.toFixed(1)} 時間`, '#5fe08f', o2 < 1);
+    y = tabs.row(K, y, 'CO₂ 吸収剤', S.lioh, `${Math.round(S.lioh * 100)}%`, '#5fd0ff', S.lioh < 0.1);
+    K.text('肘掛けの赤いボタン：カバーを上げてもう一度押すと、', 14, y + 15, { size: 14, color: COL_DIM });
+    K.text('座席ごとレールで後ろのシェルターへ。密閉・独立酸素。', 14, y + 35, { size: 14, color: COL_DIM });
+    y += 50;
+    const on = pl.suit && pl.suitH8;
+    K.text(on ? '宇宙服  着用中' : '宇宙服  シェルター内に収納', 14, y + 18, { size: 17, color: on ? '#7cf0a6' : '#d7e7f7', weight: 700 });
+    y += 26;
     if (on) {
       y = tabs.row(K, y, '酸素', pl.suitO2, `${Math.round(pl.suitO2 * 100)}%`, '#5fd0ff', pl.suitO2 < 0.2);
       y = tabs.row(K, y, '推進剤', pl.suitFuel, `${Math.round(pl.suitFuel * 100)}%`, '#ffb347', pl.suitFuel < 0.15);
-    } else { K.text('外で回路の応急処置をするときに着ます。', 14, y + 16, { size: 14.5, color: COL_DIM }); y += 26; }
-    y += 10;
-    const S = this.shelter;
-    K.text('緊急シェルター（後部）', 14, y + 18, { size: 17, color: S && S.occupied ? '#ffb347' : '#d7e7f7', weight: 700 });
-    y += 28;
-    if (S) {
-      const o2 = S.o2Hours();
-      y = tabs.row(K, y, '独立酸素', o2 / 10, `${o2.toFixed(1)} 時間`, '#5fe08f', o2 < 1);
-      K.text(S.occupied ? '使用中 — 船内の操作はここから全てできます' : '推進・発電なし。H8 を失ってもここは残る。', 14, y + 15, { size: 14, color: S.occupied ? '#ffb347' : COL_DIM });
-    }
-    const list = [[this.locker.target > 0.5 ? '収納庫 閉' : 'スーツを出す', () => { this.locker.target = this.locker.target > 0.5 ? 0 : 1; this.lockerSound(); }, this.locker.target > 0.5 ? 'on' : 'warn']];
-    if (S) list.push([S.target > 0.5 ? 'シェルター 閉' : 'シェルター 開', () => S.toggle(), S.target > 0.5 ? 'on' : 'warn']);
+    } else K.text('シェルターに入ってから、右の壁のシャッターをタップ。', 14, y + 15, { size: 14, color: COL_DIM });
+    const list = [[S.state === 'home' ? 'シェルターへ退避' : 'シェルター 作動中', () => S.go(), S.state === 'home' ? 'danger' : 'on']];
     list.push(['タブ配置 初期化', () => tabs.resetLayout()]);
     tabs.buttons(K, H, list);
   }
@@ -2725,8 +2742,8 @@ export class H8Vessel {
   /** the equipment tab's header */
   gearLine() {
     const pl = this.g.player, S = this.shelter;
-    const suit = pl.suit && pl.suitH8 ? `スーツ O₂ ${Math.round(pl.suitO2 * 100)}%` : 'スーツ 収納';
-    return S ? `${suit}  ・  シェルター O₂ ${S.o2Hours().toFixed(1)} 時間${S.occupied ? '（使用中）' : ''}` : suit;
+    const suit = pl.suit && pl.suitH8 ? `スーツ O₂ ${Math.round(pl.suitO2 * 100)}%` : 'スーツ シェルター内';
+    return S ? `シェルター O₂ ${S.o2Hours().toFixed(1)} 時間${S.occupied ? '（使用中）' : ''}  ・  ${suit}` : suit;
   }
 
   /** external-camera views around H8 (physics frame, for the camera mode while flying H8) */

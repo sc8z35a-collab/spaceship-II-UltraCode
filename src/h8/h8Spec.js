@@ -41,13 +41,11 @@ export const H8 = {
   // the point-defence laser (the comm terminal doubles as one; high on the starboard side, above
   // the upper gun ring)
   laserDir: V(0.68, 0.707, -0.195).normalize(),
-  // the suit locker behind a section of the cockpit display (port side, a little aft): azimuth
-  // (rad, 0 = forward, + = starboard), its elevation span and half-width (rad, from the cockpit's
-  // middle) and how deep the niche goes
-  locker: { az: -1.83, el0: -0.32, el1: 0.44, hw: 0.25, depth: 0.42 },
-  // the emergency shelter right behind the cockpit (aft): a panel of the display slides aside
-  // over a sill to a narrow upright box for one person (its own air, no drive, no power plant)
-  shelter: { az: Math.PI, el0: -0.5, el1: 0.62, hw: 0.27, depth: 0.95, w: 0.78, top: 1.12 },
+  // the emergency shelter right behind the cockpit (aft): a sealed box just big enough for the
+  // pilot's seat. The panel of the display in front of it (azimuth, rad, 0 = forward, + =
+  // starboard; its elevation span and half-width, rad, from the cockpit's middle) slides aside,
+  // down to the floor, and the seat runs back into it on a rail (h8Shelter.js)
+  shelter: { az: Math.PI, el0: -0.7496, el1: 0.62, hw: 0.33 },
   // drive: the plasma drive's magnetic nozzle at the stern, four auxiliary engines round it
   driveZ: 3.15,
   aux: [[1.55, 45], [1.55, 135], [1.55, 225], [1.55, 315]],
