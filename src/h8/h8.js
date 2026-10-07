@@ -2109,6 +2109,17 @@ export class H8Vessel {
       if (this.mode === 'docked') { for (const m of this.extMeshes) { m.layers.set(LAYER_NEAR); m.layers.enable(LAYER_MID); } }
       else for (const m of this.extMeshes) assignLayers(m, Math.max(0, dCam - 9), dCam + 9);
     }
+    // the guns on their rings: from outside like the rest of the hull; from the cockpit too —
+    // the outside cameras see them, so the display shows them turning and firing (H8's own hull
+    // is left out of the picture, the guns are not)
+    if (this.gunGroup) {
+      const gv = near || inside;
+      this.gunGroup.visible = gv;
+      if (gv) {
+        if (inside || this.mode === 'docked') { for (const m of this.gunMeshes) { m.layers.set(LAYER_NEAR); if (!inside) m.layers.enable(LAYER_MID); } }
+        else for (const m of this.gunMeshes) assignLayers(m, Math.max(0, dCam - 10), dCam + 10);
+      }
+    }
     this.ext.far.visible = this.mode !== 'docked' && dCam > 1800;
     if (this.ext.far.visible) this.ext.far.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dCam - 5), dCam + 5); });
     this.int.group.visible = this.mode === 'docked' ? (eyePF ? eyePF.distanceTo(DOCK) < 18 : false) : (this.crew || dCam < 30);

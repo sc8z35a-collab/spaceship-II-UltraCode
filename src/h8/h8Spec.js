@@ -38,8 +38,9 @@ export const H8 = {
   // the hatch at the foot of the neck (H8-local) and the way it slides into its pocket (-x)
   neckHatchY: -4.08,
   neckHatchSlide: 0.96,
-  // the point-defence laser (the comm terminal doubles as one)
-  laserDir: V(0.86, 0.45, -0.24).normalize(),
+  // the point-defence laser (the comm terminal doubles as one; high on the starboard side, above
+  // the upper gun ring)
+  laserDir: V(0.68, 0.707, -0.195).normalize(),
   // the suit locker behind a section of the cockpit display (port side, a little aft): azimuth
   // (rad, 0 = forward, + = starboard), its elevation span and half-width (rad, from the cockpit's
   // middle) and how deep the niche goes

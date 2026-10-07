@@ -1,6 +1,10 @@
 // The guns Kaito (and the two AIs) can use.
-//  H8: two twin 25 mm cannon turrets (one high on the port bow, one low on the starboard bow), a
-//      railgun turret on the belly and two box launchers with six homing missiles each. Every
+//  H8: two twin 25 mm cannon turrets and a railgun turret that run right round the sphere on two
+//      gun rings (gunRings.js: the upper ring's carriage carries the port twin, the lower ring's
+//      tandem carriage the starboard twin and the railgun) — a carriage runs to the bearing of
+//      what its guns are on, so they bear in any direction without H8 turning; the cradles
+//      elevate from well below their own horizon to past the vertical — and two box launchers
+//      with six homing missiles each. Every
 //      turret has its own fire control (ballistics.js): it tracks the target, solves the shot by
 //      flying it, turns the turret onto the solution at the turret's own slew rate, and fires
 //      rounds that scatter as real ones do. A turret only fires where the sphere does not stand in
@@ -29,12 +33,16 @@ import { leadDir, ROUNDS, rockId } from './combat.js';
 import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 import { Arsenal } from './arsenal.js';
 import { ZONE } from '../h8/hachiDefence.js';
+import { RINGS, DECK, ringFrame, ringCircle, buildRing, buildSled, buildLink, Carriage, dAng } from './gunRings.js';
+import { QUALITY } from '../core/quality.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _m = new THREE.Matrix4();
 const Z = V(0, 0, -1);
 
 export const AMMO_MAX = { cannon: 1600, rail: 24, missile: 12, pd: 900 };
+/** a fixed mount's cradle elevation range (rad from its tangent plane): B-29's gun */
+const PITCH_FIXED = [-0.12, 1.45];
 /** how far Kaito's own fire reaches (the fire control engages out to here) */
 export const MAX_RANGE = 30000;
 // the sensors' tracking errors (1 sd): H8's own, B-29's old set
@@ -52,6 +60,12 @@ function weaponMaterials() {
     railGlow: S({ color: 0x000000, emissive: new THREE.Color(0.35, 0.7, 1.0), emissiveIntensity: 0 }),
     podLid: S({ color: 0x8c949c, metalness: 0.5, roughness: 0.45 }),
     sensor: S({ color: 0x000000, emissive: new THREE.Color(1.0, 0.25, 0.1), emissiveIntensity: 2 }),
+    // the gun rings: the rail, its lit guide strip, the carriages' bits
+    ringRail: S({ color: 0x7f878f, metalness: 0.9, roughness: 0.3 }),
+    ringGlow: S({ color: 0x000000, emissive: new THREE.Color(0.35, 0.85, 1.0), emissiveIntensity: 1.6 }),
+    sledLamp: S({ color: 0x000000, emissive: new THREE.Color(1.0, 0.6, 0.15), emissiveIntensity: 3 }),
+    steel: S({ color: 0x9aa3ab, metalness: 0.9, roughness: 0.25 }),
+    cable: S({ color: 0x1b1d20, metalness: 0.1, roughness: 0.7 }),
   };
 }
 
@@ -80,7 +94,7 @@ function flashTex() {
 
 /** a muzzle flash at the end of a barrel (barrel along -z): a star seen from ahead and the cone of
  * fire seen from the side, additive, shown for a frame or two */
-function flashMesh(size, color) {
+function flashMesh(size, color, brake = true) {
   const mat = new THREE.MeshBasicMaterial({ map: flashTex(), color: new THREE.Color(...color), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide, toneMapped: false });
   const g = new THREE.Group();
   const star = new THREE.Mesh(new THREE.PlaneGeometry(size, size), mat);
@@ -89,8 +103,22 @@ function flashMesh(size, color) {
   cone.translate(0, 0, -size * 0.8);
   const a = new THREE.Mesh(cone, mat), b = new THREE.Mesh(cone.clone().rotateZ(Math.PI / 2), mat);
   g.add(star, a, b);
+  // the muzzle brake throws flame out sideways through its ports (a pair of crossed jets each side)
+  if (brake) {
+    for (const s of [-1, 1]) {
+      const j = new THREE.PlaneGeometry(size * 0.75, size * 0.22);
+      j.translate(s * size * 0.42, 0, 0.06);
+      g.add(new THREE.Mesh(j, mat), new THREE.Mesh(j.clone().rotateX(Math.PI / 2), mat));
+    }
+  }
+  // and a glow round it whichever way it is seen from
+  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTex(), color: new THREE.Color(...color).multiplyScalar(0.55), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false }));
+  glow.scale.setScalar(size * 1.7);
+  glow.position.z = -size * 0.35;
+  g.add(glow);
   g.visible = false;
   g.userData.mat = mat;
+  g.userData.glow = glow.material;
   return g;
 }
 
@@ -217,22 +245,54 @@ export class Weapons {
     const h8 = this.g.h8;
     if (!h8) return;
     const R = H8.R;
-    const mk = (name, dir, kind) => {
+    const lowq = QUALITY.level !== 'high';
+    // everything of the guns in one group of H8's: it shows from the cockpit too (the outside
+    // cameras see the guns: the display shows them turning and firing)
+    const G = new THREE.Group();
+    G.name = 'h8Guns';
+    G.matrixAutoUpdate = false;
+    h8.root.add(G);
+    this.gunGroup = G;
+    // the two rings (pylons kept off the meridian handrails on the upper hemisphere)
+    const rails = [0.55, 1.6, 2.6, 3.7, 4.7, 5.7];
+    RINGS.forEach((ring, k) => G.add(buildRing(this.M, ring, { lowq, avoid: k === 0 ? rails : [] })));
+    this.carriages = RINGS.map((ring) => new Carriage(ring));
+    // the lower ring's tandem carriage: its two sleds a metre apart, tied by a bar
+    const lower = ringCircle(RINGS[1]);
+    const half = 0.52 / lower.rad;
+    this.halfL = half;
+    this.linkLen = 2 * lower.rad * Math.sin(half) - 0.62;
+    this.link = buildLink(this.M, this.linkLen);
+    this.link.matrixAutoUpdate = false;
+    G.add(this.link);
+    const mk = (name, kind, ring, dth) => {
       const t = turret(this.M, kind);
-      const f = frameAt(dir.clone().normalize());
-      t.matrix.makeBasis(f.x, f.y, f.z).setPosition(dir.clone().normalize().multiplyScalar(R - 0.03));
       t.matrixAutoUpdate = false;
-      t.updateMatrixWorld(true);
-      h8.ext.group.add(t);
-      // (stowed: the barrels level, along the mount's own forward)
-      const m = { name, kind, group: t, dir: dir.clone().normalize(), frame: f, origin: dir.clone().normalize().multiplyScalar(R - 0.03), rest: f.z.clone().negate(), cool: 0, alt: 0, recoil: 0, kick: 0, aim: null, flash: 0, cur: f.z.clone().negate(),
-        fc: new FireControl({ am: kind === 'rail' ? AMMO.rail : AMMO.c25, gun: kind === 'rail' ? GUNS.rail : GUNS.twin25, seed: seedOf('h8.' + name), sensor: { ...SENSOR_H8 } }) };
+      G.add(t);
+      const sled = buildSled(this.M, { lowq });
+      sled.matrixAutoUpdate = false;
+      G.add(sled);
+      // its barrels glow as they heat up (its own copy of the barrel material)
+      const heat = this.M.barrel.clone();
+      heat.emissive = new THREE.Color(1.0, 0.34, 0.07);
+      heat.emissiveIntensity = 0;
+      t.traverse((o) => { if (o.isMesh && o.material === this.M.barrel) o.material = heat; });
+      const m = {
+        name, kind, group: t, sled, ring, carriage: this.carriages[ring], dth, heat,
+        dir: new THREE.Vector3(), frame: { x: new THREE.Vector3(), y: new THREE.Vector3(), z: new THREE.Vector3() }, origin: new THREE.Vector3(), rest: new THREE.Vector3(),
+        // the cradle's elevation range and the lowest line of fire that clears the hull
+        pitch: kind === 'rail' ? [-0.42, 1.62] : [-0.6, 1.62], depress: kind === 'rail' ? -0.38 : -0.5,
+        cool: 0, alt: 0, recoil: 0, kick: 0, aim: null, flash: 0, cur: new THREE.Vector3(),
+        fc: new FireControl({ am: kind === 'rail' ? AMMO.rail : AMMO.c25, gun: kind === 'rail' ? GUNS.rail : GUNS.twin25, seed: seedOf('h8.' + name), sensor: { ...SENSOR_H8 } }),
+      };
+      this.placeMount(m);
+      m.cur.copy(m.rest);
       this.h8Mounts.push(m);
       return m;
     };
-    mk('gunA', V(-0.75, 0.2, -0.63), 'twin');
-    mk('gunB', V(0.72, -0.35, -0.6), 'twin');
-    mk('rail', V(-0.3, -0.8, -0.5), 'rail');
+    mk('gunA', 'twin', 0, 0);
+    mk('gunB', 'twin', 1, -half);
+    mk('rail', 'rail', 1, half);
     this.pods = [];
     for (const s of [-1, 1]) {
       const p = pod(this.M);
@@ -240,15 +300,72 @@ export class Weapons {
       const f = frameAt(d);
       p.matrix.makeBasis(f.x, f.y, f.z).setPosition(d.clone().multiplyScalar(R - 0.04));
       p.matrixAutoUpdate = false;
-      h8.ext.group.add(p);
+      G.add(p);
       this.pods.push({ group: p, dir: d, frame: f, side: s });
     }
-    // the hull meshes follow H8's own layer handling
+    // H8 keeps the group's layers (near, or by distance)
     const meshes = [];
-    for (const m of this.h8Mounts) m.group.traverse((o) => { if (o.isMesh) meshes.push(o); });
-    for (const p of this.pods) p.group.traverse((o) => { if (o.isMesh) meshes.push(o); });
-    for (const o of meshes) { o.layers.set(LAYER_NEAR); o.frustumCulled = false; if (o.parent && o.parent !== h8.ext.group) o.matrixAutoUpdate = true; }
-    h8.extMeshes.push(...meshes);
+    G.traverse((o) => { if (o.isMesh || o.isSprite) meshes.push(o); });
+    for (const o of meshes) { o.layers.set(LAYER_NEAR); o.frustumCulled = false; if (o.parent && o.parent !== G) o.matrixAutoUpdate = true; }
+    h8.gunGroup = G;
+    h8.gunMeshes = meshes;
+    this.placeGuns();
+  }
+
+  /** a ring turret where its carriage is now: its frame, base, the way it faces at rest */
+  placeMount(m) {
+    const C = m.carriage;
+    const F = ringFrame(RINGS[m.ring], C.th + m.dth, m._rf || (m._rf = {}));
+    m.frame.x.copy(F.f.x); m.frame.y.copy(F.f.y); m.frame.z.copy(F.f.z);
+    m.dir.copy(F.n);
+    m.origin.copy(F.p).addScaledVector(F.n, DECK);
+    m.rest.copy(F.t);
+    m.railP = F.p;
+  }
+
+  /** the sleds, the turrets on them and the link bar where the carriages are (H8's frame) */
+  placeGuns() {
+    for (const m of this.h8Mounts) {
+      if (m.ring == null) continue;
+      this.placeMount(m);
+      const f = m.frame;
+      m.sled.matrix.makeBasis(f.x, f.y, f.z).setPosition(m.railP);
+      m.group.matrix.makeBasis(f.x, f.y, f.z).setPosition(m.origin);
+    }
+    const C = this.carriages && this.carriages[1];
+    if (C && this.link) {
+      // (on the chord between the two sleds)
+      const F = ringFrame(RINGS[1], C.th, this._lf || (this._lf = {}));
+      const a = ringFrame(RINGS[1], C.th + this.halfL, this._la || (this._la = {})).p;
+      const b = ringFrame(RINGS[1], C.th - this.halfL, this._lb || (this._lb = {})).p;
+      this.link.matrix.makeBasis(F.f.x, F.f.y, F.f.z).setPosition(_v.copy(a).add(b).multiplyScalar(0.5));
+    }
+  }
+
+  /**
+   * The carriages run toward what their guns are on: the upper one to the bearing of its twin's
+   * aim; the lower one to its twin's while that is firing (else the railgun's, else the twin's);
+   * back to their places when there is nothing. While the radiators are folded up the upper
+   * carriage keeps to its side of them
+   */
+  runCarriages(dt) {
+    const az = (a) => Math.atan2(a.x, -a.z);
+    const [A, B, Rl] = this.h8Mounts;
+    const h8 = this.g.h8;
+    const C0 = this.carriages[0], C1 = this.carriages[1];
+    let lim = null;
+    if (h8 && h8.radFold > 0.02) {
+      const front = Math.abs(dAng(0, C0.th)) < Math.PI / 2;
+      lim = front ? [-70 * Math.PI / 180, 70 * Math.PI / 180] : [110 * Math.PI / 180, 250 * Math.PI / 180];
+    }
+    const wa = (m) => m && (m.want || m.aim);
+    C0.step(dt, wa(A) ? az(wa(A)) : null, lim);
+    // (the twin while it is firing, else the railgun, else the twin)
+    let w = null;
+    if (wa(B) && (B.cool > -0.5 || !wa(Rl))) w = az(wa(B)) - B.dth;
+    else if (wa(Rl)) w = az(wa(Rl)) - Rl.dth;
+    C1.step(dt, w);
+    for (const m of this.h8Mounts) if (m.ring != null) this.placeMount(m);
   }
 
   buildB29() {
@@ -384,6 +501,8 @@ export class Weapons {
         m.fc.accT = 0.6 * (h8.mind ? 1 - 0.5 * h8.mind.learn : 1);
         m.fc.tick(dt);
       }
+      // the carriages run round their rings toward what their guns are on
+      this.runCarriages(dt);
       const manual = w === 'h8' && this.fireHeld;
       const tgt = w === 'h8' ? this.primary('h8') : null;
       // HACHI's automatic intercept: the nearest enemy inside 50 km, the turrets on it all the time
@@ -480,7 +599,7 @@ export class Weapons {
   mountWorld(m, which) {
     const P = this.pose(which);
     if (which === 'h8') {
-      const pos = m.dir.clone().multiplyScalar(H8.R + 0.5).applyQuaternion(P.quat).add(P.pos);
+      const pos = m.origin.clone().addScaledVector(m.dir, 0.4).applyQuaternion(P.quat).add(P.pos);
       return { pos, n: m.dir.clone().applyQuaternion(P.quat), P };
     }
     const pos = m.local.clone().addScaledVector(m.dir, 0.5).applyQuaternion(P.quat).add(P.pos);
@@ -489,9 +608,9 @@ export class Weapons {
 
   /** the turret's yaw and pitch for a pointing (vessel-local), as its model turns */
   static yawPitch(m, a) {
-    const f = m.frame;
+    const f = m.frame, lim = m.pitch || PITCH_FIXED;
     const ax = a.dot(f.x), ay = a.dot(f.y), az = a.dot(f.z);
-    return [Math.atan2(-ax, -az), Math.max(-0.12, Math.min(1.45, Math.atan2(ay, Math.hypot(ax, az))))];
+    return [Math.atan2(-ax, -az), Math.max(lim[0], Math.min(lim[1], Math.atan2(ay, Math.hypot(ax, az))))];
   }
 
   /**
@@ -524,8 +643,8 @@ export class Weapons {
     const B = ud.barrels[i] || ud.barrels[0];
     B.rec = 1;
     B.flashT = kind === 'rail' ? 0.07 : 0.045;
-    B.flash.rotation.z = Math.random() * Math.PI * 2;
-    B.flash.scale.setScalar(0.75 + Math.random() * 0.55);
+    B.flash.children[0].rotation.z = Math.random() * Math.PI * 2;
+    B.flash.scale.setScalar(0.8 + Math.random() * 0.5);
     m.kick = Math.min(3, m.kick + (kind === 'rail' ? 2.2 : 1));
     m.flash = 0.05;
     // the particles only where somebody could see them (the vessel close to the eye)
@@ -563,16 +682,19 @@ export class Weapons {
       const step = m.fc.gun.slew * dt;
       if (ang <= step) c.copy(want); else c.lerp(want, step / ang).normalize();
     };
-    if (!T) { m.aim = null; m.sol = null; slew(m.rest); return; }
+    if (!T) { m.aim = null; m.sol = null; m.want = null; slew(m.rest); return; }
     const F = m.fc;
     F.observe(T.id, T.pos, T.vel, T.acc, dt);
     const sol = F.solve(T.id, W.pos, W.P.vel, T.aim || null);
-    if (!sol) { m.aim = null; m.sol = null; slew(m.rest); return; }
+    if (!sol) { m.aim = null; m.sol = null; m.want = null; slew(m.rest); return; }
     const dir = sol.aimDir;
-    // below the mount's horizon the hull blocks it
-    if (dir.dot(W.n) < -0.12) { m.aim = null; m.sol = null; slew(m.rest); return; }
+    // where the guns want to point (vessel-local): a ring carriage runs that way
+    m.want = dir.clone().applyQuaternion(qi);
+    // below the mount's horizon the hull blocks it: the turret swings as far round as it can while
+    // its carriage brings it to the other side
+    if (dir.dot(W.n) < (m.depress ?? -0.12)) { m.aim = null; m.sol = null; slew(m.ring != null ? m.want : m.rest); return; }
     m.sol = sol;
-    m.aim = dir.clone().applyQuaternion(qi);       // vessel-local, where the turret turns to
+    m.aim = m.want.clone();       // vessel-local, where the turret turns to
     slew(m.aim);
     if (m.kind === 'rail') return;
     const dist = (T.aim || T.pos).distanceTo(W.pos);
@@ -582,7 +704,7 @@ export class Weapons {
     if (m.cur.angleTo(m.aim) > 1.2e-3) return;
     // never through anything friendly
     const block = this.blocked(which, W.pos, dir, dist, T, F.am.v0 * F.am.life);
-    if (block) { if (manual && which === 'h8' && g.h8) g.h8.say('hachi_friendly', {}, { minGap: 8, force: false }); return; }
+    if (block) { if (manual && which === 'h8' && g.h8 && block !== 'self') g.h8.say('hachi_friendly', {}, { minGap: 8, force: false }); return; }
     if (kind === 'cannon' && this.ammo.cannon <= 0) { this.dry(which); return; }
     if (kind === 'pd' && this.ammo.pd <= 0) { this.dry(which); return; }
     // H8's fire control circuit cut: the servo cannot hold the guns steady (and once it is gone,
@@ -630,6 +752,26 @@ export class Weapons {
           if (o.clone().addScaledVector(d, t).distanceTo(s.c) < s.r + 0.8) return other.kind;
         }
       } else if (lineHits(other.pos, other.R + 6)) return other.kind;
+    }
+    // H8's own radiator wings (spread at the equator, or folded up against the flanks)
+    if (which === 'h8' && g.h8) {
+      const h = g.h8, P = this.pose('h8');
+      const qi = _q2.copy(P.quat).invert();
+      const o = _v.copy(p).sub(P.pos).applyQuaternion(qi);
+      const d = dir.clone().applyQuaternion(qi);
+      const fold = h.radFold || 0;
+      for (const sd of [-1, 1]) {
+        // into the wing's own frame: about its hinge, turned back by its fold
+        const a = sd * fold * 1.62, c = Math.cos(a), s2 = Math.sin(a);
+        const ox = o.x - sd * (H8.R + 0.12), oy = o.y;
+        const lx = c * ox + s2 * oy, ly = -s2 * ox + c * oy;
+        const dx = c * d.x + s2 * d.y, dy = -s2 * d.x + c * d.y;
+        if (Math.abs(dy) < 1e-6) continue;
+        const tt = -ly / dy;
+        if (tt <= 0 || tt > 12) continue;
+        const u = (lx + dx * tt) * sd, w = o.z + d.z * tt;
+        if (u > 0.3 && u < 3.5 && Math.abs(w) < 0.8) return 'self';
+      }
     }
     // the stations (their bounding spheres: rounds that miss scatter far beyond the target)
     for (const s of g.stations.list) {
@@ -687,7 +829,7 @@ export class Weapons {
     m.fc.observe(T.id, T.pos, T.vel, T.acc, 0);
     const sol = m.fc.solve(T.id, W.pos, W.P.vel, T.aim || null);
     const dir = sol && sol.aimDir;
-    if (!dir || dir.dot(W.n) < -0.12 || this.blocked('h8', W.pos, dir, dist, T, m.fc.am.v0 * m.fc.am.life)) { say('hachi_rail_blocked'); return; }
+    if (!dir || dir.dot(W.n) < m.depress || this.blocked('h8', W.pos, dir, dist, T, m.fc.am.v0 * m.fc.am.life)) { say('hachi_rail_blocked'); return; }
     m.aim = dir.clone().applyQuaternion(_q.copy(W.P.quat).invert());
     m.cur.copy(m.aim);
     this.railCharge = 0;
@@ -823,6 +965,8 @@ export class Weapons {
   // ------------------------------------------------------------------ per render frame
   updateVisual(dt, origin, camWorld) {
     const g = this.g;
+    // the carriages where they have run to on their rings
+    if (this.gunGroup) { this.placeGuns(); this.gunGroup.updateMatrixWorld(true); }
     // turrets follow their aim (or settle back to stowed), barrels recoil
     const settle = (m) => {
       const ud = m.group.userData;
@@ -841,8 +985,13 @@ export class Weapons {
         B.slide.position.z = (m.kind === 'rail' ? 0.24 : m.kind === 'pd' ? 0.1 : 0.11) * ease;
         B.flashT = Math.max(0, B.flashT - dt);
         B.flash.visible = B.flashT > 0;
-        if (B.flash.visible) B.flash.userData.mat.opacity = Math.min(1, B.flashT * 30);
+        if (B.flash.visible) { const o = Math.min(1, B.flashT * 30); B.flash.userData.mat.opacity = o; B.flash.userData.glow.opacity = o; }
         B.slide.updateMatrix();
+      }
+      // a long burst heats the barrels: they glow dull red, then orange, and cool again
+      if (m.heat) {
+        const hk = Math.max(0, Math.min(1, (m.fc.heat - 12) / 60));
+        m.heat.emissiveIntensity = hk * hk * 3.2;
       }
       m.recoil = Math.max(0, m.recoil - dt * 9);
       m.flash = Math.max(0, m.flash - dt);

@@ -294,9 +294,9 @@ function sensors(b, parts) {
     b.cyl(0.045, 0.045, 0.004, 'lens', [0, 0.175, 0], null, 20);
     b.pop();
   }
-  // high-gain dish on a two-joint arm (aft, high)
+  // high-gain dish on a two-joint arm (aft, high: clear of the upper gun ring)
   {
-    const d = V(0, 0.64, 0.77).normalize();
+    const d = V(0, 0.82, 0.57).normalize();
     const f = frameAt(d);
     b.pushM(mBasis(f, d.clone().multiplyScalar(R0 - 0.02)));
     b.cyl(0.16, 0.2, 0.12, 'metalDark', [0, 0.06, 0], null, 24);
@@ -310,9 +310,9 @@ function sensors(b, parts) {
     b.cyl(0.035, 0.03, 0.06, 'metalDark', [0, 0.34, 0], null, 12);
     b.pop(); b.pop(); b.pop();
   }
-  // laser comm terminal (starboard, high)
+  // laser comm terminal (starboard, high: above the upper gun ring)
   {
-    const d = V(0.86, 0.45, -0.24).normalize();
+    const d = H8.laserDir.clone();
     const f = frameAt(d);
     b.pushM(mBasis(f, d.clone().multiplyScalar(R0 - 0.02)));
     b.cyl(0.14, 0.18, 0.1, 'metalDark', [0, 0.05, 0], null, 24);
@@ -322,7 +322,8 @@ function sensors(b, parts) {
     b.pop();
   }
   // whip antennas and sun sensors
-  for (const [x, y, z, L] of [[-0.55, 0.8, -0.2, 1.4], [0.3, 0.9, 0.3, 1.0], [-0.9, 0.35, 0.25, 0.9]]) {
+  // (none where the gun carriages run)
+  for (const [x, y, z, L] of [[-0.55, 0.8, -0.2, 1.4], [0.3, 0.9, 0.3, 1.0], [-0.95, 0.06, 0.27, 0.9]]) {
     const d = V(x, y, z).normalize();
     const p = d.clone().multiplyScalar(R0);
     b.cyl(0.05, 0.06, 0.06, 'metalDark', p.toArray(), null, 10);
