@@ -184,7 +184,7 @@ export class EnginePlume {
       uCore: { value: v3(st.core) }, uHot: { value: v3(st.hot) }, uMant: { value: v3(st.mant) }, uTail: { value: v3(st.tail) },
       tNoise3D: noiseTex,
     };
-    const lowQ = QUALITY.level === 'low' || QUALITY.level === 'low2';
+    const lowQ = QUALITY.level !== 'high';
     this.mat = new THREE.ShaderMaterial({
       uniforms: this.u, vertexShader: VERT, fragmentShader: FRAG,
       defines: { STEPS: steps(), CSTEPS: QUALITY.level === 'low2' ? 4 : lowQ ? 6 : 10, OCT: lowQ ? 1 : 2 },

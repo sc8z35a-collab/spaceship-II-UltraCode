@@ -22,6 +22,9 @@ class MultiFrustumPass extends Pass {
     }
     this.onBeforePass = null;
     this.frames = 0;
+    // LOW II, the eye in B-29's cabin: the far and middle passes are drawn only inside this box of
+    // the picture (where the windows are), or not at all ('none'); null: the whole picture
+    this.farRect = null;
     // the sun's shadow map is centred on the ship and hardly changes from one frame to the next:
     // low quality redraws it every few frames only
     this.shadowEvery = 1;
@@ -49,7 +52,11 @@ class MultiFrustumPass extends Pass {
       passRange.value.set(OWN[k][0], OWN[k][1]);
       if (this.onBeforePass) this.onBeforePass(k, c);
       sm.needsUpdate = (k === 'near' && this.frames % this.shadowEvery === 0) || this.frames < 2;
+      const clip = k !== 'near' && target ? this.farRect : null;
+      if (clip === 'none') continue;                       // none of it can be seen
+      if (clip) { target.scissor.set(clip.x, clip.y, clip.w, clip.h); target.scissorTest = true; renderer.setRenderTarget(target); }
       renderer.render(this.scene, c);
+      if (clip) { target.scissorTest = false; renderer.setRenderTarget(target); }
       if (k !== 'near') renderer.clearDepth();
     }
     this.frames++;
@@ -317,7 +324,8 @@ export class Engine {
     this.camera.matrixAutoUpdate = false;
     this.maxPR = Math.min(window.devicePixelRatio || 1, 2.25);
     loadQuality();
-    this.low = QUALITY.level === 'low';
+    this.low = QUALITY.level !== 'high';
+    this.low2 = QUALITY.level === 'low2';
     this.pr = this.basePR();
     renderer.setPixelRatio(this.pr);
 
@@ -330,10 +338,13 @@ export class Engine {
     this.composer.addPass(this.mfPass);
     this.composer.addPass(new SanitizePass());
     this.composer.addPass(this.exposure);
-    this.composer.addPass(new EffectPass(this.camera, this.bloom, this.grade));
+    this.gradePass = new EffectPass(this.camera, this.bloom, this.grade);
+    this.composer.addPass(this.gradePass);
     this.smaa = new SMAAEffect({ preset: this.low ? SMAAPreset.LOW : SMAAPreset.HIGH });
-    if (this.low) this.bloom.mipmapBlurPass.levels = 5;
-    this.composer.addPass(new EffectPass(this.camera, this.smaa));
+    if (this.low) this.bloom.mipmapBlurPass.levels = this.low2 ? 4 : 5;
+    this.smaaPass = new EffectPass(this.camera, this.smaa);
+    this.composer.addPass(this.smaaPass);
+    this.setAA();
     // drawn over the finished picture, with the unmagnified view (H8's tabs: they are part of its
     // display, so the zoom does not magnify them; the picture's grading does not touch them)
     this.uiScene = new THREE.Scene();
@@ -388,23 +399,34 @@ export class Engine {
     this.camera.updateProjectionMatrix();
   }
 
-  /** starting pixel ratio: low quality draws about half the pixels (0.72^2) */
+  /** starting pixel ratio: low quality draws about half the pixels (0.72^2), LOW II a fifth */
   basePR() {
     const hi = Math.min(this.maxPR, 1.75);
+    if (this.low2) return Math.max(0.45, Math.round(hi * 0.45 * 100) / 100);
     return this.low ? Math.max(0.7, Math.round(hi * 0.72 * 100) / 100) : hi;
   }
 
-  /** switch between the full look and the half-cost one (resolution, anti-aliasing, bloom) */
+  /** switch between the full look, the half-cost one and LOW II (resolution, anti-aliasing,
+   *  bloom, how often the sun's shadows are redrawn) */
   setQuality(level) {
-    this.low = level === 'low';
+    this.low = level !== 'high';
+    this.low2 = level === 'low2';
     this.pr = this.basePR();
     this.resStart = undefined;
     this.resDropped = false;
     this.frameTimes.length = 0;
     this.smaa.applyPreset(this.low ? SMAAPreset.LOW : SMAAPreset.HIGH);
-    this.bloom.mipmapBlurPass.levels = this.low ? 5 : 8;
-    if (this.mfPass) this.mfPass.shadowEvery = this.low ? 3 : 1;
+    this.setAA();
+    this.bloom.mipmapBlurPass.levels = this.low2 ? 4 : this.low ? 5 : 8;
+    if (this.mfPass) { this.mfPass.shadowEvery = this.low2 ? 8 : this.low ? 3 : 1; this.mfPass.farRect = null; }
     this.resize();
+  }
+
+  /** LOW II: no anti-aliasing pass at all (the grade goes straight to the screen) */
+  setAA() {
+    this.smaaPass.enabled = !this.low2;
+    this.smaaPass.renderToScreen = !this.low2;
+    this.gradePass.renderToScreen = this.low2;
   }
 
   /** frame-time based dynamic resolution */
@@ -425,7 +447,7 @@ export class Engine {
     const med = sorted[Math.floor(sorted.length / 2)];
     let pr = this.pr;
     // (low quality stays at its own, lower level: it only drops further when it has to)
-    const floor = this.low ? 0.6 : 0.85, cap = this.low ? this.basePR() : this.maxPR;
+    const floor = this.low2 ? 0.4 : this.low ? 0.6 : 0.85, cap = this.low ? this.basePR() : this.maxPR;
     if (med > 1 / 40 && pr > floor) { pr = Math.max(floor, pr - 0.2); this.resDropped = true; }
     else if (!this.resDropped && med < 1 / 58 && pr < cap) pr = Math.min(cap, pr + 0.1);
     if (Math.abs(pr - this.pr) > 0.01) {

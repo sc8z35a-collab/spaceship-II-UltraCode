@@ -11,7 +11,7 @@ import { Builder, rng } from '../ship/geom.js';
 import { H8, CAMERAS, RCS, exclusions } from './h8Spec.js';
 import { decalUV } from './h8Materials.js';
 
-const LOWQ = () => QUALITY.level === 'low';
+const LOWQ = () => QUALITY.level !== 'high';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0);

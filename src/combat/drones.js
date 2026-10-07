@@ -37,7 +37,7 @@ export class Drones {
     this.M = droneMaterials();
     // levels of detail: the close-up model and the plain one only when starting on high quality;
     // the light one always (low quality, and far away)
-    const low = QUALITY.level === 'low';
+    const low = QUALITY.level !== 'high';
     const T = { lo: droneLo(this.M) };
     if (!low) { T.hi = droneHi(this.M); T.mid = droneMid(this.M); }
     this.templates = T;

@@ -119,9 +119,10 @@ export class Space {
     this.strokeT = 0;
   }
 
-  /** quality: a quarter-size sun shadow map, no earthshine shadows, coarser terrain */
-  setQuality(low) {
-    const size = low ? 2048 : 4096;
+  /** quality: a quarter-size sun shadow map (LOW II: a sixteenth), no earthshine shadows, coarser
+   *  terrain */
+  setQuality(low, low2 = false) {
+    const size = low2 ? 1024 : low ? 2048 : 4096;
     const sh = this.sunLight.shadow;
     if (sh.mapSize.x !== size) {
       // three resizes the map in place on its next shadow pass (a disposed map would leave the
@@ -130,7 +131,7 @@ export class Space {
       sh.needsUpdate = true;
     }
     this.earthshine.castShadow = !low;
-    if (this.terrain && this.terrain.setDetail) this.terrain.setDetail(low ? 2.9 : 4.2);
+    if (this.terrain && this.terrain.setDetail) this.terrain.setDetail(low2 ? 2.2 : low ? 2.9 : 4.2);
   }
 
   /**

@@ -6,6 +6,7 @@
 // not minified too far over the global Blue Marble colour.
 import * as THREE from 'three';
 import { mercXY } from './hiresElevation.js';
+import { QUALITY } from '../../core/quality.js';
 
 export const HI_LEVELS = [6, 8, 10, 12, 14];
 const WIN = 4, TS = 256;
@@ -78,7 +79,7 @@ export class HiresImagery {
       tex.minFilter = THREE.LinearMipmapLinearFilter;
       tex.magFilter = THREE.LinearFilter;
       tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.anisotropy = 4;
+      tex.anisotropy = QUALITY.level === 'low2' ? 1 : 4;   // (LOW II: lighter filtering)
       tex.needsUpdate = true;
       return { z, n: 2 ** z, tex, x0: 0, y0: 0, has: false, slots: Array.from({ length: 16 }, () => ({ key: null, fade: 0, loading: false })) };
     });

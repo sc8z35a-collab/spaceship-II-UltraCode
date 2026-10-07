@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { NOISE_GLSL } from '../../shaders/noise.glsl.js';
-import { ATMO_GLSL } from '../atmosphere.js';
+import { ATMO_GLSL, skyMaterial } from '../atmosphere.js';
 import { TILE_GLSL } from './earthTiles.js';
 import { HIRES_GLSL } from './hiresImagery.js';
 
@@ -106,6 +106,9 @@ void main(){
   {
     // kilometre-scale texture from orbit: fields, forest, relief shading break up the soft tiles
     float midF = smoothstep(2200000.0, 160000.0, vViewDist) * landK * synth;
+    #ifdef TERRAIN_LITE
+    midF = 0.0;
+    #endif
     if (midF > 0.001){
       float m1 = pfbm(vDetail, 1.0 / 14000.0, 3);
       float m2 = pfbm(vDetail, 1.0 / 2600.0, 2);
@@ -125,8 +128,13 @@ void main(){
   float detailF = smoothstep(60000.0, 4000.0, vViewDist) * uDetailAmt * synth;
   if (detailF > 0.001 && water < 0.99){
     float lum = dot(albedo, vec3(0.299, 0.587, 0.114));
+    #ifdef TERRAIN_LITE
+    float n1 = pfbm(vDetail, 1.0 / 2048.0, 2);
+    float n2 = pfbm(vDetail, 1.0 / 256.0, 1);
+    #else
     float n1 = pfbm(vDetail, 1.0 / 2048.0, 4);
     float n2 = pfbm(vDetail, 1.0 / 256.0, 3);
+    #endif
     float n3 = pnoise3(vDetail * (1.0 / 32.0), vec3(256.0));
     // fields / forest patchwork
     float green = clamp((albedo.g - albedo.r) * 18.0 + 0.3, 0.0, 1.0);
@@ -257,5 +265,5 @@ export function createTerrainMaterial(assets, atmo, shared, tiles, hires) {
     fragmentShader: FRAG,
   });
   m.extensions = { derivatives: true };
-  return m;
+  return skyMaterial(m);
 }

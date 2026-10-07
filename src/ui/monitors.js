@@ -9,7 +9,7 @@ import { EXT_CAMS } from '../ship/systems.js';
 import { placeName } from './places.js';
 import { RANGES } from '../core/layers.js';
 import { passRange } from '../core/engine.js';
-import { QUALITY, QUALITY_JP } from '../core/quality.js';
+import { QUALITY, QUALITY_JP, nextQuality } from '../core/quality.js';
 import { STATUS_JP } from '../world/worldDamage.js';
 import { VOICE_JP } from '../ship/asphalt.js';
 
@@ -143,14 +143,16 @@ export class Monitors {
     return m;
   }
 
-  /** quality: smaller, slower camera feeds and slower redraws of the screens nobody is reading */
-  setQuality(low) {
+  /** quality: smaller, slower camera feeds and slower redraws of the screens nobody is reading
+   *  (LOW II: smaller and slower again) */
+  setQuality(low, low2 = false) {
     this.low = low;
-    const w = low ? 320 : 480, h = low ? 180 : 270;
+    this.low2 = low2;
+    const w = low2 ? 240 : low ? 320 : 480, h = low2 ? 135 : low ? 180 : 270;
     if (this.feedRT && this.feedRT.width !== w) { this.feedRT.setSize(w, h); this.feedLDR.setSize(w, h); }
     for (const m of this.list) {
       const r = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[m.id] || 4;
-      m.baseRate = low ? Math.max(2, Math.round(r * 0.6)) : r;
+      m.baseRate = low2 ? Math.max(1, Math.round(r * 0.35)) : low ? Math.max(2, Math.round(r * 0.6)) : r;
       if (m.rate < 15) m.rate = m.baseRate;
     }
   }
@@ -260,7 +262,7 @@ export class Monitors {
     // camera feed
     this.feedTimer -= dt;
     if (feedWanted && this.feedTimer <= 0 && g.mode !== 'camera') {
-      this.feedTimer = this.low ? 1 / 4 : 1 / 8;
+      this.feedTimer = this.low2 ? 1 / 2 : this.low ? 1 / 4 : 1 / 8;
       this.renderFeed();
     }
   }
@@ -559,7 +561,9 @@ export class Monitors {
     }
     const al = g.systems.alarm;
     // graphics quality (low: about half the processing)
-    K.button(X, H - 124, 170, 26, '画質  ' + QUALITY_JP[QUALITY.level] + (QUALITY.level === 'low' ? '（軽い）' : QUALITY.builtLow ? '（細部は次回起動から）' : '（きれい）'), () => g.applyQuality(QUALITY.level === 'low' ? 'high' : 'low'), { style: QUALITY.level === 'low' ? 'warn' : 'normal', size: 11 });
+    const ql = QUALITY.level;
+    const qNote = ql === 'low2' ? '（最軽量）' : ql === 'low' ? '（軽い）' : QUALITY.builtLow ? '（細部は次回起動から）' : '（きれい）';
+    K.button(X, H - 124, 170, 26, '画質  ' + QUALITY_JP[ql] + qNote, () => g.applyQuality(nextQuality()), { style: ql !== 'high' ? 'warn' : 'normal', size: 11 });
     K.button(X, H - 92, 170, 26, al.active && !al.silenced ? '警報 消音' : '警報 消音済', () => g.systems.silenceAlarm(), { style: al.active && !al.silenced ? 'danger' : 'disabled', size: 12 });
     K.button(X, H - 62, 82, 24, ls.lockdown ? '隔壁 解除' : '隔壁 閉鎖', () => g.systems.toggleLockdown(), { style: ls.lockdown ? 'warn' : 'normal', size: 10 });
     K.button(X + 88, H - 62, 82, 24, '照明 ' + { normal: '通常', dim: '暗め', night: '夜間', off: '消灯' }[g.systems.lightMode], () => g.systems.cycleLights(), { size: 10 });

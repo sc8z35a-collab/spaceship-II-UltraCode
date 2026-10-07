@@ -97,8 +97,8 @@ export function buildInteriorShell(M) {
   // ---------- inner hull wall (whole cabin + underfloor) ----------
   const z0 = HULL.zTip + 0.02, z1 = Z_REACTOR_BULK + 0.02;
   // (low quality: a coarser inner skin; it is smooth and plain, nothing rides on its vertices)
-  const lowQ = QUALITY.level === 'low';
-  const inner = loftGeometry(z0, z1, lowQ ? 120 : 230, lowQ ? 80 : 140, INSET, true);
+  const lowQ = QUALITY.level !== 'high', low2 = QUALITY.level === 'low2';
+  const inner = loftGeometry(z0, z1, low2 ? 90 : lowQ ? 120 : 230, low2 ? 60 : lowQ ? 80 : 140, INSET, true);
   b.add(inner, 'wall');
   // collision shell: lower resolution, open at the airlock hatch so EVA is possible
   // (and at the dorsal port, so Kaito can float up into a docked H8)

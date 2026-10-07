@@ -2,7 +2,8 @@
 // lit with atmospheric transmittance, procedural detail close up, lightning on the night side.
 import * as THREE from 'three';
 import { NOISE_GLSL } from '../../shaders/noise.glsl.js';
-import { ATMO_GLSL } from '../atmosphere.js';
+import { ATMO_GLSL, skyMaterial } from '../atmosphere.js';
+import { QUALITY } from '../../core/quality.js';
 import { EARTH_COMMON_GLSL } from './terrainMaterial.js';
 
 export const CLOUD_ALT = 9000;
@@ -17,6 +18,9 @@ void main(){
 `;
 
 const FRAG = NOISE_GLSL + ATMO_GLSL + EARTH_COMMON_GLSL + /* glsl */`
+#ifndef CLOUD_OCT
+#define CLOUD_OCT 6
+#endif
 uniform mat3 uWorldToEcef;
 uniform float uCloudR;     // km
 uniform float uFlash;
@@ -47,7 +51,7 @@ void main(){
   float fp = distKm * 0.0016 + 0.02;
   vec3 q = dE * uCloudR;
   float n = 0.0, wsum = 0.0, lam = 64.0, amp = 1.0;
-  for (int i = 0; i < 6; i++){
+  for (int i = 0; i < CLOUD_OCT; i++){
     float w = smoothstep(fp * 2.0, fp * 5.0, lam) * amp;
     n += w * pnoise3(q / lam + vec3(uTime * 0.0006 * float(i), 0.0, 0.0), vec3(256.0));
     wsum += amp;
@@ -87,7 +91,8 @@ void main(){
 
 export function createClouds(assets, atmo, shared) {
   const R = (6371000 + CLOUD_ALT) / 1000;
-  const geo = new THREE.SphereGeometry(R * 1000 + 2500, 256, 128);
+  // (LOW II: a coarser shell, its facets still clear of the cloud deck)
+  const geo = QUALITY.level === 'low2' ? new THREE.SphereGeometry(R * 1000 + 2500, 128, 64) : new THREE.SphereGeometry(R * 1000 + 2500, 256, 128);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       tColor: { value: assets.color },
@@ -116,6 +121,7 @@ export function createClouds(assets, atmo, shared) {
     blendSrc: THREE.OneFactor,
     blendDst: THREE.OneMinusSrcAlphaFactor,
   });
+  skyMaterial(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.renderOrder = 5;
   mesh.frustumCulled = false;

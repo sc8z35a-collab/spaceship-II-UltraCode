@@ -118,8 +118,8 @@ export function buildExterior(M) {
   const b = new Builder();
   // ---------- main skin ----------
   // (low quality: a coarser skin, still smooth at every distance it is seen from)
-  const lowQ = QUALITY.level === 'low';
-  const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, lowQ ? 150 : 260, lowQ ? 100 : 160, 0, false);
+  const lowQ = QUALITY.level !== 'high', low2 = QUALITY.level === 'low2';
+  const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, low2 ? 110 : lowQ ? 150 : 260, low2 ? 72 : lowQ ? 100 : 160, 0, false);
   b.add(skin, 'hull');
   // aft closing ring/neck
   b.cyl(1.72, 1.72, 0.5, 'hullDark', [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0], 48);
@@ -372,7 +372,8 @@ export function buildExterior(M) {
   b.colCyl(1.9, 0.22, [0, 0.4, zR0 - 0.15], [Math.PI / 2, 0, 0]);
   for (const side of [-1, 1]) b.colBox(6.6, 0.12, 3.4, [side * (1.9 + 3.2), 0.4, 13.1]);
   b.colCyl(1.3, 3.4, [0, 0.4, zE + 1.7], [Math.PI / 2, 0, 0]);
-  const group = b.build(M);
+  // (LOW II: in sections along the ship, so from inside only what lies ahead of the eye is drawn)
+  const group = b.build(M, QUALITY.level === 'low2' ? { chunks: [-6.5, -1.0, 4.0, 10.0] } : {});
   return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders };
 }
 

@@ -112,6 +112,14 @@ void integrateAtmo(vec3 ro, vec3 rd, float tStart, float tEnd, const int STEPS, 
   }
 }
 
+// (steps through the air: fewer on LOW II)
+#ifndef SKY_STEPS
+#define SKY_STEPS 16
+#endif
+#ifndef AP_STEPS
+#define AP_STEPS 8
+#endif
+
 // Full sky radiance for a view ray (camera at roKm, earth centred). Returns rgb + avg transmittance.
 vec4 skyRadiance(vec3 roKm, vec3 rd, float maxDist){
   vec2 ta = raySphere(roKm, rd, Rt);
@@ -122,7 +130,7 @@ vec4 skyRadiance(vec3 roKm, vec3 rd, float maxDist){
   if (tg.x > 0.0) t1 = min(t1, tg.x);
   t1 = min(t1, maxDist);
   vec3 L, T;
-  integrateAtmo(roKm, rd, t0, t1, 16, L, T);
+  integrateAtmo(roKm, rd, t0, t1, SKY_STEPS, L, T);
   return vec4(L, dot(T, vec3(0.3333)));
 }
 
@@ -137,7 +145,7 @@ void aerialPerspective(vec3 roKm, vec3 pKm, out vec3 inscatter, out vec3 trans){
   float t0 = max(ta.x, 0.0);
   float t1 = min(ta.y, dist);
   if (t1 <= t0) return;
-  integrateAtmo(roKm, rd, t0, t1, 8, inscatter, trans);
+  integrateAtmo(roKm, rd, t0, t1, AP_STEPS, inscatter, trans);
 }
 
 // Irradiance at a surface point from the sun (with atmospheric transmittance) and sky (approx).
@@ -331,4 +339,28 @@ export function cpuTransmittance(rKm, mu, out = [1, 1, 1]) {
     o[0] = Math.exp(-a) * v; o[1] = Math.exp(-b) * v; o[2] = Math.exp(-c) * v;
     return o;
   }
+}
+
+// ---- quality: LOW II marches the sky, the haze and the clouds' noise in fewer steps, and the
+// ground leaves out its kilometre-scale texture from orbit (a lighter close-range one instead)
+const SKY_LOW2 = { SKY_STEPS: 8, AP_STEPS: 3, CLOUD_OCT: 3, TERRAIN_LITE: 1 };
+const skyMats = new Set();
+let skyLevel = 'high';
+
+/** a material using the sky's shader code: it follows the quality setting */
+export function skyMaterial(mat) {
+  skyMats.add(mat);
+  applySky(mat);
+  return mat;
+}
+
+function applySky(mat) {
+  mat.defines = mat.defines || {};
+  for (const [k, v] of Object.entries(SKY_LOW2)) { if (skyLevel === 'low2') mat.defines[k] = v; else delete mat.defines[k]; }
+}
+
+export function setSkyQuality(level) {
+  if (level === skyLevel) return;
+  skyLevel = level;
+  for (const m of skyMats) { applySky(m); m.needsUpdate = true; }
 }

@@ -10,7 +10,7 @@ import * as THREE from 'three';
 import { LAYER_NEAR, LAYER_MID, setLayersDeep } from '../core/layers.js';
 import { QUALITY } from '../core/quality.js';
 
-const lowQ = () => QUALITY.level === 'low' || QUALITY.level === 'low2';
+const lowQ = () => QUALITY.level !== 'high';
 
 const NOISE = /* glsl */`
 float h3(vec3 p){ return fract(sin(dot(p, vec3(12.9898, 78.233, 45.164))) * 43758.5453); }
