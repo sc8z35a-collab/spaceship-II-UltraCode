@@ -48,6 +48,7 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DOCK = H8.dockAt;
 const COL_DIM = 'rgba(150,190,230,0.55)';
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4();
+const _v3a = new THREE.Vector3(), _v3b = new THREE.Vector3();
 const Y = new THREE.Vector3(0, 1, 0);
 
 /** H8 and B-29 hear each other within this distance (m) */
@@ -730,6 +731,7 @@ export class H8Vessel {
 
   /** clear of B-29 after an undock: HACHI escorts, flies home, or hands the controls to Kaito */
   afterUndock(after) {
+    if (after && after.goto) { this.goTo(after.goto); return; }
     if (after === 'home') { this.goal('home'); this.say('hachi_home'); }
     else if (after === 'free') { this.goal('hold'); this.say('hachi_manual'); }
     else if (after === 'callb29') { this.goal('hold'); this.b29Go(); }
@@ -2183,9 +2185,14 @@ export class H8Vessel {
     this.display.setZoom(z);
     g.engine.grade.set('uPixel', z > OPT_MAX * 1.005 ? Math.min(DIG_MAX, z / OPT_MAX) : 1);
     g.engine.uiOn = this.tabs.visible;
-    // the marks over the outside: with this frame's magnification
-    const seatedHere = g.player.state === 'seated' && g.player.seat === this.seat;
-    this.hud.frame(dt, this.cands || [], this._orbit, disp && this.display.power > 0.3 && g.mode !== 'camera', disp && this.display.power > 0.5);
+    // the marks over the outside: with this frame's magnification. From the seat only (standing
+    // in the cockpit a tap is for the seat); looking out through the external cameras from the
+    // seat they are there too (focus, and a double tap to go)
+    const seatedHere = this.seatedHere();
+    const camLook = seatedHere && g.mode === 'camera' && this.display.power > 0.3;
+    if (camLook) this.updateCands(dt);
+    this.hudCam = camLook;
+    this.hud.frame(dt, this.cands || [], this._orbit, (disp && this.display.power > 0.3 && g.mode !== 'camera' && seatedHere) || camLook, (disp && this.display.power > 0.5) || camLook);
     this.zoom.drawHud(inCockpit && seatedHere && (g.mode === 'pilot' || g.mode === 'camera'));
     // a photograph is taken of the outside alone: the cockpit is out of the cameras' picture
     if (g.photos && g.photos.pending && inCockpit) { this.int.group.visible = false; this.display.mesh.visible = false; }
@@ -2314,15 +2321,7 @@ export class H8Vessel {
     // the eye in H8's frame: the display works out its lines of sight from it
     const camL = new THREE.Vector3().copy(camWorld).applyMatrix4(DENT_U.uH8RootInv.value);
     D.setEye(camL);
-    // what is out there (the list a few times a second, the ranges every frame)
-    this.candT = (this.candT || 0) - dt;
-    if (this.candT <= 0) { this.candT = 0.2; this.cands = this.buildCands(); }
-    const rel = new THREE.Vector3(), rv = new THREE.Vector3();
-    for (const c of this.cands) {
-      rel.copy(c.pos).sub(f.pos);
-      c.dist = rel.length();
-      c.closing = c.vel ? -rel.dot(rv.copy(c.vel).sub(f.vel)) / Math.max(1e-6, c.dist) : 0;
-    }
+    this.updateCands(dt);
     // the horizon's vertical (H8-local) and the orbit directions (ECI)
     const fl = this.mode === 'docked' ? g.flight : f;
     const qInv = _q2.copy(f.quat).invert();
@@ -2341,6 +2340,19 @@ export class H8Vessel {
     this.seat.stab = this.zoom.follow ? 1 : 1 - 1 / Math.max(1, z);
     this.tabs.place(dt, g.mode !== 'camera');
     this.tabs.draw(dt, D.power);
+  }
+
+  /** what is out there (the list a few times a second, the ranges every frame) */
+  updateCands(dt) {
+    const f = this.flight;
+    this.candT = (this.candT || 0) - dt;
+    if (this.candT <= 0 || !this.cands) { this.candT = 0.2; this.cands = this.buildCands(); }
+    const rel = _v3a, rv = _v3b;
+    for (const c of this.cands) {
+      rel.copy(c.pos).sub(f.pos);
+      c.dist = rel.length();
+      c.closing = c.vel ? -rel.dot(rv.copy(c.vel).sub(f.vel)) / Math.max(1e-6, c.dist) : 0;
+    }
   }
 
   /** everything the display can track: B-29, stations within 3000 km, the Moon, rocks nearby */
@@ -2431,8 +2443,12 @@ export class H8Vessel {
     return { eye, dir: dir.clone().transformDirection(inv) };
   }
 
+  /** Kaito in H8's seat: the tabs, the locks and the zoom are worked from there only (standing
+   *  in the cockpit a tap goes to the seat and the things round it) */
+  seatedHere() { const pl = this.g.player; return pl.state === 'seated' && pl.seat === this.seat; }
+
   tabTouch(x, y, touches) {
-    if (!this.tabs.visible || this.g.mode === 'camera') return null;
+    if (!this.tabs.visible || this.g.mode === 'camera' || !this.seatedHere()) return null;
     // a second finger while one is on a tab: the two pinch that tab
     if (touches) for (const o of touches.values()) {
       if (o.zone !== 'ui' || !o.cap || !o.cap.tab || o.cap.part === 'pinch') continue;
@@ -2470,7 +2486,7 @@ export class H8Vessel {
 
   /** the mouse wheel over a tab: its size */
   tabWheel(x, y, dy) {
-    if (!this.tabs.visible || this.g.mode === 'camera') return false;
+    if (!this.tabs.visible || this.g.mode === 'camera' || !this.seatedHere()) return false;
     const h = this.tabs.hit(this.tabRay(x, y));
     if (!h) return false;
     this.tabs.scaleBy(h.tab, Math.exp(-dy * 0.0012));
@@ -2481,23 +2497,27 @@ export class H8Vessel {
 
   /** a tap on the view (not on a tab): the locks' boxes take it */
   hudTap(tap) {
-    const g = this.g;
-    if (!this.hud.on || g.mode === 'camera' || tap.px === undefined) return false;
+    if (!this.hud.on || tap.px === undefined || !this.seatedHere()) return false;
     return this.hud.tap(tap.px, tap.py);
   }
 
-  hudHolds(holds) { if (this.hud.on) this.hud.holds(holds); }
+  hudHolds(holds) { if (this.hud.on && this.seatedHere()) this.hud.holds(holds); }
 
-  /** a double tap on a lock: go there (HACHI flies; docked, B-29's autopilot takes the pair) */
+  /**
+   * a double tap on a lock: go there. Coupled to B-29, B-29's autopilot takes the pair (lying at a
+   * station it shuts its outer hatch and casts off first); lying at a station's port H8 casts off
+   * first; otherwise HACHI flies
+   */
   goTo(c) {
     const g = this.g;
     if (!c) return;
     if (c.kind === 'body') { this.say('hachi_goto_far', { name: c.name }, { minGap: 3 }); return; }
     if (this.mode === 'docked') {
-      if (c.kind === 'station' && c.ref && g.autopilot.engage(c.ref.id)) { this.say('hachi_goto', { name: c.name }, { minGap: 2 }); return; }
-      this.say('hachi_goto_docked', {}, { minGap: 3 });
+      const ok = c.kind === 'station' && c.ref ? g.autopilot.engage(c.ref.id) : g.autopilot.engageObj(this.targetObj(c));
+      this.say(ok ? 'hachi_goto' : 'hachi_goto_no', { name: c.name }, { minGap: 2 });
       return;
     }
+    if (this.berthAt) { this.unberth({ goto: c }); return; }
     if (c.kind === 'b29') { this.call(); return; }
     if (c.kind === 'station' && c.ref) { this.wake(); this.goal(c.ref.id); this.say('hachi_goto', { name: c.name }, { minGap: 2 }); return; }
     // anything else: up to a safe distance from it, then hold there with it
@@ -2509,6 +2529,17 @@ export class H8Vessel {
     this.goalKind = 'target';
     this.goalId = c.id;
     this.say('hachi_goto', { name: c.name }, { minGap: 2 });
+  }
+
+  /** a lock as a target B-29's autopilot can fly to (it moves: followed as it goes) */
+  targetObj(c) {
+    const ref = c.ref || c;
+    const R = this.hud.radiusOf(c);
+    return {
+      id: c.id, name: c.name, kind: 'target', standoff: c.kind === 'drone' ? 1500 : Math.max(150, R * 3 + 120), tether: false,
+      pos: new THREE.Vector3().copy(ref.pos), vel: new THREE.Vector3().copy(ref.vel || this.g.flight.vel),
+      posOf(t, pos, vel) { pos.copy(ref.pos); vel.copy(ref.vel || vel); return pos; },
+    };
   }
 
   // ==================================================================== what the tabs show

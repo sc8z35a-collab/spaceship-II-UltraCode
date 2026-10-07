@@ -15,7 +15,24 @@ export class Autopilot {
   engage(stationId) {
     const s = stationId === 'h8' && this.g.h8 ? this.g.h8.navTarget() : this.g.stations.byId(stationId);
     if (!s) return false;
-    if (this.g.docking && this.g.docking.state !== 'free') { this.g.asphalt && this.g.asphalt.say('st_docked_ap', {}, { force: true }); return false; }
+    return this.engageObj(s, () => this.engage(stationId));
+  }
+
+  /**
+   * fly to s (a station, or anything with { id, name, pos, vel, posOf(t, pos, vel), standoff }).
+   * Lying at a station, B-29 lets go first (its outer hatch shut by itself) and then goes; a
+   * docking under way is called off. again: how to ask again once clear
+   */
+  engageObj(s, again = () => this.engageObj(s)) {
+    const D = this.g.docking;
+    if (D && D.state === 'docked') {
+      if (D.station === s) { this.g.asphalt && this.g.asphalt.say('st_docked_ap', {}, { force: true }); return false; }
+      const ok = D.undock(again);
+      if (ok && this.g.asphalt) this.g.asphalt.say('st_undock_go', { name: s.name }, { force: true });
+      return ok;
+    }
+    if (D && D.state === 'leaving') { D.afterUndock = again; return true; }
+    if (D && D.state === 'approach') D.abort();
     if (this.g.systems.serversHealth !== undefined && this.g.systems.serversHealth < 0.25) { this.g.asphalt && this.g.asphalt.say('autopilot_fail'); return false; }
     this.target = s;
     this.state = 'cruise';

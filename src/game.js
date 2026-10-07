@@ -266,8 +266,10 @@ export class Game {
         L.zoom = Math.max(0.25, Math.min(6, (L.zoom || 1) * Math.pow(inp.pinch || 1, 1.6)));
         L.yaw -= inp.lookDX * 0.011;
         L.pitch = Math.max(-1.5, Math.min(1.5, L.pitch - inp.lookDY * 0.011));
-        // a double tap puts it back
+        // a tap on something out there: focus on it (twice: go there); a double tap anywhere
+        // else puts the view back
         for (const tap of inp.taps) {
+          if (this.h8 && this.h8.hudTap(tap)) { L.lastTap = 0; continue; }
           const now = performance.now();
           if (now - L.lastTap < 380) { L.yaw = 0; L.pitch = 0; L.zoom = 1; L.lastTap = 0; } else L.lastTap = now;
         }

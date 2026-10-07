@@ -198,15 +198,28 @@ export class Docking {
     g.asphalt.say('st_dock_abort', {}, { force: true });
   }
 
-  undock() {
+  /**
+   * let go of the station. An open outer hatch is shut first, by itself (the ship lets go once it
+   * is sealed); only Kaito still in the lobby keeps the ship here. after: what to do once clear of
+   * the station (a function: a course to fly, say)
+   */
+  undock(after = null) {
     const g = this.g;
-    if (g.hatch.target > 0.5 || g.hatch.open > 0) { g.asphalt.say('st_dock_hatch', {}, { force: true }); return; }
-    if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return; }
+    if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
+    if (g.hatch.target > 0.5 || g.hatch.open > 0 || !g.hatch.sealed) {
+      if (g.hatch.target > 0.5) { g.hatch.target = 0; g.audio.doorMotor(g.hatch.o.center, false); }
+      this.pendingUndock = { after, t: 0 };
+      g.asphalt.say('st_hatch_auto', {}, { force: true });
+      return true;
+    }
+    this.pendingUndock = null;
+    this.afterUndock = after;
     this.despawn();
     this.state = 'leaving';
     this.wp = [{ p: V(DOCK_AT.x - 8, DOCK_AT.y, DOCK_AT.z), v: 3, tol: 0.5 }, { p: V(DOCK_AT.x - 90, DOCK_AT.y, DOCK_AT.z), v: 30, tol: 3, last: true }];
     g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
     g.asphalt.say('st_undock', { name: this.station.name }, { force: true });
+    return true;
   }
 
   /** the station gives way (wrecked): let go at once, no checks, drift clear */
@@ -487,6 +500,15 @@ export class Docking {
   /** after the flight step */
   postStep(dt) {
     if (this.state !== 'docked') this.collide(dt);
+    // an undock waiting on the outer hatch: away as soon as it is shut and dogged
+    const P = this.pendingUndock;
+    if (P) {
+      const h = this.g.hatch;
+      P.t += dt;
+      if (this.state !== 'docked' || h.target > 0.5) this.pendingUndock = null;      // opened again
+      else if (h.sealed) this.undock(P.after);
+      else if (P.t > 25) { this.pendingUndock = null; this.g.asphalt.say('st_dock_hatch', {}, { force: true }); }
+    }
   }
 
   steer(dt) {
@@ -546,6 +568,10 @@ export class Docking {
         f.autopilot = null;
         f.setSpeed = 0;
         g.asphalt.say('st_undocked', {}, { force: true });
+        // clear of the station: on to whatever the undock was for
+        const after = this.afterUndock;
+        this.afterUndock = null;
+        if (after) after();
       }
     }
   }

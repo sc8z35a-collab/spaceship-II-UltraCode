@@ -170,6 +170,7 @@ export class H8Hud {
    */
   frame(dt, cands, orbit, show, live) {
     const g = this.g, v = this.v, cv = this.cv, ctx = this.ctx;
+    this.lastCands = cands;
     // ---- the locks follow what is still tracked
     const byId = new Map(cands.map((c) => [c.id, c]));
     this.locks = this.locks.filter((l) => { const c = byId.get(l.id); if (!c) return false; l.c = c; return true; });
@@ -214,7 +215,7 @@ export class H8Hud {
     };
     // where on the display a thing is seen: dead there, or under a tab?
     const dirL = new THREE.Vector3();
-    const hidden = (p) => {
+    const hidden = v.hudCam ? () => null : (p) => {
       dirL.set(p.x - origin.x, p.y - origin.y, p.z - origin.z).applyMatrix4(rootInv).sub(eyeL).normalize();
       const P = _v.copy(eyeL).addScaledVector(dirL, D.surface(eyeL, dirL));
       if (D.deadAt(dirL, P)) return 'dead';
@@ -467,7 +468,19 @@ export class H8Hud {
   /** a tap on the view (client px): true if a lock's box took it */
   tap(px, py) {
     const b = this.boxAt(px, py);
-    if (!b) { this.lastTap = null; return false; }
+    if (!b) {
+      // a tap on something seen but not locked yet: focus on it (twice quickly: and go there)
+      const c = this.candAt(px, py);
+      if (!c || !this.lock(c, true)) { this.lastTap = null; return false; }
+      this.setPrimary(c.id);
+      const now = performance.now();
+      const dbl = this.lastTap && this.lastTap.id === c.id && now - this.lastTap.t < DOUBLE;
+      this.lastTap = dbl ? null : { id: c.id, t: now };
+      const A = this.g.audio;
+      A.beep && A.beep(1500, 0.035, 0.04, { direct: true });
+      if (dbl) { A.beep && A.beep(2200, 0.06, 0.05, { direct: true, when: 0.07 }); this.v.goTo && this.v.goTo(c); }
+      return true;
+    }
     const now = performance.now();
     const l = b.l;
     const dbl = this.lastTap && this.lastTap.id === l.id && now - this.lastTap.t < DOUBLE;
@@ -493,6 +506,22 @@ export class H8Hud {
       if (b) { this.held.add(h.id); this.unlock(b.id); }
     }
     for (const id of [...this.held]) if (!live.has(id)) this.held.delete(id);
+  }
+
+  /** the tracked thing (not locked yet) seen nearest a tap, within a fingertip of it */
+  candAt(px, py) {
+    if (!this.W) return null;
+    const o = this.g.origin, v4 = new THREE.Vector4();
+    let best = null, bd = 34;
+    for (const c of this.lastCands || []) {
+      if (c.locked || c.kind === 'body' || !c.pos) continue;
+      v4.set(c.pos.x - o.x, c.pos.y - o.y, c.pos.z - o.z, 1).applyMatrix4(_vp);
+      if (v4.w <= 1e-6) continue;
+      const x = (v4.x / v4.w * 0.5 + 0.5) * this.W, y = (0.5 - v4.y / v4.w * 0.5) * this.H;
+      const d = Math.hypot(x - px, y - py);
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
   }
 
   boxAt(px, py) {
