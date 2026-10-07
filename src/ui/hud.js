@@ -18,6 +18,8 @@ export class Hud {
       rail: document.getElementById('b-rail'),
       msl: document.getElementById('b-msl'),
       auto: document.getElementById('b-auto'),
+      autoL: document.getElementById('b-auto-l'),
+      mslN: document.getElementById('b-msl-n'),
       zoom: document.getElementById('btns-zoom'),
       zfol: document.getElementById('b-zfol'),
     };
@@ -62,13 +64,18 @@ export class Hud {
     this.show('wpn', !!armed && (g.mode === 'pilot' || g.mode === 'camera') && !foc);
     if (armed) {
       const h8 = armed === 'h8';
-      this.show('rail', h8); this.show('msl', h8);
+      // (the missile button in B-29's seat too while H8 rides on its back: H8's launchers fire)
+      const msl = W.missilesAt(armed);
+      this.show('rail', h8); this.show('msl', msl);
       const autoOn = h8 ? W.auto.hachi : W.auto.asphalt;
       if (this.last.autoOn !== autoOn) { this.last.autoOn = autoOn; this.el.auto.classList.toggle('active', autoOn); }
+      const autoL = h8 ? (autoOn ? '自動迎撃 ON' : '自動迎撃 OFF') : (autoOn ? '機銃 自動' : '機銃 手動');
+      if (this.last.autoL !== autoL && this.el.autoL) { this.last.autoL = autoL; this.el.autoL.textContent = autoL; }
       const railDim = h8 && (W.railCharge < 1 || W.ammo.rail <= 0);
       if (this.last.railDim !== railDim) { this.last.railDim = railDim; this.el.rail.classList.toggle('dim', railDim); }
-      const mslDim = h8 && W.ammo.missile <= 0;
+      const mslDim = msl && W.ammo.missile <= 0;
       if (this.last.mslDim !== mslDim) { this.last.mslDim = mslDim; this.el.msl.classList.toggle('dim', mslDim); }
+      if (msl && this.last.mslN !== W.ammo.missile && this.el.mslN) { this.last.mslN = W.ammo.missile; this.el.mslN.textContent = String(W.ammo.missile); }
     }
     // H8's zoom (in its seat)
     const inH8 = !!(g.h8 && g.player.state === 'seated' && g.player.seat === g.h8.seat);

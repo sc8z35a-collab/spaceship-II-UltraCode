@@ -29,7 +29,7 @@ export const ROUNDS = {
   cannon: { am: AMMO.c25, E: 1.6e5, color: [1.0, 0.82, 0.32], len: 26, w: 2.6, drone: 0.075, station: 0.003, rock: 0.35 },
   pd: { am: AMMO.p30, E: 7e4, color: [1.0, 0.92, 0.6], len: 18, w: 2.0, drone: 0.045, station: 0.0015, rock: 0.25 },
   rail: { am: AMMO.rail, E: 2.6e7, color: [0.55, 0.85, 1.0], len: 320, w: 3.6, drone: 0.8, station: 0.035, rock: 6 },
-  missile: { speed: 120, E: 3.5e6, life: 28, color: [1.0, 0.7, 0.4], len: 0, w: 0, drone: 1.3, station: 0.06, rock: 8 },
+  missile: { speed: 120, E: 3.5e6, life: 60, color: [1.0, 0.7, 0.4], len: 0, w: 0, drone: 1.3, station: 0.06, rock: 8 },
 };
 for (const R of Object.values(ROUNDS)) if (R.am) { R.speed = R.am.v0; R.life = R.am.life; }
 
@@ -307,7 +307,9 @@ export class Combat {
     const omega = rel.clone().cross(vrel).divideScalar(Math.max(1, d * d));
     const aPN = omega.cross(los).multiplyScalar(4 * Math.max(60, closing));
     const aMax = r.boost < 0.6 ? 60 : 320;
-    const push = los.clone().multiplyScalar(closing < 900 ? aMax : 40);
+    // (a long shot: it builds up more closing speed first — a drone 50 km out is reached in
+    // well under its minute of burn)
+    const push = los.clone().multiplyScalar(closing < (d > 15000 ? 2000 : 900) ? aMax : 40);
     const a = aPN.add(push);
     if (a.length() > aMax) a.setLength(aMax);
     acc.add(a);

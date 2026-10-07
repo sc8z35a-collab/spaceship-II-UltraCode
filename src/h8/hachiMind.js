@@ -227,7 +227,7 @@ export class HachiMind {
     if (!ds.length) { if (which === 'h8') this.h8Target = null; else this.b29Target = null; return null; }
     const v = this.v, linked = v.mode === 'docked' || v.link.ok;
     const other = which === 'h8' ? this.b29Target : this.h8Target;
-    let best = null, bs = -1;
+    let best = null, bs = -Infinity;
     for (const x of ds) {
       const d = x.ref;
       let s = 1 / (1 + x.dist / 1500);
@@ -235,7 +235,7 @@ export class HachiMind {
       if (d.run) s *= 1.5;
       s *= 1 + (1 - d.hp);
       if (linked && other && d === other && ds.length > 1) s *= 0.3;
-      if (s > bs) { bs = s; best = x; }
+      if (s > bs || !best) { bs = s; best = x; }
     }
     const was = which === 'h8' ? this.h8Target : this.b29Target;
     if (which === 'h8') this.h8Target = best.ref; else this.b29Target = best.ref;

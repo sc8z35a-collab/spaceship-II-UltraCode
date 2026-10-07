@@ -50,7 +50,7 @@ export class Particles {
     sys.p.push(o);
   }
 
-  /** kinds: spark, mist, steam, water, debris, ice, smoke, plasma, dust */
+  /** kinds: spark, mist, steam, water, debris, ice, smoke, plasma, dust, casing, gunsmoke */
   burst(kind, pos, dir, n, opts = {}) {
     const spread = opts.spread ?? 0.6, speed = opts.speed ?? 2;
     for (let i = 0; i < n; i++) {
@@ -75,6 +75,8 @@ export class Particles {
       case 'dust': P.life = 6 + Math.random() * 6; P.size = 0.004 + Math.random() * 0.004; P.c = [1, 0.95, 0.85]; P.a = 0.25; P.drag = 0.4; P.grav = 0.02; P.air = 1; this._spawn(this.alpha, P); break;
       case 'rcs': P.life = 0.35 + Math.random() * 0.3; P.size = 0.08; P.c = [0.85, 0.9, 1]; P.a = 0.35; P.drag = 0.0; P.grav = 0; P.grow = 4; this._spawn(this.alpha, P); break;
       case 'exhaust': P.life = 0.25 + Math.random() * 0.2; P.size = 0.35; P.c = [0.5, 0.65, 1.0]; P.a = 1.2; P.drag = 0.0; P.grav = 0; P.grow = 3; this._spawn(this.add, P); break;
+      case 'casing': P.life = 2.5 + Math.random() * 2; P.size = 0.022 + Math.random() * 0.01; P.c = [0.82, 0.6, 0.24]; P.a = 1; P.drag = 0.0; P.grav = 1; this._spawn(this.alpha, P); break;
+      case 'gunsmoke': P.life = 0.45 + Math.random() * 0.5; P.size = 0.1 + Math.random() * 0.06; P.c = [0.62, 0.6, 0.56]; P.a = 0.32; P.drag = 2.2; P.grav = 0; P.grow = 5; this._spawn(this.alpha, P); break;
       case 'splash': P.life = 1.5 + Math.random() * 1.5; P.size = 0.15 + Math.random() * 0.3; P.c = [0.85, 0.9, 0.95]; P.a = 0.6; P.drag = 0.3; P.grav = 1; P.grow = 1; this._spawn(this.alpha, P); break;
       default: return;
     }

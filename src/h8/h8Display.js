@@ -13,7 +13,11 @@
 //     bright line like an old tube, the line shrinks to a dot, the dot glows out — and that part
 //     of the display is black. Nothing shows there any more: no world, no markers, no tabs;
 //   - a hard knock through the armour can kill single display panels: black, with the crack star
-//     of the broken glass and backlight bleeding at its edges, or flickering, discoloured, striped.
+//     of the broken glass and backlight bleeding at its edges, or flickering, discoloured, striped;
+//     the shock runs through the whole frame, so panels all round go too, not only on the side hit;
+//   - and the worse H8 is hurt overall, the more of the display all round is worn: panels in every
+//     direction knocked out or flickering in proportion, the whole picture grainy, its backlight
+//     unsteady, colours drifting in bands, a line slipping now and then.
 // Big hits make the whole display stutter. Dark when H8 is powered down; the panels come up one
 // by one.
 import * as THREE from 'three';
@@ -50,6 +54,7 @@ uniform sampler2D tFloorP;  // the floor's 0.24 m tiles (16 x 16)
 uniform vec3 uC;            // cockpit centre
 uniform float uFloorY;
 uniform float uTime;
+uniform float uWear;        // how worn the whole display is by H8's damage (0 .. 1)
 float dhs(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
 
 void displayFx(vec3 P, vec3 d, vec2 sp, float ui, out vec3 fc, out float fa, out float dead){
@@ -175,6 +180,21 @@ void displayFx(vec3 P, vec3 d, vec2 sp, float ui, out vec3 fc, out float fa, out
     float stripe = 1.0 - smoothstep(0.0, 0.015, abs(pf.x - fract(pseed * 3.3)));
     fc = mix(fc, tint + vec3(0.6) * stripe, 0.6);
     fa = max(fa, max(flick * (0.4 + 0.5 * k), stripe * 0.9) * k + 0.12 * k);
+  }
+  // ---- the whole display worn, everywhere alike (what the display draws itself a little less)
+  if (uWear > 0.01){
+    float w = uWear * (1.0 - 0.5 * ui);
+    float n2 = dhs(floor(sp / (1.0 + floor(w * 2.5))) + vec2(tt * 0.91, tt * 1.13));
+    float rh = 3.0 + 6.0 * dhs(vec2(tt, 2.0));
+    float slip = step(1.0 - 0.05 * w, dhs(vec2(floor(sp.y / rh), tt + 11.0)));
+    vec3 drift = mix(vec3(0.2, 0.03, 0.16), vec3(0.03, 0.17, 0.13), dhs(vec2(floor(sp.y / 48.0), floor(uTime * 0.7))));
+    float dip = step(1.0 - 0.06 * w * w, dhs(vec2(floor(uTime * 7.0), pseed * 31.0)));   // a panel's backlight dips
+    float wa = (0.04 + 0.22 * n2) * w * w + slip * 0.55 * w + dip * 0.7 * w + 0.1 * w * smoothstep(0.4, 1.0, w);
+    vec3 wc = mix(vec3(0.55 * n2) + drift * 0.8, vec3(0.7, 0.72, 0.76) * dhs(vec2(floor(sp.y / rh), tt + 5.0)), slip);
+    wc = mix(wc, vec3(0.0), dip);
+    wa = clamp(wa, 0.0, 0.9);
+    fc = mix(fc, wc, wa * (1.0 - fa * 0.5));
+    fa = max(fa, wa);
   }
 }`;
 
@@ -368,6 +388,7 @@ export class H8Display {
       uC: { value: H8.cockpitC.clone() }, uEye: { value: H8.cockpitC.clone() },
       uUp: { value: new THREE.Vector3(0, 1, 0) }, uLadder: { value: 1 },
       uTime: { value: 0 }, uZoom: { value: 1 }, uGlitch: { value: 0 }, uDoorM: { value: new THREE.Matrix4() },
+      uWear: { value: 0 },
     };
     this.uniforms = uniforms;
     // (a piece that moves — a sliding panel, the hatch cover — has its own placement: uDoorM)
@@ -425,6 +446,7 @@ export class H8Display {
     this.failT = [null, null, null, null];
     this.panelHP = new Float32Array(32 * 16).fill(1);
     this.floorHP = new Float32Array(16 * 16).fill(1);
+    this.wornTo = 0;            // the wear the panels have been knocked out for so far
     this.eye = H8.cockpitC.clone();
   }
 
@@ -537,18 +559,59 @@ export class H8Display {
     const d = dirLocal.clone().normalize();
     for (let k = 0; k < n; k++) {
       const j = d.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.35)).normalize();
-      const hurt = Math.min(1, 0.25 + Math.random() * 0.5 + E / 3e7);
-      if (j.y < -0.55) {
-        // the floor: where that line meets it
-        const t = (FLOOR.y - H8.cockpitC.y) / j.y;
-        const x = H8.cockpitC.x + j.x * t, z = H8.cockpitC.z + j.z * t;
-        const ix = Math.floor(x / 0.24) + 8, iz = Math.floor(z / 0.24) + 8;
-        if (ix >= 0 && ix < 16 && iz >= 0 && iz < 16) this.floorHP[iz * 16 + ix] = Math.max(0, this.floorHP[iz * 16 + ix] - hurt);
-      } else {
-        const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
-        const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
-        if (ia >= 0 && ia < 32 && ie >= 0 && ie < 16) this.panelHP[ie * 32 + ia] = Math.max(0, this.panelHP[ie * 32 + ia] - hurt);
-      }
+      this.hurtDir(j, Math.min(1, 0.25 + Math.random() * 0.5 + E / 3e7));
+    }
+    // the shock runs through the frame: panels anywhere round the cockpit go too (fewer, lighter)
+    const m = Math.min(8, Math.floor(E / 3e6 + Math.random() * 1.5));
+    for (let k = 0; k < m; k++) this.hurtDir(new THREE.Vector3().randomDirection(), Math.min(0.9, 0.12 + Math.random() * 0.45 + E / 6e7));
+    this.syncPanels();
+  }
+
+  /** a panel hurt along a direction from the cockpit's middle (the floor below the equator) */
+  hurtDir(j, hurt) {
+    if (j.y < -0.55) {
+      // the floor: where that line meets it
+      const t = (FLOOR.y - H8.cockpitC.y) / j.y;
+      const x = H8.cockpitC.x + j.x * t, z = H8.cockpitC.z + j.z * t;
+      const ix = Math.floor(x / 0.24) + 8, iz = Math.floor(z / 0.24) + 8;
+      if (ix >= 0 && ix < 16 && iz >= 0 && iz < 16) this.floorHP[iz * 16 + ix] = Math.max(0, this.floorHP[iz * 16 + ix] - hurt);
+    } else {
+      const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
+      const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
+      if (ia >= 0 && ia < 32 && ie >= 0 && ie < 16) this.panelHP[ie * 32 + ia] = Math.max(0, this.panelHP[ie * 32 + ia] - hurt);
+    }
+  }
+
+  /**
+   * The display worn as far as H8 is hurt (0 .. 1), all the way round: the share of panels out
+   * or flickering grows with it — panels anywhere are knocked until the display shows that much —
+   * and the whole picture wears with it. Damage only adds up (the repair dock clears it).
+   */
+  setWear(level) {
+    const w = Math.max(0, Math.min(1, level));
+    this.uniforms.uWear.value = w;
+    if (w <= this.wornTo + 0.004) return;
+    this.wornTo = w;
+    const broken = 0.4 * Math.pow(Math.max(0, (w - 0.35) / 0.65), 1.5);
+    const knocked = Math.min(0.8, broken + 0.28 * Math.min(1, w / 0.8));
+    const live = [];
+    for (let ia = 1; ia <= 30; ia++) for (let ie = 0; ie < 16; ie++) live.push(ie * 32 + ia);
+    const total = live.length;
+    let nb = 0, nk = 0;
+    for (const i of live) { const h = this.panelHP[i]; if (h < 0.35) nb++; if (h < 0.95) nk++; }
+    // (random directions over the whole sphere: every side alike)
+    let guard = 0;
+    while ((nb < broken * total || nk < knocked * total) && guard++ < 600) {
+      const j = new THREE.Vector3().randomDirection();
+      if (j.y < -0.55) { if (Math.random() < 0.25) this.hurtDir(j, nb < broken * total ? 0.7 : 0.25); continue; }
+      const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
+      const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
+      const i = ie * 32 + ia, h = this.panelHP[i];
+      const wantBroken = nb < broken * total;
+      const nh = Math.max(0, h - (wantBroken ? 0.45 + Math.random() * 0.4 : 0.07 + Math.random() * 0.2));
+      if (h >= 0.35 && nh < 0.35) nb++;
+      if (h >= 0.95 && nh < 0.95) nk++;
+      this.panelHP[i] = nh;
     }
     this.syncPanels();
   }
@@ -562,7 +625,7 @@ export class H8Display {
   }
 
   /** the repair dock replaces the broken panels */
-  repairPanels() { this.panelHP.fill(1); this.floorHP.fill(1); this.syncPanels(); }
+  repairPanels() { this.panelHP.fill(1); this.floorHP.fill(1); this.wornTo = 0; this.uniforms.uWear.value = 0; this.syncPanels(); }
 
   /** broken panels for the save: [[i, hp], ...] (floor indices offset by 1000) */
   serializePanels() {
@@ -572,8 +635,10 @@ export class H8Display {
     return out;
   }
 
-  restorePanels(list) {
+  restorePanels(list, wear = 0) {
     this.panelHP.fill(1); this.floorHP.fill(1);
+    // (the saved panels already carry the wear)
+    this.wornTo = wear; this.uniforms.uWear.value = wear;
     for (const [i, h] of list || []) { if (i >= 1000) { if (i - 1000 < this.floorHP.length) this.floorHP[i - 1000] = h; } else if (i < this.panelHP.length) this.panelHP[i] = h; }
     this.syncPanels();
   }

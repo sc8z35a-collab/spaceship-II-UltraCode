@@ -1,10 +1,11 @@
-// Five unmanned hunter drones. Each is a little over two metres across (H8 is 7.2 m): a dark
+// Fifteen unmanned hunter drones. Each is a little over two metres across (H8 is 7.2 m): a dark
 // faceted body with a red sensor eye, four thruster pods on an X of short arms and a 20 mm cannon
 // under the nose. They roam toward wherever Kaito is, find him with their sensors (80 km), close
 // in fast and attack the vessel he is in — B-29, or H8 when he flies it: circling, then gun runs
 // with short bursts from 2.5 km in, breaking away and coming round again. Hurt badly, one pulls
 // back for a while; shot to pieces, it blows apart (its pieces tumble away) and another one comes
 // a couple of hours later. The stations' point-defence guns fire on any that come too close.
+// When the first of them comes within 50 km of Kaito's vessel he is told — just that: 敵が来ました.
 // Everything flies in ECI with gravity, like the ships.
 import * as THREE from 'three';
 import { droneMaterials, droneHi, droneMid, droneLo } from './droneModel.js';
@@ -15,8 +16,10 @@ import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 
-const N = 5;
+const N = 15;
 const SENSOR = 80e3;         // detection range (m)
+const NOTICE = 50e3;         // Kaito is told when the first one comes this close (m)
+const NOTICE_CLEAR = 65e3;   // ...and again only after every one has been beyond this
 const GUN_RANGE = 2600;
 const A_MAX = 60;            // m/s^2: unmanned, six g
 const V_HUNT = 2400;         // closing speed while hunting (m/s, relative)
@@ -102,6 +105,8 @@ export class Drones {
     this.trailRef = { pos: new THREE.Vector3(), vel: new THREE.Vector3() };
     this.enabled = true;
     this.contact = false;        // any drone has Kaito's vessel on its sensors
+    this.near = 0;               // drones within 50 km of it
+    this.noticed = false;        // Kaito has been told (until they are all beyond 65 km again)
     this.started = false;
   }
 
@@ -143,25 +148,31 @@ export class Drones {
     if (!this.started) this.start();
     const g = this.g;
     const T = this.target();
-    let contact = false, attacking = 0;
+    let contact = false, attacking = 0, near = 0, far = true;
     for (const d of this.list) {
       if (!d.alive) {
         d.respawnT -= sdt;
         if (d.respawnT <= 0 && d.respawnT > -1e9) { this.spawn(d); }
         continue;
       }
-      // fine steps (sleeping runs the clock 240 times faster)
-      const n = Math.min(120, Math.max(1, Math.ceil(sdt / 0.2)));
+      // fine steps near him (sleeping runs the clock 240 times faster); far out on a search leg,
+      // coarse ones do (it only follows its orbit and its legs there)
+      const d0 = d.pos.distanceTo(T.pos);
+      const n = Math.min(120, Math.max(1, Math.ceil(sdt / (d0 > 200e3 ? 2 : d0 > 30e3 ? 0.5 : 0.2))));
       const h = sdt / n;
       for (let k = 0; k < n; k++) this.step(d, T, h);
       if (d.state === 'attack' || d.state === 'hunt') contact = true;
       if (d.state === 'attack') attacking++;
+      const dist = d.pos.distanceTo(T.pos);
+      if (dist < NOTICE) near++;
+      if (dist < NOTICE_CLEAR) far = false;
     }
-    // first contact: the AIs call it, the sleeper is woken
-    if (contact && !this.contact) this.onContact(T);
-    if (!contact && this.contact) this.onClear();
     this.contact = contact;
     this.attacking = attacking;
+    this.near = near;
+    // the first one inside 50 km: Kaito is told (once, until they have all gone well away)
+    if (near && !this.noticed) { this.noticed = true; this.onNear(T, near); }
+    else if (far && this.noticed) { this.noticed = false; this.onClear(); }
     this.stationDefence(sdt);
   }
 
@@ -317,14 +328,16 @@ export class Drones {
     if (g.asphalt && !(g.h8 && g.h8.solo)) g.asphalt.say('drone_down', { left: this.list.filter((x) => x.alive).length }, { minGap: 4, force: true });
   }
 
-  onContact(T) {
-    const g = this.g;
-    const n = this.list.filter((d) => d.alive && (d.state === 'hunt' || d.state === 'attack')).length;
+  /** an enemy within 50 km: Kaito is told that much (and woken if he is asleep); HACHI quietly
+   * gets ready (and comes to cover B-29 if it is out on its own) */
+  onNear(T, n) {
+    const g = this.g, h8 = g.h8;
     if (g.gameplay && g.gameplay.sleeping) g.gameplay.wake();
-    if (g.asphalt && T.kind === 'b29') g.asphalt.say('drones_contact', { n }, { force: true });
-    if (g.h8) g.h8.say('hachi_drones_contact', { n, who: T.kind === 'h8' ? 'H8' : 'B-29' }, { force: true });
-    if (g.gameplay) g.gameplay.raise(0.8);
-    if (g.h8 && g.h8.onThreat) g.h8.onThreat(T);
+    // who tells him: HACHI where it is with him (aboard, docked, or on the link), else Asphalt
+    const hachi = h8 && h8.mode !== 'lost' && h8.mode !== 'parked' && h8.awake > 0.5 && (T.kind === 'h8' || h8.mode === 'docked' || (h8.link && h8.link.ok));
+    if (hachi) h8.say('hachi_enemy_near', { n }, { force: true });
+    else if (g.asphalt) g.asphalt.say('enemy_near', { n }, { force: true });
+    if (h8 && h8.onThreat) h8.onThreat(T);
   }
 
   /** one of them has shot itself dry and turns away */
@@ -334,7 +347,9 @@ export class Drones {
   }
 
   onClear() {
-    const g = this.g;
+    const g = this.g, D = g.h8 && g.h8.defence;
+    // (HACHI has just said so, putting the drive back)
+    if (D && g.time / 1000 - D.releasedAt < 120) return;
     if (g.h8) g.h8.say('hachi_drones_clear', {}, { minGap: 30, force: false });
   }
 

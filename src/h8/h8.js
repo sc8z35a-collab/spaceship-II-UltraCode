@@ -25,6 +25,8 @@ import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
 import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
+import { HachiDefence } from './hachiDefence.js';
+import { NORMAL_MW } from '../combat/arsenal.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
 import { Particles } from '../fx/particles.js';
 import { HachiPilot } from './h8Pilot.js';
@@ -161,7 +163,7 @@ export class H8Vessel {
     this.hits = 0;
     this.link = { ok: false, d: 0, known: false, t: 0 };
     this.xfer = null;            // propellant transfer while docked: 'toH8' (automatic) | 'toB29'
-    this.driveMode = 'normal';   // normal | ultra (x4 the old ULTRA) | max (x2 that)
+    this.driveMode = 'normal';   // low (less thrust, less power) | normal | ultra (x4 the old ULTRA) | max (x2 that)
     this.fuelSaid = 0;
     this.flickT = 0;
     this.cands = [];
@@ -173,6 +175,7 @@ export class H8Vessel {
     this.floorHatch = 0;         // the cockpit floor hatch 0 shut .. 1 open
     this.locker = { open: 0, target: 0, out: 0 };   // the suit locker's panel, and the suit on its rail
     this.mind = new HachiMind(this);                 // what HACHI works out and acts on
+    this.defence = new HachiDefence(this);           // HACHI's watch over a fight: LOW, the ammunition
   }
 
   // ==================================================================== construction helpers
@@ -813,7 +816,7 @@ export class H8Vessel {
   /** the speed it can reach now (m/s) */
   maxSpeedNow() { const f = this.driveFlight(); return (f.ultra ? f.vUltra : f.vNormal) * Math.max(0.2, f.driveHealth); }
 
-  driveModeName() { return { normal: '通常', ultra: 'ULTRA', max: 'MAX' }[this.driveMode] || '通常'; }
+  driveModeName(id = this.driveMode) { return { low: 'LOW', normal: '通常', ultra: 'ULTRA', max: 'MAX' }[id] || '通常'; }
 
   /** what can be chosen now: [{ id, label, on, ok, why }] */
   driveModes() {
@@ -823,6 +826,7 @@ export class H8Vessel {
     const why = (need) => (this.awake < 0.5 ? 'H8 休止中' : health < 0.45 ? '推進系損傷' : fuel < 0.02 ? '推進剤なし' : smes < need ? '蓄電不足' : null);
     const wU = why(0.1), wM = why(0.2);
     return [
+      { id: 'low', label: 'LOW', on: this.driveMode === 'low', ok: true },
       { id: 'normal', label: '通常', on: this.driveMode === 'normal', ok: true },
       { id: 'ultra', label: 'ULTRA ×4', on: this.driveMode === 'ultra', ok: !wU, why: wU },
       { id: 'max', label: 'MAX ×8', on: this.driveMode === 'max', ok: !wM, why: wM },
@@ -830,34 +834,57 @@ export class H8Vessel {
   }
 
   /**
-   * normal / ultra / max: ULTRA reaches four times the old ULTRA speed, MAX twice that again with
-   * the drive pushed to its limit (more thrust, a faster exhaust) — both draw far more power, the
-   * storage runs down in minutes and the drive falls back by itself when it is nearly empty
+   * low / normal / ultra / max: ULTRA reaches four times the old ULTRA speed, MAX twice that again
+   * with the drive pushed to its limit (more thrust, a faster exhaust) — both draw far more power,
+   * the storage runs down in minutes and the drive falls back by itself when it is nearly empty.
+   * LOW is the other way: the ULTRA field off and half the thrust, the drive drawing well under
+   * half its normal power (HACHI uses it to free power for the ammunition in a fight).
+   * by: 'hachi' when HACHI does it (its watch over the fight tells the two apart)
    */
-  setDriveMode(id, quiet = false, force = false) {
+  setDriveMode(id, quiet = false, force = false, by = null) {
     const f = this.driveFlight();
-    if (id !== 'normal' && !force) {
+    if (id !== 'normal' && id !== 'low' && !force) {
       const m = this.driveModes().find((x) => x.id === id);
       if (m && !m.ok) { if (!quiet) this.say('hachi_drive_denied', { why: m.why }, { minGap: 3 }); return false; }
     }
-    const K = { normal: [1, 1, 1], ultra: [4, 2, 2.4], max: [8, 3.5, 4.8] }[id] || [1, 1, 1];
+    const from = this.driveMode;
+    const K = { low: [1, 0.5, 1], normal: [1, 1, 1], ultra: [4, 2, 2.4], max: [8, 3.5, 4.8] }[id] || [1, 1, 1];
     [f.ultraK, f.aK, f.veK] = K;
     f.maxMode = id === 'max';
     this.driveMode = id;
-    if (id === 'normal') { if (f.ultra) f.setUltra(false); }
+    if (id === 'normal' || id === 'low') { if (f.ultra) f.setUltra(false); }
     else if (!f.ultra) f.setUltra(true);
     if (!quiet) {
       const v = f.vUltra * Math.max(0.2, f.driveHealth);
       if (id === 'normal') this.say('hachi_drive_normal', {}, { minGap: 2 });
+      else if (id === 'low') this.say('hachi_drive_low', {}, { minGap: 2 });
       else this.say(id === 'max' ? 'hachi_max_on' : 'hachi_ultra_on', { v: v > 9500 ? (v / 1000).toFixed(1) + ' km/s' : Math.round(v) + ' m/s' }, { minGap: 2 });
     }
+    if (from !== id && this.defence) this.defence.onDrive(from, id, by === 'hachi');
     return true;
   }
 
-  /** both flights back to their plain drive (docking, undocking) */
+  /** the ammunition fabricator's priority (Kaito's switch; its own function, apart from LOW) */
+  toggleAmmoPriority() {
+    const W = this.g.weapons, A = W && W.arsenal;
+    if (!A) return;
+    A.priority = !A.priority;
+    this.defence.onPriority(A.priority);
+    if (!A.priority) A.by = null;
+    this.say(A.priority ? 'hachi_pri_on' : 'hachi_pri_off', {}, { minGap: 1 });
+  }
+
+  /** both flights back to their plain drive (docking, undocking); a LOW that HACHI is holding
+   * for a fight carries over to the drive that now pushes */
   resetDrive() {
     for (const f of [this.flight, this.g.flight]) { f.ultraK = 1; f.aK = 1; f.veK = 1; f.maxMode = false; }
+    const low = this.driveMode === 'low';
     this.driveMode = 'normal';
+    if (low) {
+      const F = this.driveFlight();
+      [F.ultraK, F.aK, F.veK] = [1, 0.5, 1];
+      this.driveMode = 'low';
+    }
   }
 
   /** test / restore helper: H8 straight onto B-29's back */
@@ -1287,6 +1314,10 @@ export class H8Vessel {
     // ---- wake-up / power
     this.awake += ((this.wakeTarget > 0.5 ? 1 : 0) - this.awake) * Math.min(1, sdt / 4);
     this.updatePower(sdt);
+    this.defence.update(sdt);
+    // (the display's wear follows the damage: down again as it is mended)
+    this._wearT = (this._wearT || 0) - sdt;
+    if (this._wearT <= 0) { this._wearT = 1; this.display.setWear(this.displayWear()); }
     // ---- hatches, air, umbilical
     this.updateHatches(sdt);
     this.updateAir(sdt);
@@ -1428,11 +1459,12 @@ export class H8Vessel {
     const boosting = this.mode === 'docked' ? g.flight.mul > H8.speedMulInternal : this.flight.mul > 1;
     // ULTRA / MAX: the drive pushes harder (thrustFrac goes past 1) and less efficiently, and its
     // field draws power just to be kept up
-    const DM = { normal: [1, 0], ultra: [1.0, 20], max: [1.2, 60] }[this.driveMode] || [1, 0];
+    // (LOW: half the thrust at most, and the drive's coils run at a fraction of their power)
+    const DM = { low: [0.4, 0], normal: [1, 0], ultra: [1.0, 20], max: [1.2, 60] }[this.driveMode] || [1, 0];
     const df = this.driveFlight();
     const fr = this.mode === 'docked' ? Math.min(df.aK, df.thrustAcc.length() / Math.max(1, df.spec.aMax + df.aExtra)) : Math.min(df.aK, this.flight.thrustAcc.length() / this.flight.spec.aMax);
     if (this.driveMode !== 'normal' && this.mode !== 'parked') thrustFrac = fr;
-    P.driveMW = thrustFrac * (boosting ? H8.driveMW.boost : H8.driveMW.cruise) * DM[0] + (this.mode !== 'parked' && this.driveMode !== 'normal' ? DM[1] : 0);
+    P.driveMW = thrustFrac * (boosting ? H8.driveMW.boost : H8.driveMW.cruise) * DM[0] + (this.mode !== 'parked' && (this.driveMode === 'ultra' || this.driveMode === 'max') ? DM[1] : 0);
     P.loadMW = (2.5 + 1.5 * this.awake) + P.driveMW + (this.pd.cool > 0 ? 6 : 0);
     // supply: the reactor follows the load, the feed fills in, the SMES buffers the rest
     P.feed = this.feedOK();
@@ -1440,6 +1472,18 @@ export class H8Vessel {
     // (ULTRA and MAX run the reactor past its rating: 130 / 180 per cent)
     const over = this.driveMode === 'max' ? 1.8 : this.driveMode === 'ultra' ? 1.3 : 1;
     const reactorMax = H8.reactorMW * over * (this.awake > 0.1 ? 1 : 0.15) * this.circ('power', 0.4);
+    // the ammunition fabricator: its normal share of the reactor (less when the storage is low),
+    // or on priority everything the reactor and the feed can give beyond the rest of the load
+    const Ar = g.weapons && g.weapons.arsenal;
+    P.ammoMW = 0;
+    if (Ar && this.awake > 0.5 && this.mode !== 'parked' && this.mode !== 'pod' && this.mode !== 'lost') {
+      const lines = Ar.wantMW();
+      const smesK = P.smes / H8.smesMJ;
+      const spare = Math.max(0, reactorMax + feedAvail - P.loadMW - 3);
+      P.ammoMW = Math.min(lines, Ar.priority ? Math.max(spare, NORMAL_MW) : NORMAL_MW * (smesK > 0.25 ? 1 : smesK > 0.1 ? 0.5 : 0));
+      P.loadMW += P.ammoMW;
+      Ar.run(dt, P.ammoMW);
+    } else if (Ar) Ar.run(dt, 0);
     const want = Math.min(reactorMax, Math.max(0, P.loadMW - feedAvail * 0.5));
     P.reactor += (want / H8.reactorMW - P.reactor) * Math.min(1, dt * 0.4);
     P.reactor = Math.max(0.04, P.reactor);
@@ -1448,7 +1492,7 @@ export class H8Vessel {
     const net = supply + P.feedMW - P.loadMW;   // MW = MJ/s
     P.smes = Math.max(0, Math.min(H8.smesMJ, P.smes + net * dt));
     // nearly empty: the drive steps down by itself (MAX to ULTRA to normal)
-    if (this.driveMode !== 'normal' && P.smes < H8.smesMJ * (this.driveMode === 'max' ? 0.06 : 0.03)) {
+    if ((this.driveMode === 'ultra' || this.driveMode === 'max') && P.smes < H8.smesMJ * (this.driveMode === 'max' ? 0.06 : 0.03)) {
       const was = this.driveModeName();
       // (MAX steps down to ULTRA only while there is still something to run it on)
       this.setDriveMode(this.driveMode === 'max' && P.smes > H8.smesMJ * 0.04 ? 'ultra' : 'normal', true, true);
@@ -1837,6 +1881,12 @@ export class H8Vessel {
     this.say(water ? 'hachi_splash' : 'hachi_touchdown', {}, { minGap: 5, force: false });
   }
 
+  /** how worn the cockpit display is by everything H8 has taken (0 .. 1) */
+  displayWear() {
+    const A = this.armour;
+    return Math.max(0, Math.min(1, 1 - (0.35 * A.outer + 0.45 * A.inner + 0.2 * (this.structure ?? 1))));
+  }
+
   /** armour takes a blow: the outer plates first, then the inner pressure armour. dirLocal: from
    * H8's centre toward the point hit (H8-local) */
   armourHit(E, dirLocal, opts = {}) {
@@ -1873,11 +1923,13 @@ export class H8Vessel {
     if (res.blinded >= 0) setTimeout(() => this.say('hachi_cam_lost', { cam: CAMERAS[res.blinded].name }), 1800);
     // inside: the lights stutter, the display drops out for a moment, a console spits sparks
     const inside = this.crew || this.mode === 'docked';
+    // a blow that comes through the armour knocks out display panels on that side (and the shock
+    // some all round); the display as a whole wears with everything H8 has taken
+    if (E > 3e5 && (A.outer < 0.6 || E > 2e6)) this.display.panelHit(dirLocal, E * (1.6 - A.outer));
+    this.display.setWear(this.displayWear());
     if (inside && E > 3e5) {
       this.flickT = Math.min(1.5, 0.3 + E / 2e7);
       this.display.stutter(Math.min(1, 0.2 + E / 4e6));
-      // a blow that comes through the armour knocks out display panels on that side
-      if (A.outer < 0.6 || E > 2e6) this.display.panelHit(dirLocal, E * (1.6 - A.outer));
       if (this.seatMotion && this.crew) this.seatMotion.jolt(Math.min(2.2, 0.25 + E / 2e6));
       if (E > 1.5e6 && this.fx) {
         const side = dirLocal.x >= 0 ? 1 : -1;
@@ -2705,7 +2757,7 @@ export class H8Vessel {
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)), drive: this.driveMode,
       shelter: this.shelter.serialize(), structure: +this.structure.toFixed(3), berth: this.berthAt ? this.berthAt.id : null,
-      learn: +this.mind.learn.toFixed(3),
+      learn: +this.mind.learn.toFixed(3), defence: this.defence.serialize(),
     };
   }
 
@@ -2721,7 +2773,7 @@ export class H8Vessel {
     this.metAsphalt = !!d.met;
     this.hits = d.hits || 0;
     this.hull.restore(d.hull);
-    this.display.restorePanels(d.panels);
+    this.display.restorePanels(d.panels, Math.max(0, Math.min(1, 1 - (0.35 * this.armour.outer + 0.45 * this.armour.inner + 0.2 * (d.structure ?? 1)))));
     if (d.air) this.air = { o2: d.air.o2, n2: d.air.n2 };
     if (d.circuits) Object.assign(this.circuits, d.circuits);
     if (d.learn) this.mind.learn = d.learn;
@@ -2752,7 +2804,8 @@ export class H8Vessel {
     this.berthAt = this.mode === 'free' && d.berth ? this.g.stations.byId(d.berth) || null : null;
     if (this.berthAt) { this.pilot.setGoal(null); this.goalKind = null; this.holdBerth(); }
     if (this.mode === 'pod' || this.mode === 'lost') this.setLamps(this.mode === 'pod');
-    this.driveMode = ['ultra', 'max'].includes(d.drive) ? d.drive : 'normal';
+    this.driveMode = ['ultra', 'max', 'low'].includes(d.drive) ? d.drive : 'normal';
+    this.defence.restore(d.defence);
     // saved before H8 waited above B-29 on a new game, and never woken: it does now
     if (!d.v2 && this.mode === 'parked' && !this.metAsphalt) this.relocate = true;
   }

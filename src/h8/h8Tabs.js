@@ -151,7 +151,7 @@ export class H8Tabs {
     // the display's own state (cameras, panels, eye): one set of uniforms for every tab
     this.uniforms = {
       uCam: D.uCam, uCamH: D.uCamH, uCamFail: D.uCamFail, tPanel: D.tPanel, tFloorP: D.tFloorP,
-      uC: D.uC, uFloorY: D.uFloorY, uTime: D.uTime, uEye: D.uEye,
+      uC: D.uC, uFloorY: D.uFloorY, uTime: D.uTime, uEye: D.uEye, uWear: D.uWear,
       uDoorL: { value: new THREE.Vector4(L.az, L.hw, L.el0, L.el1) }, uDoorLOpen: { value: 0 },
       uDoorS: { value: new THREE.Vector4(S.az, S.hw, S.el0, S.el1) }, uDoorSOpen: { value: 0 },
     };
@@ -372,8 +372,9 @@ export class H8Tabs {
       case 'wpn': {
         const W = g.weapons;
         if (!W) return { text: '—' };
-        const n = g.drones ? g.drones.list.filter((d) => d.alive && (d.state === 'attack' || d.state === 'hunt') && d.pos.distanceTo(f.pos) < 90e3).length : 0;
-        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  ミサイル ${W.ammo.missile}  ${W.auto.hachi ? '自動' : '手動'}${n ? `  敵 ${n}` : ''}`, warn: n > 0 };
+        const n = v.defence ? v.defence.n : 0;
+        const A = W.arsenal;
+        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  ミサイル ${W.ammo.missile}  ${W.auto.hachi ? '自動迎撃' : '手動'}${A.mw > 0.5 ? `  生産 ${Math.round(A.mw)} MW` : ''}${n ? `  敵 ${n}（50 km）` : ''}`, warn: n > 0 };
       }
       case 'cam': {
         const Z = v.zoom, z = Z ? Z.z : 1;
@@ -529,30 +530,42 @@ export class H8Tabs {
   body_wpn(K, H) {
     const v = this.v, g = v.g, W = g.weapons;
     if (!W) return;
+    const A = W.arsenal, D = v.defence;
+    const nx = (k) => { const t = A.nextIn(k); return Number.isFinite(t) ? ` 次 ${t > 90 ? Math.round(t / 60) + '分' : Math.max(1, Math.round(t)) + '秒'}` : ''; };
     let y = 6;
     y = this.row(K, y, '25mm 砲', W.ammo.cannon / 1600, `${W.ammo.cannon}`, AMBER, W.ammo.cannon < 200);
-    y = this.row(K, y, 'レール', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%` : `発射可 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
-    y = this.row(K, y, 'ミサイル', W.ammo.missile / 12, `${W.ammo.missile}/12`, '#ff8a6a', W.ammo.missile <= 0);
-    // what the guns are on: the locks, the focus first, with the fire control's odds of a hit
-    K.text('目標      距離   命中見込み 25mm / レール', 14, y + 15, { size: 13, color: COL.dim });
+    y = this.row(K, y, 'レール', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%  ${W.ammo.rail}` : `発射可 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
+    y = this.row(K, y, 'ミサイル', W.ammo.missile / 12, `${W.ammo.missile}/12${nx('missile')}`, '#ff8a6a', W.ammo.missile <= 0);
+    // the fabricator: what it draws, whether it has priority, the feedstock left
+    const pri = A.priority;
+    K.text(`弾薬生産 ${Math.round(A.mw)} MW ${pri ? (A.by === 'hachi' ? '優先（HACHI）' : '優先') : '通常'}`, 14, y + 15, { size: 14.5, color: pri ? AMBER : COL.text, weight: pri ? 700 : 400 });
+    K.text(`素材 ${(A.feedKg / 1000).toFixed(2)} t`, 498, y + 15, { size: 14, color: A.feedKg < 300 ? COL.red : COL.dim, align: 'right', mono: true });
     y += 22;
+    if (D) {
+      K.text(fit(K, D.line(), 484, 14), 14, y + 15, { size: 14, color: D.n ? (D.short ? '#ff8a7a' : AMBER) : COL.dim });
+      y += 24;
+    }
+    // what the guns are on: the locks, the focus first, with the fire control's odds of a hit
+    K.text('目標      距離   命中見込み 25mm / レール', 14, y + 13, { size: 13, color: COL.dim });
+    y += 19;
     const T = W.targets('h8');
     if (!T.length) { K.text('目標なし — 中央の枠に収めてロック', 14, y + 16, { size: 14.5, color: COL.dim }); y += 26; }
-    const prim = W.lastTarget;
+    const prim = W.lastTarget, ic = W.intercept;
     for (const x of T) {
-      if (y > H - 80) break;
-      const sel = prim && prim.id === x.id;
-      K.rect(10, y, 492, 26, { fill: sel ? 'rgba(255,90,60,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.red : 'rgba(150,190,230,0.18)', r: 6 });
-      K.text(fit(K, `${sel ? '◆ ' : ''}${x.name}`, 200, 14.5), 18, y + 18, { size: 14.5, color: x.threat ? '#ffb3a6' : COL.text });
+      if (y > H - 78) break;
+      const sel = prim && prim.id === x.id, auto = ic && ic.id === x.id;
+      K.rect(10, y, 492, 25, { fill: sel ? 'rgba(255,90,60,0.18)' : auto ? 'rgba(255,180,80,0.14)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.red : auto ? AMBER : 'rgba(150,190,230,0.18)', r: 6 });
+      K.text(fit(K, `${sel ? '◆ ' : auto ? '◎ ' : ''}${x.name}`, 200, 14.5), 18, y + 17, { size: 14.5, color: x.threat ? '#ffb3a6' : COL.text });
       const pc = W.hitChance ? W.hitChance(x, 'cannon') : null, pr = W.hitChance ? W.hitChance(x, 'rail') : null;
-      K.text(`${fmtDist(x.dist)}   ${pc != null ? pct(pc) : '—'} / ${pr != null ? pct(pr) : '—'}`, 494, y + 18, { size: 14, color: COL.text, align: 'right', mono: true });
-      K.buttons.push({ x: 10, y, w: 492, h: 26, onTap: () => v.hud && v.hud.setPrimary(x.id) });
-      y += 30;
+      K.text(`${fmtDist(x.dist)}   ${pc != null ? pct(pc) : '—'} / ${pr != null ? pct(pr) : '—'}`, 494, y + 17, { size: 14, color: COL.text, align: 'right', mono: true });
+      K.buttons.push({ x: 10, y, w: 492, h: 25, onTap: () => v.hud && v.hud.setPrimary(x.id) });
+      y += 28;
     }
     this.buttons(K, H, [
-      [W.auto.hachi ? 'HACHI 自動' : '手動射撃', () => W.toggleAuto('h8'), W.auto.hachi ? 'on' : 'normal'],
-      ['レールガン', () => W.fireRail(true), W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled'],
-      ['ミサイル斉射', () => W.salvoMissiles(true), W.ammo.missile > 0 ? 'danger' : 'disabled'],
+      [W.auto.hachi ? '自動迎撃 ON' : '自動迎撃 OFF', () => W.toggleAuto('h8'), W.auto.hachi ? 'on' : 'normal'],
+      [pri ? '生産優先 ON' : '生産優先 OFF', () => v.toggleAmmoPriority(), pri ? 'warn' : 'normal'],
+      ['ミサイル', () => W.fireMissile('h8'), W.ammo.missile > 0 ? 'danger' : 'disabled'],
+      ['レール', () => W.fireRail(true), W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled'],
     ]);
   }
 
