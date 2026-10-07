@@ -261,7 +261,7 @@ function shellGrid(th0, th1, nT, z0, z1, nZ, r, skip = null, keep = null) {
 }
 
 /** rounded-rect ring in the plane x = const (u: vertical half size, v: half size along z) */
-function tunnelRing(x, hu, hv, r, n = 48) {
+export function tunnelRing(x, hu, hv, r, n = 48) {
   // same parametrisation as openingOutline: (u, v) corners walked counter-clockwise; the hatch's
   // u axis points down the hull, its v axis along +z
   const pts = [];

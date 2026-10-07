@@ -1,7 +1,8 @@
 // Atmosphere shell: draws in-scattered light where view rays miss the ground (limb glow from
 // orbit, blue sky / sunsets from the surface). Premultiplied blend dims what is behind.
 import * as THREE from 'three';
-import { ATMO_GLSL } from '../atmosphere.js';
+import { ATMO_GLSL, skyMaterial } from '../atmosphere.js';
+import { QUALITY } from '../../core/quality.js';
 
 const VERT = /* glsl */`
 varying vec3 vWorld;
@@ -31,8 +32,10 @@ void main(){
 `;
 
 export function createSkyShell(atmo, shared) {
-  const R = 6371000 + 100000 + 1500;
-  const geo = new THREE.SphereGeometry(R, 192, 96);
+  // (LOW II: a coarser shell, set out further so its facets stay clear of the air)
+  const low2 = QUALITY.level === 'low2';
+  const R = 6371000 + 100000 + (low2 ? 3000 : 1500);
+  const geo = new THREE.SphereGeometry(R, low2 ? 120 : 192, low2 ? 60 : 96);
   const mat = new THREE.ShaderMaterial({
     uniforms: {
       tTransmittance: { value: atmo.transmittance.texture },
@@ -51,6 +54,7 @@ export function createSkyShell(atmo, shared) {
     blendSrc: THREE.OneFactor,
     blendDst: THREE.OneMinusSrcAlphaFactor,
   });
+  skyMaterial(mat);
   const mesh = new THREE.Mesh(geo, mat);
   mesh.renderOrder = 4;
   mesh.frustumCulled = false;

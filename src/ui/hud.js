@@ -54,7 +54,7 @@ export class Hud {
     this.show('up', g.mode === 'walk' && !foc && (floating || climb));
     this.show('down', g.mode === 'walk' && !foc && (floating || climb));
     this.show('exit', st === 'seated' || g.mode === 'camera' || foc);
-    this.show('cam', (g.mode === 'pilot' || g.mode === 'camera') && !foc);
+    this.show('cam', (g.mode === 'pilot' || g.mode === 'camera') && !foc && !(g.player.seat && g.player.seat.shelter));
     this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk' && !foc);
     this.show('camUi', g.mode === 'camera');
     // the guns: in a pilot seat (B-29's defence gun, or H8's cannon, railgun and missiles)

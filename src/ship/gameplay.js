@@ -12,6 +12,13 @@ import { LAYER_NEAR, LAYER_MID, setLayersDeep } from '../core/layers.js';
 import { R_EARTH } from '../core/astro.js';
 import { HULL_BOTTOM } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
+import { H8 } from '../h8/h8Spec.js';
+import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
+import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
+
+// rations aboard B-29 (days for one): eaten day by day, restocked at the Origin's berth
+export const FOOD_FULL = 60;
+const KIT_FULL = { patches: 6, clamps: 5, sealant: 8, parts: 4 };
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const DIRS = [[V(0, 0, -1), '前方'], [V(0, 0, 1), '後方'], [V(1, 0, 0), '右舷'], [V(-1, 0, 0), '左舷'], [V(0, 1, 0), '上方'], [V(0, -1, 0), '下方']];
@@ -22,11 +29,14 @@ function distToSeg(p, a, b) {
   return a.clone().addScaledVector(ab, t).distanceTo(p);
 }
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
+const _flow = new THREE.Vector3();
 
 export class Gameplay {
   constructor(game) {
     this.g = game;
     this.kit = { patches: 6, clamps: 5, sealant: 8, parts: 4 };
+    this.food = 30;
+    this.foodSaid = 99;
     this.held = null;
     this.coffeeLevel = 0;
     this.repairing = null;
@@ -115,60 +125,15 @@ export class Gameplay {
       g.shipVis.root.add(s, s.target);
       this.flood.push(s);
     }
-    // engine plume
-    const plumeMat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uP: { value: 0 } },
-      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform float uT; uniform float uP; varying vec2 vUv;
-        void main(){ float r = abs(vUv.x - 0.5) * 2.0; float a = vUv.y; float core = exp(-r * r * 6.0) * a * a;
-          float shock = 0.5 + 0.5 * sin(vUv.y * 40.0 + uT * 30.0);
-          vec3 c = mix(vec3(0.35, 0.55, 1.0), vec3(1.0, 0.85, 0.7), core) * core * (0.8 + 0.4 * shock) * uP * 6.0;
-          gl_FragColor = vec4(c, 1.0); }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    const plumeGeo = new THREE.CylinderGeometry(0.55, 1.15, 7, 24, 1, true);
-    plumeGeo.rotateX(Math.PI / 2);          // narrow top (uv.y = 1) -> +z
-    plumeGeo.rotateY(Math.PI);              // ... -> -z (toward the nozzle)
-    plumeGeo.translate(0, 0, 3.5);          // root at the origin, plume extends aft (+z)
-    const plume = new THREE.Mesh(plumeGeo, plumeMat);
-    plume.position.set(0, 0.4, 15.4 + 1.25 + 2.1);
-    plume.frustumCulled = false;
-    setLayersDeep(plume, LAYER_NEAR, LAYER_MID);
-    plume.visible = false;
-    g.shipVis.root.add(plume);
-    this.plume = plume;
-    // re-entry plasma sheath
-    const plasmaMat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uH: { value: 0 }, uDir: { value: new THREE.Vector3(0, 0, -1) } },
-      vertexShader: 'varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw; void main(){ vP = position; vN = normal; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vNw = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }',
-      fragmentShader: `uniform float uT; uniform float uH; uniform vec3 uDir; varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw;
-        float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898,78.233,45.164))) * 43758.5453); }
-        float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(mix(h(i), h(i+vec3(1,0,0)), f.x), mix(h(i+vec3(0,1,0)), h(i+vec3(1,1,0)), f.x), f.y), mix(mix(h(i+vec3(0,0,1)), h(i+vec3(1,0,1)), f.x), mix(h(i+vec3(0,1,1)), h(i+vec3(1,1,1)), f.x), f.y), f.z); }
-        void main(){
-          vec3 N = normalize(vN);
-          float facing = dot(N, uDir);
-          float bow = pow(max(facing, 0.0), 3.0);                 // shock layer in front
-          vec3 V = normalize(cameraPosition - vW);
-          float rim = 1.0 - abs(dot(V, normalize(vNw)));          // glowing shell, see-through middle
-          // streaks flowing back along the hull
-          vec3 q = vP - uDir * dot(vP, uDir);
-          float s = n3(q * 2.4 + uDir * (dot(vP, uDir) * 0.35 - uT * 6.0)) * 0.65 + n3(vP * 5.0 - uDir * uT * 15.0) * 0.35;
-          float st = smoothstep(0.35, 0.85, s);                    // thin hot filaments
-          float wake = smoothstep(0.2, -0.6, facing) * pow(rim, 3.0) * st;
-          float a = uH * (bow * (0.6 + 0.6 * s) + pow(rim, 4.0) * 0.5 * smoothstep(-0.3, 0.6, facing) * (0.25 + st) + wake * 0.4);
-          vec3 c = mix(vec3(1.0, 0.25, 0.06), vec3(1.0, 0.86, 0.62), clamp(bow * 1.3, 0.0, 1.0)) * a * 2.2;
-          gl_FragColor = vec4(c, 1.0); }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    const sheath = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), plasmaMat);
-    sheath.scale.set(4.6, 3.8, 18.5);
-    sheath.position.set(0, 0.4, -1.0);
-    sheath.visible = false;
-    sheath.frustumCulled = false;
-    setLayersDeep(sheath, LAYER_NEAR, LAYER_MID);
-    g.shipVis.root.add(sheath);
-    this.sheath = sheath;
+    // engine plume (ray-marched exhaust: core, shock cells, the flame spreading aft)
+    this.plume = new EnginePlume(g.shipVis.root, { exits: [V(0, 0.4, 15.4 + 1.25 + 2.1)], r0: 1.12, len: 52, style: 'fusion', spread: 0.24, dia: 0.5, seed: 1.3 });
+    // re-entry fire round the whole hull (shock layer, hot core, the long wake of flame)
+    this.fire = new ReentryFire(g.shipVis.root, { center: V(0, 0.4, -0.5), shell: V(5.4, 4.6, 19.5), r0: 6, r1: 26, len: 420 });
+    // and its light through the windows (lamps that join the cabin's light pool while it burns)
+    this.fireLamps = [{ pos: V(0, 1.5, -11.4), room: 'cockpit' }];
+    for (const o of OPENINGS) if (o.kind !== 'hatch') this.fireLamps.push({ pos: o.center.clone().addScaledVector(o.normal, -0.7), room: o.room });
+    for (const l of this.fireLamps) Object.assign(l, { color: 0xff7a30, intensity: 0, range: 7, fire: true });
+    this.fireLampsOn = false;
     // dust motes in the cabin
     if (g.fx) {
       g.fx.emitter('dust', V(-1.6, 1.3, -6), V(0, 1, 0), 0.5, { speed: 0.02, spread: 3 });
@@ -334,8 +299,8 @@ export class Gameplay {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
     if (h.target > 0.5) { h.target = 0; g.audio.doorMotor(h.o.center, false); return; }
     const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
-    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
-    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_denied', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
     h.target = 1;
     g.audio.doorMotor(h.o.center, true);
   }
@@ -776,6 +741,54 @@ export class Gameplay {
     if (integ < 0.4 && Math.random() < dt * (0.45 - integ) * 0.6) g.audio.creak(V((Math.random() - 0.5) * 3, Math.random() * 2.2, -9 + Math.random() * 16), 0.4 + Math.random() * 0.4);
   }
 
+  /**
+   * The fire of re-entry round the hull, its light through the windows, and the ship shaking:
+   * the hull itself shudders (the eye rides the frame, so the cabin shakes round Kaito), loose
+   * things rattle, the frame creaks and a deep rumble fills the cabin.
+   */
+  updateFire(dt, q, travel) {
+    const g = this.g;
+    const lvl = fireLevel(q);
+    this.fire.update(dt, lvl, _flow.copy(travel).negate());
+    this.fireLvl = lvl;
+    const t = performance.now() / 1000;
+    // window light: on while it burns (joins the light pool), flickering
+    const on = lvl > 0.04;
+    if (on !== this.fireLampsOn) {
+      this.fireLampsOn = on;
+      if (on) g.systems.lamps.push(...this.fireLamps);
+      else {
+        g.systems.lamps = g.systems.lamps.filter((l) => !l.fire);
+        for (const slot of g.systems.pool) if (slot.lamp && slot.lamp.fire) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
+      }
+    }
+    if (on) this.fireLamps.forEach((l, i) => { l.intensity = lvl * (2.4 + 1.1 * Math.sin(t * 23 + i * 1.7) + 0.7 * Math.sin(t * 37.3 + i)); });
+    // the hull shudders, harder the hotter (see Game.updateRender)
+    g.hullJitter = lvl;
+    if (lvl > 0.05) {
+      g.shake = Math.max(g.shake, Math.min(3.2, 0.4 + 2.9 * lvl));
+      // loose things rattle about, the frame creaks
+      this.fireKickT = (this.fireKickT || 0) - dt;
+      if (this.fireKickT <= 0) {
+        this.fireKickT = 0.18 + Math.random() * 0.3;
+        g.phys.kick(V((Math.random() - 0.5) * 0.9, (Math.random() - 0.5) * 1.1, (Math.random() - 0.5) * 0.9).multiplyScalar(lvl), 1.2 * lvl, null, 0.04 * lvl);
+        if (Math.random() < 0.35 * lvl && g.audio.ready) g.audio.creak(V((Math.random() - 0.5) * 4, Math.random() * 2.4, -10 + Math.random() * 18), 0.3 + 0.5 * lvl);
+      }
+      // embers stream off the hull, back along the flow
+      if (g.fx && Math.random() < dt * 60 * lvl) {
+        const p = V((Math.random() - 0.5) * 5.5, 0.4 + (Math.random() - 0.5) * 4.5, -11 + Math.random() * 22).addScaledVector(travel, 3);
+        g.fx.burst('spark', p, _flow, 2, { speed: 28 + 40 * lvl, spread: 0.18 });
+      }
+    }
+    // a deep rumble under the roar
+    if (g.audio.ready) {
+      if (lvl > 0.02 || g.audio.loops.has('fireRumble')) {
+        g.audio.noiseLoop('fireRumble', { type: 'brown', freq: 55, q: 0.8, gain: 0, filter: 'lowpass', direct: true });
+        g.audio.setLoopGain('fireRumble', Math.min(0.55, lvl * 0.6), 0.4);
+      }
+    }
+  }
+
   // ================================================================== break-up
   breakup(reason) {
     const g = this.g;
@@ -976,10 +989,7 @@ export class Gameplay {
     g.shipVis.setHeat(heat, travel);
     g.engine.grade.set('uHeat', Math.min(1, heat * 0.8));
     const plasma = Math.min(1.3, Math.max(0, q - 1.2e4) / 2.2e5);
-    this.sheath.visible = plasma > 0.01;
-    this.sheath.material.uniforms.uH.value = plasma;
-    this.sheath.material.uniforms.uT.value = performance.now() / 1000 % 100;
-    this.sheath.material.uniforms.uDir.value.copy(travel);
+    this.updateFire(dt, q, travel);
     if (q > 3e3) {
       g.shake = Math.max(g.shake, Math.min(2, q / 5e4));
       const gain = Math.min(0.6, q / 8e4);
@@ -1042,10 +1052,7 @@ export class Gameplay {
     const fwdThrust = Math.max(0, -thrLocal.z) / 15;
     const p = Math.min(1.3, fwdThrust * 2.2 + (f.ultra ? 0.3 : 0)) * (f.engineHealth > 0.05 ? 1 : 0);
     this.plumeP += (p - this.plumeP) * Math.min(1, dt * 4);
-    this.plume.visible = this.plumeP > 0.01;
-    this.plume.material.uniforms.uP.value = this.plumeP;
-    this.plume.material.uniforms.uT.value = t % 100;
-    this.plume.scale.set(1, 1, 0.6 + this.plumeP);
+    this.plume.update(dt, p, plumeAir(f.rho || 0), f.ultra ? 1 : 0);
     M.nozzle.emissiveIntensity = this.plumeP * 2.5 + (f.ultra ? 0.8 : 0);
     if (this.plumeP > 0.04 && g.running) {
       g.audio.humLoop('engine', { freq: 36, gain: 0.08, harm: [1, 0.7, 0.45, 0.3] });
@@ -1181,7 +1188,8 @@ export class Gameplay {
     if (!T) return;
     if (g.docking && g.docking.state === 'docked' && T.kg < T.cap - 0.5) {
       if (!this.refueling) { this.refueling = true; g.asphalt.say('b29_refuel', {}, { minGap: 120 }); }
-      T.kg = Math.min(T.cap, T.kg + 40 * dt);
+      // (the Origin pumps six times faster)
+      T.kg = Math.min(T.cap, T.kg + (g.docking.station && g.docking.station.supply ? 240 : 40) * dt);
       if (T.kg >= T.cap - 0.5) { T.kg = T.cap; this.refueling = false; g.asphalt.say('b29_refueled', {}, { minGap: 120 }); }
     } else this.refueling = false;
     // the station's crew loads ammunition too (a while after the berth is made)
@@ -1190,6 +1198,7 @@ export class Gameplay {
       this.rearmT = (this.rearmT || 0) + dt;
       if (this.rearmT > 25) { this.rearmT = 0; W.rearm(withH8); g.asphalt.say('b29_rearm', {}, { minGap: 60 }); }
     } else this.rearmT = 0;
+    this.updateSupply(dt);
     const fr = f.fuel;
     if (fr < 0.15 && !this.fuelWarned) { this.fuelWarned = true; g.asphalt.say('b29_fuel_low', { pct: Math.round(fr * 100) }, { force: true }); }
     else if (fr > 0.25) this.fuelWarned = false;
@@ -1308,11 +1317,58 @@ export class Gameplay {
     if (this.g.running) { this.updateViewmodel(dt); this.updateArms(); }
   }
 
+  // ================================================================== supplies
+  /**
+   * The rations run down a day at a time. At the Origin's berth its robots bring everything else
+   * aboard: power and propellant for H8, the air reserves, water, the repair kit, food.
+   */
+  updateSupply(dt) {
+    const g = this.g, ls = g.lifeSupport, dk = g.docking;
+    this.food = Math.max(0, this.food - dt / 86400);
+    const left = this.food;
+    const mark = left <= 0 ? 0 : left < 1 ? 1 : left < 3 ? 3 : left < 7 ? 7 : 99;
+    if (mark < this.foodSaid) { this.foodSaid = mark; g.asphalt.say(mark === 0 ? 'food_out' : 'food_low', { d: Math.max(1, Math.ceil(left)) }, { force: true }); }
+    else if (left > 10) this.foodSaid = 99;
+    const st = dk && dk.state === 'docked' ? dk.station : null;
+    if (!st || !st.supply || (st.dmg && st.dmg.status !== 'ok' && st.dmg.status !== 'damaged')) { this.supplying = false; this.supplyT = 0; return; }
+    if (!this.supplying) { this.supplying = true; this.supplySaid = false; g.asphalt.say('origin_supply', {}, { force: true }); }
+    this.supplyT = (this.supplyT || 0) + dt;
+    const h = g.h8;
+    if (h && h.docked) {
+      h.power.smes = Math.min(H8.smesMJ, h.power.smes + 600 * dt);
+      const T = h.flight.tank;
+      if (T) T.kg = Math.min(T.cap, T.kg + 120 * dt);
+    }
+    ls.reserve.o2 = Math.min(9100, ls.reserve.o2 + 60 * dt);
+    ls.reserve.n2 = Math.min(17000, ls.reserve.n2 + 110 * dt);
+    ls.water = Math.min(180, ls.water + 1.5 * dt);
+    this.food = Math.min(FOOD_FULL, this.food + dt * FOOD_FULL / 90);
+    // the repair kit: the supply robots bring a fresh one a while after the berth is made
+    if (this.supplyT > 20) for (const [k, n] of Object.entries(KIT_FULL)) this.kit[k] = Math.max(this.kit[k] || 0, n);
+    if (!this.supplySaid && this.supplyItems().every((it) => it.k > 0.995)) { this.supplySaid = true; g.asphalt.say('origin_supply_done', {}, { force: true }); }
+  }
+
+  /** what the supply board shows: name, fill 0..1, being filled */
+  supplyItems() {
+    const g = this.g, f = g.flight, ls = g.lifeSupport, h = g.h8, on = !!this.supplying;
+    const kitK = Object.entries(KIT_FULL).reduce((a, [k, n]) => a + Math.min(1, (this.kit[k] || 0) / n), 0) / Object.keys(KIT_FULL).length;
+    const items = [];
+    const add = (name, k) => items.push({ name, k: Math.max(0, Math.min(1, k)), active: on && k < 0.995 });
+    add('推進剤 B-29', f.tank ? f.tank.kg / f.tank.cap : 1);
+    if (h && h.docked) { add('電力 H8', h.power.smes / H8.smesMJ); if (h.flight.tank) add('推進剤 H8', h.flight.tank.kg / h.flight.tank.cap); }
+    add('酸素', ls.reserve.o2 / 9100);
+    add('窒素', ls.reserve.n2 / 17000);
+    add('水', ls.water / 180);
+    add('食料', this.food / FOOD_FULL);
+    add('修理部材', kitK);
+    return items;
+  }
+
   // ================================================================== persistence
   serialize() {
     const g = this.g;
     return {
-      kit: this.kit, held: this.held, coffee: this.coffeeLevel,
+      kit: this.kit, held: this.held, coffee: this.coffeeLevel, food: +this.food.toFixed(4),
       valves: (g.layout.valves || []).map((v) => v.open),
       airlockMode: g.airlockMode || 'idle',
     };
@@ -1321,6 +1377,7 @@ export class Gameplay {
   restore(d) {
     const g = this.g;
     if (d.kit) this.kit = d.kit;
+    if (d.food !== undefined) this.food = d.food;
     if (d.held) this.hold(d.held);
     if (d.coffee !== undefined) this.coffeeLevel = d.coffee;
     (d.valves || []).forEach((o, i) => { const v = (g.layout.valves || [])[i]; if (v) v.open = o; });

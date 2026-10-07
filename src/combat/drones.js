@@ -11,8 +11,9 @@ import { droneMaterials, droneHi, droneMid, droneLo } from './droneModel.js';
 import { QUALITY } from '../core/quality.js';
 import { MU_EARTH } from '../core/astro.js';
 import { assignLayers, LAYER_FAR, LAYER_MID } from '../core/layers.js';
+import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
-import { leadDir } from './combat.js';
+import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 
 const N = 5;
 const SENSOR = 80e3;         // detection range (m)
@@ -21,7 +22,7 @@ const A_MAX = 60;            // m/s^2: unmanned, six g
 const V_HUNT = 2400;         // closing speed while hunting (m/s, relative)
 const V_SEARCH = 1100;       // speed of the search legs
 const RESPAWN = 2 * 3600;    // s of game time
-const AMMO = 180;            // rounds a drone carries
+const AMMO_N = 180;          // rounds a drone carries
 const RELOAD = 25 * 60;      // s: away to rearm when it has shot its drum empty
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
 const Z = new THREE.Vector3(0, 0, -1);
@@ -36,7 +37,7 @@ export class Drones {
     this.M = droneMaterials();
     // levels of detail: the close-up model and the plain one only when starting on high quality;
     // the light one always (low quality, and far away)
-    const low = QUALITY.level === 'low';
+    const low = QUALITY.level !== 'high';
     const T = { lo: droneLo(this.M) };
     if (!low) { T.hi = droneHi(this.M); T.mid = droneMid(this.M); }
     this.templates = T;
@@ -55,12 +56,19 @@ export class Drones {
         game.engine.scene.add(grp);
         lods[k] = grp;
       }
+      // the four pods' flames (one draw), in a frame that follows the drone
+      const jets = new THREE.Group();
+      jets.matrixAutoUpdate = false;
+      game.engine.scene.add(jets);
+      const plume = new EnginePlume(jets, { exits: [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => new THREE.Vector3(sx * 0.82, sy * 0.34, 0.72)), r0: 0.1, len: 3.4, style: 'blue', spread: 0.35, dia: 0.45, seed: i * 1.7 });
       this.list.push({
-        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, lods, lod: null, own,
+        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, lods, lod: null, own, jets, plume,
         pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(), thrust: new THREE.Vector3(),
         alive: false, hp: 1, state: 'patrol', t: 0, burst: 0, shotT: 0, cool: rand(1, 3), respawnT: 0,
         slot: { r: rand(650, 1150), ph: rand(0, Math.PI * 2), w: rand(0.12, 0.22) * (Math.random() < 0.5 ? -1 : 1), tilt: rand(-0.7, 0.7) },
-        run: null, smokeT: 0, seenT: 0, evadeT: 0, ammo: AMMO, reloadT: 0, search: 0, wp: null, wpT: 0,
+        run: null, smokeT: 0, seenT: 0, evadeT: 0, ammo: AMMO_N, reloadT: 0, search: 0, wp: null, wpT: 0,
+        // its gun's fire control (a cruder sensor set than H8's)
+        fc: new FireControl({ am: AMMO.d20, gun: GUNS.drone20, seed: seedOf('drone', i), sensor: { ang: 0.45e-3, range: 4, vel: 0.25 }, accT: 0.8 }),
       });
     }
     // far away: their drive glow as points (visible out to a few hundred km)
@@ -100,7 +108,7 @@ export class Drones {
   /** the vessel the drones are after: the one Kaito is in */
   target() {
     const g = this.g;
-    if (g.h8 && g.h8.solo) return { kind: 'h8', ref: g.h8, pos: g.h8.flight.pos, vel: g.h8.flight.vel, acc: g.h8.flight.properAcc, R: 3.6 };
+    if (g.h8 && g.h8.solo && g.h8.mode === 'free') return { kind: 'h8', ref: g.h8, pos: g.h8.flight.pos, vel: g.h8.flight.vel, acc: g.h8.flight.properAcc, R: 3.6 };
     return { kind: 'b29', ref: g.flight, pos: g.flight.pos, vel: g.flight.vel, acc: g.flight.properAcc, R: 14 };
   }
 
@@ -118,7 +126,7 @@ export class Drones {
     const h = new THREE.Vector3().crossVectors(T.pos, T.vel).normalize();
     d.vel.crossVectors(h, d.pos).normalize().multiplyScalar(Math.sqrt(MU_EARTH / r));
     d.alive = true; d.hp = 1; d.state = 'patrol'; d.t = 0; d.burst = 0; d.cool = rand(1, 3); d.run = null; d.evadeT = 0;
-    d.ammo = AMMO; d.reloadT = 0; d.search = rand(800e3, 1400e3); d.wp = null; d.wpT = 0;
+    d.ammo = AMMO_N; d.reloadT = 0; d.search = rand(800e3, 1400e3); d.wp = null; d.wpT = 0;
     d.q.setFromUnitVectors(Z, d.vel.clone().normalize());
     this.showLod(d, null);
   }
@@ -164,7 +172,7 @@ export class Drones {
     const dist = rel.length();
     // ---- what to do: search (legs closing in on where he might be), hunt once he is on the
     // sensors, attack close in; an empty drum sends it away to rearm, heavy damage makes it back off
-    if (d.reloadT > 0) { d.reloadT -= dt; if (d.reloadT <= 0) { d.ammo = AMMO; d.hp = Math.min(1, d.hp + 0.5); } }
+    if (d.reloadT > 0) { d.reloadT -= dt; if (d.reloadT <= 0) { d.ammo = AMMO_N; d.hp = Math.min(1, d.hp + 0.5); } }
     const armed = d.ammo > 0 && d.reloadT <= 0;
     if (d.state === 'patrol' && dist < SENSOR && armed) { d.state = 'hunt'; d.seenT = 0; }
     if (d.state === 'hunt' && dist < 5000) d.state = 'attack';
@@ -240,9 +248,14 @@ export class Drones {
     const gg = grav(d.pos, new THREE.Vector3()).add(acc);
     d.pos.addScaledVector(d.vel, dt).addScaledVector(gg, 0.5 * dt * dt);
     d.vel.addScaledVector(gg, dt);
-    // ---- point the nose: at the lead point while it can shoot, else along its motion
+    // ---- point the nose: at its fire control's solution while it can shoot, else along its motion
     let want = null;
-    if (aimAt && dist < GUN_RANGE + 400) want = leadDir(d.pos, d.vel, T.pos, T.vel, 1650, new THREE.Vector3(), T.acc);
+    d.fc.tick(dt);
+    if (aimAt && dist < GUN_RANGE + 400) {
+      d.fc.observe(T.kind, T.pos, T.vel, T.acc, dt);
+      const sol = d.fc.solve(T.kind, d.pos, d.vel);
+      if (sol) want = sol.aimDir.clone();
+    }
     if (!want) want = d.vel.clone().sub(T.vel).normalize();
     if (want.lengthSq() > 0.5) {
       const qWant = _q.setFromUnitVectors(Z, want);
@@ -262,7 +275,8 @@ export class Drones {
         d.burst--;
         d.ammo--;
         const muzzle = d.pos.clone().add(new THREE.Vector3(0, -0.28, -1.2).applyQuaternion(d.q));
-        this.combat.fire({ kind: 'drone', pos: muzzle, vel: d.vel, dir: nose, owner: d, spread: 0.0045 });
+        // (the gun is fixed in the nose: it fires where the nose points; the scatter is the gun's)
+        this.combat.fire({ kind: 'drone', round: d.fc.fire(muzzle, d.vel, nose, d.hp < 0.5 ? 1.6 : 1), pos: muzzle, vel: d.vel, dir: nose, owner: d });
         if (d.burst <= 0) d.cool = rand(1.6, 3.2);
         // the drum is empty: away to rearm
         if (d.ammo <= 0) { d.reloadT = RELOAD * rand(0.8, 1.2); d.run = null; this.onDry(d); }
@@ -331,16 +345,19 @@ export class Drones {
       if (s.kind !== 'hub' || (s.dmg && (s.dmg.status === 'failed' || s.dmg.status === 'destroyed'))) continue;
       s.pdT = (s.pdT || 0) - dt;
       if (s.pdT > 0) continue;
+      if (!s.fc) s.fc = new FireControl({ am: AMMO.p30, gun: GUNS.pd30, seed: seedOf('station.' + s.id), sensor: { ang: 0.3e-3, range: 2, vel: 0.15 }, accT: 0.8 });
+      s.fc.tick(0.12);
       for (const d of this.list) {
         if (!d.alive) continue;
         const dist = d.pos.distanceTo(s.pos);
         if (dist > 2500) continue;
-        s.pdT = 0.12;
-        const dir = leadDir(s.pos, s.vel, d.pos, d.vel, 1500, new THREE.Vector3(), d.thrust);
-        if (!dir) break;
-        // from a turret on the station's rim, toward the drone
-        const from = s.pos.clone().addScaledVector(dir, 40);
-        this.combat.fire({ kind: 'pd', pos: from, vel: s.vel, dir, owner: { kind: 'station', ref: s }, spread: 0.006 });
+        s.pdT = 1 / GUNS.pd30.rof;
+        // a turret on the station's rim, on the drone's side
+        const from = d.pos.clone().sub(s.pos).setLength(40).add(s.pos);
+        s.fc.observe(d.id, d.pos, d.vel, d.thrust, 0.12);
+        const sol = s.fc.solve(d.id, from, s.vel);
+        if (!sol) break;
+        this.combat.fire({ kind: 'pd', round: s.fc.fire(from, s.vel, sol.aimDir), pos: from, vel: s.vel, dir: sol.aimDir, owner: { kind: 'station', ref: s } });
         break;
       }
     }
@@ -366,7 +383,7 @@ export class Drones {
     const zoomK = Math.tan(cam.fov * Math.PI / 360) / Math.tan(base * Math.PI / 360);
     for (const d of this.list) {
       const i = d.i;
-      if (!d.alive) { this.showLod(d, null); this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
+      if (!d.alive) { this.showLod(d, null); d.plume.mesh.visible = false; this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
       const rel = d.pos.clone().sub(origin);
       const dist = rel.distanceTo(camWorld);
       const eff = dist * zoomK;
@@ -374,8 +391,9 @@ export class Drones {
       this.ptPos.set([rel.x, rel.y, rel.z], i * 3);
       this.ptK[i] = 0.35 + 0.65 * thrustK;
       const L = d.lods;
-      const k = this.low || !L.hi ? (eff < 9000 && dist < 25000 ? 'lo' : null)
-        : eff < 60 ? 'hi' : eff < 1200 ? 'mid' : eff < 25000 && dist < 25000 ? 'lo' : null;
+      // (out to the guns' reach and beyond: a zoomed view can pick one out at tens of kilometres)
+      const k = this.low || !L.hi ? (eff < 9000 && dist < 90000 ? 'lo' : null)
+        : eff < 60 ? 'hi' : eff < 1200 ? 'mid' : eff < 25000 && dist < 90000 ? 'lo' : null;
       this.showLod(d, k);
       const mesh = k && L[k];
       if (mesh) {
@@ -384,6 +402,15 @@ export class Drones {
         mesh.updateMatrixWorld(true);
         mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dist - 2), dist + 2); });
         d.own.jet.emissiveIntensity = 0.8 + 5 * thrustK;
+        // the pods push it nose-first (and a little whichever way it is steering)
+        const tl = _v2.copy(d.thrust).applyQuaternion(_q.copy(d.q).invert());
+        d.jets.matrix.copy(mesh.matrix);
+        d.jets.matrixWorld.copy(mesh.matrix);
+        d.jets.updateMatrixWorld(true);
+        d.plume.update(dt, Math.min(1.2, Math.max(0, -tl.z) / A_MAX * 1.3 + thrustK * 0.25), 0, 0);
+        d.plume.setDistance(dist);
+      } else d.plume.mesh.visible = false;
+      if (mesh) {
         // (a deep red: brighter, it bloomed out into a pale disc)
         d.own.eye.emissiveIntensity = (k === 'hi' ? 2.6 : 4.5) + (k === 'hi' ? 1.4 : 2.5) * Math.sin(t * 9 + i) * (d.state === 'attack' ? 1 : 0.2);
         d.own.lamp.emissiveIntensity = (t * 1.3 + i * 0.37) % 1 < 0.07 ? 12 : 0;
@@ -430,8 +457,8 @@ export class Drones {
       d.alive = x.alive; d.hp = x.hp; d.state = x.state === 'attack' || x.state === 'hunt' ? 'patrol' : x.state;
       d.respawnT = (x.respawnT || 0) - gapSec;
       d.pos.fromArray(x.pos); d.vel.fromArray(x.vel);
-      d.ammo = x.ammo ?? AMMO; d.reloadT = Math.max(0, (x.reloadT || 0) - gapSec); d.search = x.search || 600e3; d.wp = null;
-      if (d.reloadT <= 0 && d.ammo <= 0) d.ammo = AMMO;
+      d.ammo = x.ammo ?? AMMO_N; d.reloadT = Math.max(0, (x.reloadT || 0) - gapSec); d.search = x.search || 600e3; d.wp = null;
+      if (d.reloadT <= 0 && d.ammo <= 0) d.ammo = AMMO_N;
     });
     // back after a long time away: they have lost him and search from afar again
     if (gapSec > 600) for (const d of this.list) if (d.alive) this.spawn(d);

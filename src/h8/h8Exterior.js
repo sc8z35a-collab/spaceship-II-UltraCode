@@ -11,7 +11,7 @@ import { Builder, rng } from '../ship/geom.js';
 import { H8, CAMERAS, RCS, exclusions } from './h8Spec.js';
 import { decalUV } from './h8Materials.js';
 
-const LOWQ = () => QUALITY.level === 'low';
+const LOWQ = () => QUALITY.level !== 'high';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const Y = V(0, 1, 0);
@@ -478,8 +478,8 @@ function servicePanels(b) {
 
 /**
  * Build H8's exterior. Returns { group, far (low-detail stand-in), parts } — parts are the
- * animated / referenced bits: radiator wings, radar rotor, plume meshes, light positions, RCS
- * spots, the drive exit, the coupling tip.
+ * animated / referenced bits: radiator wings, radar rotor, light positions, RCS spots, the drive
+ * and auxiliary engine exits (their plumes are H8's own), the coupling tip.
  */
 export function buildH8Exterior(M) {
   const b = new Builder();
@@ -541,32 +541,6 @@ export function buildH8Exterior(M) {
     holder.add(rotor);
     group.add(holder);
     parts.radar = rotor;
-  }
-  // plumes: main drive (three nested cones + core), aux engines
-  parts.plumes = [];
-  const cone = (len, r0, r1, mat) => {
-    const g = new THREE.CylinderGeometry(r0, r1, len, 32, 1, true);
-    g.translate(0, -len / 2, 0);
-    g.rotateX(-Math.PI / 2);   // along +z
-    const mesh = new THREE.Mesh(g, mat);
-    mesh.frustumCulled = false;
-    return mesh;
-  };
-  {
-    const pg = new THREE.Group();
-    pg.position.copy(parts.driveExit);
-    const c1 = cone(9, 0.95, 2.4, M.plume), c2 = cone(16, 0.7, 3.4, M.plume.clone()), core = cone(5, 0.35, 0.05, M.plumeCore);
-    pg.add(c1, c2, core);
-    group.add(pg);
-    parts.plumes.push({ group: pg, cones: [c1, c2], core, main: true });
-  }
-  for (const e of parts.auxExits) {
-    const pg = new THREE.Group();
-    pg.position.copy(e);
-    const c1 = cone(2.6, 0.33, 0.8, M.auxPlume.clone());
-    pg.add(c1);
-    group.add(pg);
-    parts.plumes.push({ group: pg, cones: [c1], main: false });
   }
   group.traverse((o) => { o.castShadow = false; });
   // ---- low-detail stand-in for distance

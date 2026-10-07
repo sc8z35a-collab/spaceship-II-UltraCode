@@ -9,6 +9,7 @@ import { elevatorAxis } from './elevator.js';
 import { LOBBY, lobbyShellExterior } from './stationLobby.js';
 import { PROM, promenadeShellExterior } from './stationPromenade.js';
 import { atriumExterior } from './stationAtrium.js';
+import { originModel, originAnimate, ORIGIN } from './originStation.js';
 
 /** reference plane defined from the canonical start state (deterministic) */
 export function referenceFrame(startTime) {
@@ -27,6 +28,9 @@ export function referenceFrame(startTime) {
 export const STATION_DEFS = [
   // Shirasagi is the orbital port B-29 just left: same orbit, a few kilometres ahead at the start
   { id: 'shirasagi', name: 'シラサギ・ステーション', jp: '白鷺', en: 'SHIRASAGI', alt: 420e3, phase: 0.011, size: 1.0, kind: 'hub' },
+  // the Origin International Space Station: 100 km ahead on the same orbit, unmanned, the big
+  // supply port (power, propellant, air, water, food, spares); B-29 swings round it wide
+  { id: 'origin', name: 'オリジン国際宇宙ステーション', jp: 'オリジン国際宇宙ステーション', en: 'ORIGIN ISS', alt: 420e3, phase: 100e3 / (R_EARTH + 420e3) * 180 / Math.PI, size: 1.0, kind: 'hub', origin: true, berthR: 900, standoff: 1150, supply: true },
   // the space elevator's low station: built around the ribbon at 420 km; it turns with the Earth
   // instead of orbiting, so it is not weightless (about 0.88 g)
   { id: 'mihashira', name: '天の御柱 低軌道ステーション', jp: '天の御柱', en: 'MIHASHIRA', alt: 420e3, size: 1.0, kind: 'hub', tether: true },
@@ -44,6 +48,16 @@ export const STATION_DEFS = [
  * orientation as the station. Nothing else of the station comes near that parking space.
  */
 export const LOBBY_AT = new THREE.Vector3(-24, 0, 0);
+// H8's own port on a hub: on top of the forward spine truss (the surface it stands on)
+const H8_PORT_HUB = { y: 2.47, z: -50 };
+
+/** H8's docking port: a collar on the surface (y0 its foot), the yellow target ring, two floods */
+function h8Collar(b, x, y0, z) {
+  b.cyl(1.7, 1.9, 1.4, 'hullOrange', [x, y0 + 0.5, z], null, 18);
+  b.torus(1.75, 0.12, 'plasticY', [x, y0 + 1.22, z], [Math.PI / 2, 0, 0], 18);
+  for (const s of [-1, 1]) b.box(0.3, 0.12, 3.0, 'plasticY', [x + s * 2.6, y0 + 0.3, z], null, 0);
+  for (const s of [-1, 1]) b.cyl(0.3, 0.3, 0.12, 'flood', [x + s * 3.2, y0 + 0.4, z + 2.4], null, 10);
+}
 export const DOCK_AT = new THREE.Vector3(LOBBY_AT.x - LOBBY.xc, LOBBY_AT.y - LOBBY.yc, LOBBY_AT.z - (LOBBY.z0 + LOBBY.z1) / 2);
 
 // ---------------------------------------------------------------------------- station models
@@ -84,6 +98,13 @@ export function stationMaterials() {
     lobbyGlow: new THREE.MeshStandardMaterial({ color: 0x111111, emissive: new THREE.Color(1.0, 0.78, 0.5), emissiveIntensity: 2.6, roughness: 0.2 }),
     cyanGlow: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.35, 0.8, 1.0), emissiveIntensity: 2.4 }),
     whitePanel: new THREE.MeshStandardMaterial({ color: 0xf4f5f2, roughness: 0.45, metalness: 0.08 }),
+    // the Origin's own: lit window panes, its blue, the farm's grow light, the storage rings,
+    // the partners' emblems
+    originWin: new THREE.MeshStandardMaterial({ color: 0x0c1622, emissive: new THREE.Color(0.95, 0.85, 0.65), emissiveIntensity: 0.9, roughness: 0.15, metalness: 0.3 }),
+    originBlue: new THREE.MeshStandardMaterial({ color: 0x2d5c99, roughness: 0.5, metalness: 0.2 }),
+    growGlow: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.55, 1.0, 0.45), emissiveIntensity: 2.2 }),
+    energyGlow: new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.3, 0.75, 1.0), emissiveIntensity: 4.0 }),
+    ...Object.fromEntries([0xd8392b, 0xf2f2f2, 0x2a5fb0, 0x2f9a4a, 0xf0c020, 0x8a3fb8].map((c, i) => ['emblem' + i, new THREE.MeshStandardMaterial({ color: c, roughness: 0.4, metalness: 0.1 })])),
   };
 }
 
@@ -207,6 +228,7 @@ function stationModel(def, M) {
     b.pop();
   }
   b.pop();
+  h8Collar(b, 0, 3.4 * s, -5 * s);
   const g = b.build(M, { castShadow: false });
   // rotating habitat ring (hubs and the dock)
   let ring = null;
@@ -372,6 +394,8 @@ function hubModel(def, M) {
     }
   }
   for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); }
+  // ---- H8's port on the forward truss
+  h8Collar(b, 0, H8_PORT_HUB.y, H8_PORT_HUB.z);
   // ---- antennas, dishes, docked visitor, nav lights, strobes
   dish(b, 5.0, [6, 7, -100], [0, 0, -0.6]);
   dish(b, 3.0, [-6, 6, -96], [0.3, 0, 0.7]);
@@ -433,6 +457,7 @@ export class Stations {
   constructor(engine, shipM, startTime) {
     this.ref = referenceFrame(startTime);
     this.scene = engine.scene;
+    this.engine = engine;
     // plain copies of the ship materials (no ship-space dents / window cut-outs)
     const M = {};
     for (const [k, m] of Object.entries(shipM)) M[k] = m.userData && m.userData.shipPatched ? m.clone() : m;
@@ -444,9 +469,9 @@ export class Stations {
       return { ...d, r, n: Math.sqrt(MU_EARTH / (r * r * r)), phi0: d.phase * Math.PI / 180, pos: new THREE.Vector3(), vel: new THREE.Vector3(), model: null };
     });
     // every station gets its own copies of the light materials, so a damaged one can go dark
-    const LIGHTS = ['windowLit', 'lobbyGlow', 'cyanGlow', 'garden', 'gardenLamp', 'flood', 'strobe', 'navR', 'navG'];
+    const LIGHTS = ['windowLit', 'lobbyGlow', 'cyanGlow', 'garden', 'gardenLamp', 'flood', 'strobe', 'navR', 'navG', 'originWin', 'growGlow', 'energyGlow'];
     for (const s of this.list) {
-      s.model = s.kind === 'hub' ? hubModel(s, M) : stationModel(s, M);
+      s.model = s.origin ? originModel(s, Object.assign({}, M, { originSign: nameSignMaterial(s) }), DOCK_AT) : s.kind === 'hub' ? hubModel(s, M) : stationModel(s, M);
       s.model.matrixAutoUpdate = false;
       s.model.visible = false;
       s.lm = {};
@@ -592,12 +617,15 @@ export class Stations {
 
   update(t, origin, camWorld, dt) {
     const camEci = camWorld.clone().add(origin);
+    // a magnified view (H8's zoom) brings them closer: the models show from further away
+    const E = this.engine, cam = E && E.camera;
+    const zk = cam && E.baseVFov ? Math.tan(cam.fov * Math.PI / 360) / Math.tan(E.baseVFov() * Math.PI / 360) : 1;
     for (const s of this.list) {
       this.posOf(s, t, s.pos, s.vel);
       const rel = s.pos.clone().sub(origin);
       const d = rel.distanceTo(camWorld);
       s.dist = s.pos.distanceTo(origin);
-      const vis = d < (this.visRange || 4.0e5);
+      const vis = d * zk < (this.visRange || 4.0e5) && d < 6.0e6;
       s.model.visible = vis;
       if (vis) {
         // orient: long axis along velocity, up radial
@@ -606,6 +634,13 @@ export class Stations {
         s.model.matrixWorld.copy(s.model.matrix);
         const shell = s.model.userData.lobbyShell;
         if (shell) shell.visible = this.shellHiddenFor !== s.id;
+        // the Origin: its port's cover while no ship lies in it; its robots at work up close
+        const cov = s.model.userData.portCover;
+        if (cov) cov.visible = this.dockedId !== s.id;
+        if (s.origin && d < 3.0e4) originAnimate(s.model, t);
+        // the fine structure only within a few kilometres (through the zoom, further)
+        const ud = s.model.userData;
+        if (ud.detail) { const near = d * zk < 6000; ud.detail.visible = near; ud.coarse.visible = !near; }
         const ring = s.model.userData.ring;
         // a crippled station's habitat ring spins down
         const ringTarget = !s.dmg || s.dmg.status === 'ok' || s.dmg.status === 'damaged' ? 1 : 0;
@@ -690,6 +725,19 @@ export class Stations {
   }
 
   byId(id) { return this.list.find((s) => s.id === id); }
+
+  /**
+   * Where H8's origin sits when it lies at a station's own H8 port (station-local, upright in the
+   * station's frame): the port's collar stands on the hub's forward truss, on the core module of a
+   * relay or the dock, on the Origin's spine; H8's mating ring is 4.3 m under its origin.
+   */
+  h8PortOf(s) {
+    if (s.h8Port) return s.h8Port;
+    if (s.origin) s.h8Port = ORIGIN.h8Port.clone();
+    else if (s.kind === 'hub') s.h8Port = new THREE.Vector3(0, H8_PORT_HUB.y + 1.2 + 4.3, H8_PORT_HUB.z);
+    else s.h8Port = new THREE.Vector3(0, 3.4 * s.size + 1.2 + 4.3, -5 * s.size);
+    return s.h8Port;
+  }
 
   /** station orientation (ECI): y radial up, -z along its motion, x = y cross z */
   frameOf(s, out = new THREE.Quaternion()) {

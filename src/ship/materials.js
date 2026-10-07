@@ -278,11 +278,15 @@ export function patchShipMaterial(mat, opts = {}) {
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type + QUALITY.level;
   mat.onBeforeCompile = (sh) => {
+    // LOW II: plain surfaces (no detail texture, panel seams, grime or roughness noise)
+    const L2 = QUALITY.level === 'low2';
+    const detail = L2 ? null : o.detail, panels = L2 ? 0 : o.panels;
     Object.assign(sh.uniforms, shipUniforms);
     if (o.dentable) sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
     // low quality: surface detail from one projection instead of three
-    if (QUALITY.level === 'low') sh.defines = Object.assign(sh.defines || {}, { LOWQ: '' });
-    if (o.detail) { sh.uniforms.tDetail = { value: detailTextures()[o.detail] }; sh.uniforms.uDetailScale = { value: 1 / DETAIL_TILE[o.detail] }; }
+    if (QUALITY.level !== 'high') sh.defines = Object.assign(sh.defines || {}, { LOWQ: '' });
+    if (L2) sh.defines = Object.assign(sh.defines || {}, { LOW2: '' });
+    if (detail) { sh.uniforms.tDetail = { value: detailTextures()[o.detail] }; sh.uniforms.uDetailScale = { value: 1 / DETAIL_TILE[o.detail] }; }
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\n' + COMMON_VERT_PARS + '\nvarying float vDent;')
       .replace('#include <begin_vertex>', `#include <begin_vertex>
@@ -321,7 +325,7 @@ export function patchShipMaterial(mat, opts = {}) {
         #include <defaultnormal_vertex>`);
     }
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS + (o.detail ? '\nuniform sampler2D tDetail;\nuniform float uDetailScale;' : ''))
+      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS + (detail ? '\nuniform sampler2D tDetail;\nuniform float uDetailScale;' : ''))
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
         float _bumpH = 0.0;
         float _detailRough = 0.0;
@@ -335,6 +339,10 @@ export function patchShipMaterial(mat, opts = {}) {
         {
           vec3 P = vShipPos * ${o.triScale.toFixed(3)};
           vec3 N = abs(vShipNrm);
+          #ifdef LOW2
+          float g2 = 0.0;
+          diffuseColor.rgb *= mix(1.0, 0.81, ${o.grime.toFixed(3)});
+          #else
           vec4 n1 = nz(P * 0.21);
           vec4 n2 = nz(P * 0.9 + 0.37);
           float g1 = n1.r * 2.0 - 1.0;
@@ -343,7 +351,8 @@ export function patchShipMaterial(mat, opts = {}) {
           float grime = clamp(0.5 + 0.5 * g1 + 0.25 * streak, 0.0, 1.0);
           diffuseColor.rgb *= mix(1.0, 0.62 + 0.38 * (1.0 - grime), ${o.grime.toFixed(3)});
           diffuseColor.rgb *= 1.0 + 0.06 * g2 * ${o.wear.toFixed(3)};
-          ${o.detail ? `
+          #endif
+          ${detail ? `
           {
             // high-res surface detail, triplanar in ship space (seams, screws, vents, labels...)
             vec3 Pd = vShipPos * uDetailScale;
@@ -384,11 +393,11 @@ export function patchShipMaterial(mat, opts = {}) {
             _bumpH -= tseam * 0.002 * bel;
             _detailRough += bel * (0.35 + 0.1 * tid);
           }` : ''}
-          ${o.panels > 0 ? `
+          ${panels > 0 ? `
           // panel seams (grid in ship space), blended across the three projections so curved
           // surfaces do not get jagged seams where the dominant axis flips
           vec3 bw = N * N * N * N; bw /= (bw.x + bw.y + bw.z + 1e-5);
-          vec2 pa = panelAt(P.yz, ${o.panels.toFixed(3)}), pb = panelAt(P.xz, ${o.panels.toFixed(3)}), pc = panelAt(P.xy, ${o.panels.toFixed(3)});
+          vec2 pa = panelAt(P.yz, ${panels.toFixed(3)}), pb = panelAt(P.xz, ${panels.toFixed(3)}), pc = panelAt(P.xy, ${panels.toFixed(3)});
           float seam = pa.x * bw.x + pb.x * bw.y + pc.x * bw.z;
           float tint = pa.y * bw.x + pb.y * bw.y + pc.y * bw.z;
           diffuseColor.rgb *= 1.0 - 0.45 * seam;
@@ -398,12 +407,16 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85 * (0.75 + 0.25 * sn(vShipPos * 3.1)));
           // around a tear: soot fading out, scraped bare metal right at the torn edge, paint
           // crazing running on from the slits, frost where the escaping air freezes
-          float _sootN = 0.65 + 0.35 * sn(vShipPos * 4.3 + 1.7);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.04, 0.035), clamp(_rim * 1.1 * _sootN, 0.0, 0.92));
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.56, 0.56, 0.58), smoothstep(0.88, 0.99, _rim) * 0.85);
+          if (_rim > 0.0) {
+            float _sootN = 0.65 + 0.35 * sn(vShipPos * 4.3 + 1.7);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.045, 0.04, 0.035), clamp(_rim * 1.1 * _sootN, 0.0, 0.92));
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.56, 0.56, 0.58), smoothstep(0.88, 0.99, _rim) * 0.85);
+          }
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.015), _bcr * 0.9);
-          float _frN = smoothstep(0.35, 0.75, nz(vShipPos * 2.7).r + _bfr * 0.5);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), clamp(_bfr * _frN * 1.4, 0.0, 0.95));
+          if (_bfr > 0.0) {
+            float _frN = smoothstep(0.35, 0.75, nz(vShipPos * 2.7).r + _bfr * 0.5);
+            diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), clamp(_bfr * _frN * 1.4, 0.0, 0.95));
+          }
           // stretched / scraped metal inside dents, the paint crazed and flaking off the deepest
           diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
           float _dz = smoothstep(0.012, 0.07, vDent);
@@ -415,7 +428,7 @@ export function patchShipMaterial(mat, opts = {}) {
           }
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        ${o.panels > 0 || o.detail || o.belly ? `
+        ${panels > 0 || detail || o.belly ? `
         {
           // relief: recessed panel seams + faint waviness (derivative bump, view space). It fades
           // where a pixel spans several millimetres of wall (far away, low resolution): there the
@@ -432,12 +445,18 @@ export function patchShipMaterial(mat, opts = {}) {
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         {
           vec3 P = vShipPos * ${o.triScale.toFixed(3)};
+          #ifdef LOW2
+          float rn = 0.0;
+          #else
           float rn = nz(P * 0.43 + 0.7).r * 2.0 - 1.0;
+          #endif
           roughnessFactor = clamp(roughnessFactor + rn * 0.18 * ${o.wear.toFixed(3)} + ${o.rough.toFixed(3)} + vDent * 0.8 + _detailRough, 0.04, 1.0);
           roughnessFactor = mix(roughnessFactor, 0.3, smoothstep(0.88, 0.99, _rim) * 0.8);
           roughnessFactor = mix(roughnessFactor, 0.95, clamp(_bfr * 1.3, 0.0, 1.0));
+          #ifndef LOW2
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
+          #endif
         }`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
         ${o.ao ? `

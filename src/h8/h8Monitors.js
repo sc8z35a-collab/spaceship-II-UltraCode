@@ -16,6 +16,7 @@ function stateJP(h) {
   if (h.mode === 'docked') return 'B-29 と結合中';
   if (h.mode === 'parked') return '停泊（待機）';
   const P = h.pilot;
+  if (h.berthAt) return h.berthAt.name.replace('（修理基地）', '') + ' に係留中';
   if (P.state === 'dock') return 'ドッキング進入';
   if (P.state === 'undock') return '離脱中';
   if (h.goalKind === 'b29') return 'B-29 へ向かう';
@@ -34,13 +35,15 @@ function b29StateJP(g) {
   return '待機（姿勢保持）';
 }
 
-const TABS_H8 = [{ id: 'h8sys', label: 'H8 系統', h8: true }, { id: 'h8nav', label: 'H8 航法', h8: true }, { id: 'h8cam', label: 'カメラ', h8: true }];
+const TABS_H8 = [{ id: 'h8sys', label: 'H8 系統', h8: true }, { id: 'h8nav', label: 'H8 航法', h8: true }, { id: 'h8wpn', label: '兵装', h8: true }, { id: 'h8cam', label: 'カメラ', h8: true }, { id: 'h8shl', label: '退避', h8: true }];
 const TABS_B29 = [{ id: 'nav', label: 'B29 航法' }, { id: 'sys', label: 'B29 系統' }, { id: 'life', label: '生命維持' }, { id: 'reactor', label: '原子炉' }, { id: 'comms', label: '通信' }];
 
 export const H8_PAGES = {
   // ------------------------------------------------------------------ tabs
   h8TabList() {
     const h = this.g.h8;
+    // adrift in the shelter: its own state and the radio, nothing else is left
+    if (h && h.mode === 'pod') return [{ id: 'h8shl', label: 'シェルター', h8: true }, { id: 'h8link', label: 'B-29 リンク' }];
     return h && h.mode === 'docked' ? TABS_H8.concat(TABS_B29) : TABS_H8.concat([{ id: 'h8link', label: 'B-29 リンク' }]);
   },
 
@@ -135,7 +138,7 @@ export const H8_PAGES = {
     K.text(`推力 ×${mul}   最高 ${(fl.vUltra / 1000).toFixed(1)} km/s   推進剤 ${Math.round(h.flight.fuel * 100)}%`, 14, 108, { size: 10, color: AMBER, mono: true });
     // B-29 relation
     const L = h.linkState();
-    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合中' : `B-29 まで ${fmtDist(L.d)}  ${L.ok ? 'リンク良好' : '通信圏外'}`, 14, 126, { size: 11, color: L.ok ? COL.text : COL.red });
+    K.text(h.mode === 'docked' ? 'B-29 上部ポートに結合中' : h.berthAt ? `${h.berthAt.name.replace('（修理基地）', '')} に係留中` : `B-29 まで ${fmtDist(L.d)}  ${L.ok ? 'リンク良好' : '通信圏外'}`, 14, 126, { size: 11, color: h.berthAt ? COL.cyan : L.ok ? COL.text : COL.red });
     // HACHI's state line
     const P = h.pilot;
     if (P.goal || P.state === 'dock' || P.state === 'undock') K.text(`HACHI: ${stateJP(h)}  ${fmtDist(P.dist || 0)}${P.eta > 1 ? '  残り ' + fmtEta(P.eta) : ''}`, 14, 144, { size: 10.5, color: COL.cyan });
@@ -166,27 +169,37 @@ export const H8_PAGES = {
       K.text('上のタブで B-29 の航法・システムも操作できます', X + 120, y + 12, { size: 9, color: COL.dim, align: 'center' });
     } else {
       if (h.mode === 'parked') btn('H8 起動（B-29 へ）', () => h.call(), 'warn');
-      else {
+      else if (h.berthAt) {
+        btn(`${h.berthAt.name.replace('（修理基地）', '')} から離脱`, () => h.unberth('free'), 'danger', 34);
+        btn('B-29 へ帰還・ドッキング', () => h.call(), 'warn');
+      } else {
         btn(h.goalKind === 'b29' ? 'B-29 へ帰還中…（中止）' : 'B-29 へ帰還・ドッキング', () => (h.goalKind === 'b29' ? h.goal('hold') : h.call()), h.goalKind === 'b29' ? 'on' : 'warn');
         const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
         btn(coming ? 'B-29 が来ます（中止）' : 'B-29 を呼ぶ（ここへ）', () => (coming ? ap.disengage() : h.callB29()), coming ? 'on' : L.ok ? 'normal' : 'disabled');
         btn(h.crew ? (P.goal ? '手動操縦にする' : '手動操縦中') : '待機', () => h.goal('hold'), !P.goal ? 'on' : 'normal');
         btn('停泊軌道へ', () => h.sendHome(), h.goalKind === 'home' ? 'on' : 'normal');
-        if (h.crew) btn(h.flight.ultra ? 'ULTRA  作動中' : 'ULTRA', () => h.flight.setUltra(!h.flight.ultra), h.flight.ultra ? 'warn' : 'normal');
+        if (h.crew) {
+          const modes = h.driveModes();
+          const bw = 240 / modes.length;
+          modes.forEach((md, i) => K.button(X + i * bw + 1, y, bw - 2, 26, md.label, () => h.setDriveMode(md.id), { style: md.on ? (md.id === 'max' ? 'danger' : md.id === 'ultra' ? 'warn' : 'on') : md.ok ? 'normal' : 'disabled', size: 10 }));
+          y += 30;
+        }
       }
-      // stations (HACHI flies there and holds)
+      // stations (HACHI flies there and holds; 接続: and docks H8 with it, straight in)
       if (h.crew && y < H - 40) {
-        K.text('自律航行先', X + 4, y + 10, { size: 10, color: COL.dim });
+        K.text('自律航行先 / 接続でドッキング', X + 4, y + 10, { size: 10, color: COL.dim });
         y += 16;
         for (const s of g.stations.list) {
           if (y > H - 30) break;
           const st = s.dmg ? s.dmg.status : 'ok';
           const dd = s.pos.distanceTo(h.flight.pos);
           const sel = h.goalKind === s.id;
-          K.rect(X, y, 240, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
+          const here = h.berthAt === s, dg = h.dockGoal === s;
+          K.rect(X, y, 186, 20, { fill: sel ? 'rgba(95,208,255,0.14)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.cyan : 'rgba(120,190,255,0.12)', r: 5 });
           K.text(s.name.replace('（修理基地）', ''), X + 8, y + 14, { size: 10, color: st === 'ok' ? COL.text : COL.dim });
-          K.text(fmtDist(dd), X + 232, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
-          K.buttons.push({ x: X, y, w: 240, h: 20, onTap: () => h.goal(s.id) });
+          K.text(fmtDist(dd), X + 180, y + 14, { size: 9, color: COL.dim, align: 'right', mono: true });
+          K.buttons.push({ x: X, y, w: 186, h: 20, onTap: () => h.goal(s.id) });
+          K.button(X + 190, y, 50, 20, here ? '係留中' : dg ? '接続中' : '接続', () => h.dockWith(s.id), { style: here || dg ? 'on' : st === 'ok' || st === 'damaged' ? 'normal' : 'disabled', size: 9 });
           y += 23;
         }
       }
@@ -222,6 +235,106 @@ export const H8_PAGES = {
     if (Math.floor(performance.now() / 600) % 2) K.circle(497, 34, 4, { fill: COL.red, stroke: null });
     K.button(10, H - 30, 80, 24, '◀ 前', () => { m.camI--; }, { size: 10 });
     K.button(422, H - 30, 80, 24, '次 ▶', () => { m.camI++; }, { size: 10 });
+  },
+
+  // ------------------------------------------------------------------ WEAPONS
+  draw_h8wpn(K, m, H) {
+    const g = this.g, h = g.h8, W = g.weapons;
+    if (!h || !W) return;
+    this.header(K, 'H8  兵装', H);
+    let y = 34;
+    const row = (label, v, txt, col, warn) => {
+      K.text(label, 12, y + 8, { size: 10.5, color: COL.dim });
+      K.bar(108, y, 270, 8, v, warn ? COL.red : col);
+      K.text(txt, 500, y + 9, { size: 10.5, color: warn ? COL.red : COL.text, align: 'right', mono: true });
+      y += 20;
+    };
+    row('25mm 機関砲', W.ammo.cannon / 1600, `${W.ammo.cannon}`, AMBER, W.ammo.cannon < 200);
+    row('レールガン', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%  残 ${W.ammo.rail}` : `発射可  残 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
+    row('ミサイル', W.ammo.missile / 12, `${W.ammo.missile} / 12`, '#ff8a6a', W.ammo.missile <= 0);
+    K.text('目標（命中見込み 25mm / レール）', 12, y + 10, { size: 10, color: COL.dim });
+    y += 16;
+    const T = W.targets('h8').slice(0, 5);
+    if (!T.length) { K.text('目標なし', 14, y + 10, { size: 11, color: COL.dim }); y += 18; }
+    const prim = W.lastTarget || W.primary('h8');
+    const pc = (p) => (p == null ? '—' : p >= 0.995 ? '99%' : p < 0.005 ? '<1%' : Math.round(p * 100) + '%');
+    for (const x of T) {
+      const sel = prim && prim.id === x.id;
+      K.rect(10, y, 492, 20, { fill: sel ? 'rgba(255,90,60,0.16)' : 'rgba(255,255,255,0.02)', stroke: sel ? COL.red : 'rgba(150,190,230,0.15)', r: 5 });
+      K.text(`${sel ? '◆ ' : ''}${x.name}${x.threat ? '  敵' : ''}`, 18, y + 14, { size: 10.5, color: x.threat ? '#ffb3a6' : COL.text });
+      K.text(`${fmtDist(x.dist)}   ${pc(W.hitChance(x, 'cannon'))} / ${pc(W.hitChance(x, 'rail'))}`, 494, y + 14, { size: 10, color: COL.dim, align: 'right', mono: true });
+      K.buttons.push({ x: 10, y, w: 492, h: 20, onTap: () => { const c = h.cands.find((q) => q.id === x.id); if (c) h.hud.lock(c, true); } });
+      y += 23;
+    }
+    const bw = 160, by = H - 34;
+    K.button(10, by, bw, 28, W.auto.hachi ? 'HACHI 自動迎撃' : '手動射撃', () => W.toggleAuto('h8'), { style: W.auto.hachi ? 'on' : 'normal', size: 10.5 });
+    K.button(10 + bw + 6, by, bw, 28, 'レールガン', () => W.fireRail(true), { style: W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled', size: 10.5 });
+    K.button(10 + (bw + 6) * 2, by, bw, 28, 'ミサイル斉射', () => W.salvoMissiles(true), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 10.5 });
+  },
+
+  // ------------------------------------------------------------------ SHELTER
+  draw_h8shl(K, m, H) {
+    const g = this.g, h = g.h8;
+    if (!h) return;
+    const S = h.shelter, pod = h.mode === 'pod';
+    this.header(K, 'H8  緊急シェルター', H);
+    let y = 34;
+    K.text(pod ? 'H8 喪失 — シェルター単独で漂流中' : S.occupied ? (S.sealed ? '密閉・独立酸素で運用中' : '扉 開') : S.open > 0.02 ? '扉 開' : '待機', 12, y + 12, { size: 13, color: pod ? COL.red : COL.text, weight: 700 });
+    y += 24;
+    const row = (label, v, txt, col, warn) => {
+      K.text(label, 12, y + 8, { size: 10.5, color: COL.dim });
+      K.bar(108, y, 270, 8, v, warn ? COL.red : col);
+      K.text(txt, 500, y + 9, { size: 10.5, color: warn ? COL.red : COL.text, align: 'right', mono: true });
+      y += 20;
+    };
+    const o2h = S.o2Hours();
+    row('独立酸素', o2h / 10, S.o2Text(), COL.green, o2h < 1);
+    row('CO2 吸収剤', S.lioh, `${Math.round(S.lioh * 100)} %`, COL.cyan, S.lioh < 0.1);
+    row('電池', S.battery, `${Math.round(S.battery * 100)} %`, AMBER, S.battery < 0.15);
+    const z = g.lifeSupport.z.h8shelter;
+    if (z) { const p = z.n2 + z.o2 + z.co2; K.text(`内部 ${p.toFixed(1)} kPa   O2 ${z.o2.toFixed(1)}   CO2 ${z.co2.toFixed(2)}`, 12, y + 10, { size: 10.5, color: p > 90 && z.o2 > 17 ? COL.text : COL.red, mono: true }); y += 20; }
+    K.text('推進なし・発電なし。H8 が失われてもここだけは残る。', 12, y + 10, { size: 10, color: COL.dim }); y += 18;
+    if (pod) {
+      const d = g.flight.pos.distanceTo(h.flight.pos);
+      const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      const R = h.rescue, can = h.b29Rescue();
+      let line, col;
+      if (R) {
+        const nm = R.s.name.replace('（修理基地）', '');
+        line = R.state === 'latched' ? `${nm}の救助艇が確保 — 曳航中` : R.state === 'dock' ? `${nm}の救助艇 ドッキング中  ${fmtDist(R.dist)}` : `${nm}の救助艇 接近中  ${fmtDist(R.dist)}${R.eta > 1 ? '  約' + Math.max(1, Math.round(R.eta / 60)) + '分' : ''}`;
+        col = COL.green;
+      } else if (coming) { line = `B-29 が回収に向かっています  ${fmtDist(d)}`; col = COL.green; }
+      else { line = `B-29 まで ${fmtDist(d)}  ${can.ok ? 'ビーコン受信中' : 'B-29 は' + can.why + '動けない'}`; col = can.ok ? COL.text : COL.amber; }
+      K.text(line, 12, y + 12, { size: 12, color: col, weight: 600 });
+      const busy = !!R || coming;
+      K.button(10, H - 34, 260, 28, R ? '救助艇が向かっています' : coming ? 'B-29 が回収に向かっています' : can.ok ? 'B-29 に回収を要請' : '最寄りのステーションに救助を要請', () => { if (!busy) h.requestRescue(); }, { style: busy ? 'on' : 'warn', size: 11 });
+    } else {
+      K.button(10, H - 34, 200, 28, S.target > 0.5 ? '扉を閉める' : '扉を開ける', () => S.toggle(), { style: S.target > 0.5 ? 'on' : 'warn', size: 11 });
+    }
+  },
+
+  /** the shelter's small screen: one view out (H8's cameras in turn; adrift, its own camera) */
+  draw_h8shcam(K, m, H) {
+    const g = this.g, h = g.h8;
+    if (!h) return;
+    K.g.clearRect(0, 0, m.W, m.H);
+    K.buttons.length = 0;
+    const pod = h.mode === 'pod';
+    m.camI = m.camI || 0;
+    const ci = ((m.camI % 4) + 4) % 4;
+    m.feedSrc = () => {
+      // (adrift: the little camera on the shelter's shell, looking back the way it came)
+      const dir = pod ? new THREE.Vector3(0.2, 0.1, 1).normalize() : CAMERAS[((m.camI % 4) + 4) % 4].dir;
+      const p = pod ? new THREE.Vector3(0.5, 1.0, 1.95) : dir.clone().multiplyScalar(H8.R + 0.8);
+      const up = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+      const local = new THREE.Matrix4().lookAt(p, p.clone().add(dir), up).setPosition(p);
+      return h.root.matrixWorld.clone().multiply(local);
+    };
+    this.feedHealth = pod ? 1 : h.hull.cams[ci];
+    this.setFeed(m, true, [0, 0, 1, 1]);
+    const dead = !pod && h.hull.cams[ci] < 0.3;
+    K.text(pod ? 'シェルター外部カメラ' : CAMERAS[ci].name + (dead ? '  映像なし' : ''), 8, 16, { size: 13, color: dead ? COL.red : AMBER, weight: 700 });
+    if (!pod) K.buttons.push({ x: 0, y: 0, w: 512, h: H, onTap: () => { m.camI++; } });
   },
 
   // ------------------------------------------------------------------ LINK (apart: B-29 over the radio)
@@ -270,17 +383,20 @@ export const H8_PAGES = {
   drawH8Strip(K, x, y) {
     const g = this.g, h = g.h8;
     if (!h) return;
-    const w = 150;
+    const w = 168;
     const L = h.linkState();
-    K.rect(x, y, w, 46, { fill: 'rgba(20,12,4,0.82)', stroke: 'rgba(255,170,80,0.45)', r: 6 });
-    K.text('H8', x + 8, y + 15, { size: 11, color: AMBER, weight: 700 });
-    K.text(h.mode === 'docked' ? '結合中' : L.ok ? `${stateJP(h)}  ${fmtDist(L.d)}` : `圏外  ${fmtDist(L.d)}`, x + 30, y + 15, { size: 9, color: L.ok ? COL.text : COL.red });
+    K.rect(x, y, w, 52, { fill: 'rgba(20,12,4,0.86)', stroke: 'rgba(255,170,80,0.5)', r: 6 });
+    K.text('H8', x + 8, y + 17, { size: 13, color: AMBER, weight: 700 });
+    const s = h.mode === 'lost' ? '喪失' : h.mode === 'pod' ? `シェルター  ${fmtDist(L.d)}` : h.mode === 'docked' ? '結合中' : L.ok ? `${stateJP(h)}  ${fmtDist(L.d)}` : `圏外  ${fmtDist(L.d)}`;
+    K.text(s.length > 14 ? s.slice(0, 13) + '…' : s, x + 34, y + 17, { size: 11, color: L.ok && h.mode !== 'lost' ? COL.text : COL.red });
     let label, fn, style = 'normal';
-    if (h.mode === 'docked') { label = '分離'; fn = () => h.release('escort'); style = 'warn'; }
+    if (h.mode === 'lost') { label = '修理基地で再建造'; fn = null; style = 'disabled'; }
+    else if (h.mode === 'pod') { label = 'シェルターを回収に行く'; fn = () => h.rescuePod(); style = 'danger'; }
+    else if (h.mode === 'docked') { label = '分離'; fn = () => h.release('escort'); style = 'warn'; }
     else if (h.goalKind === 'b29' || h.pilot.state === 'dock') { label = '呼び戻し中…（中止）'; fn = () => h.goal('hold'); style = 'on'; }
     else if (!L.ok) { label = '通信圏外（呼べません）'; fn = null; style = 'disabled'; }
     else { label = h.mode === 'parked' ? 'H8 を呼ぶ' : 'H8 を呼ぶ（ドッキング）'; fn = () => h.call(); style = 'warn'; }
-    K.button(x + 6, y + 21, w - 12, 20, label, fn, { style, size: 9 });
+    K.button(x + 6, y + 24, w - 12, 24, label, fn, { style, size: 11 });
   },
 
   /** H8's box on B-29's comms screen: the link, H8's state, call / report */

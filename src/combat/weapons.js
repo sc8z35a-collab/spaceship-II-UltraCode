@@ -1,11 +1,13 @@
 // The guns Kaito (and the two AIs) can use.
 //  H8: two twin 25 mm cannon turrets (one high on the port bow, one low on the starboard bow), a
 //      railgun turret on the belly and two box launchers with six homing missiles each. Every
-//      turret aims itself (lead computed by the fire-control computer); a turret only fires where
-//      the sphere does not stand in the way. Targets: whatever the 360 display has locked
-//      (drones and rocks lock themselves; anything Kaito looks at for a moment too — a station,
-//      B-29...), else the nearest drone.
-//  B-29: one old debris-defence gun in a turret under the belly.
+//      turret has its own fire control (ballistics.js): it tracks the target, solves the shot by
+//      flying it, turns the turret onto the solution at the turret's own slew rate, and fires
+//      rounds that scatter as real ones do. A turret only fires where the sphere does not stand in
+//      the way, and never with anything friendly in the line of fire (B-29, H8, a station).
+//      Targets: whatever the 360 display has locked — the focus first, at the point Kaito picked on
+//      it — drones and rocks on their own, out to 30 km for Kaito's own fire.
+//  B-29: one old debris-defence gun in a turret under the belly (an older, coarser fire control).
 // Kaito fires from the pilot seat (hold the trigger button; railgun and missile salvo buttons in
 // H8); HACHI (H8's turrets) and Asphalt (B-29's gun) fire on their own at drones that come close
 // while their "auto" is on. Ammunition is limited and refilled at a station berth.
@@ -15,13 +17,19 @@ import { sectionPoint, sectionNormal } from '../ship/hullShape.js';
 import { H8 } from '../h8/h8Spec.js';
 import { frameAt } from '../h8/h8Exterior.js';
 import { assignLayers, LAYER_NEAR, LAYER_MID } from '../core/layers.js';
-import { leadDir, ROUNDS } from './combat.js';
+import { leadDir, ROUNDS, rockId } from './combat.js';
+import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _m = new THREE.Matrix4();
 const Z = V(0, 0, -1);
 
 export const AMMO_MAX = { cannon: 1600, rail: 24, missile: 12, pd: 900 };
+/** how far Kaito's own fire reaches (the fire control engages out to here) */
+export const MAX_RANGE = 30000;
+// the sensors' tracking errors (1 sd): H8's own, B-29's old set
+const SENSOR_H8 = { ang: 0.07e-3, range: 0.8, vel: 0.04 };
+const SENSOR_B29 = { ang: 0.35e-3, range: 3, vel: 0.2 };
 
 function weaponMaterials() {
   const S = (o) => new THREE.MeshStandardMaterial(o);
@@ -131,7 +139,8 @@ export class Weapons {
       t.matrixAutoUpdate = false;
       t.updateMatrixWorld(true);
       h8.ext.group.add(t);
-      const m = { name, kind, group: t, dir: dir.clone().normalize(), frame: f, cool: 0, alt: 0, recoil: 0, aim: null, flash: 0 };
+      const m = { name, kind, group: t, dir: dir.clone().normalize(), frame: f, cool: 0, alt: 0, recoil: 0, aim: null, flash: 0, cur: dir.clone().normalize(),
+        fc: new FireControl({ am: kind === 'rail' ? AMMO.rail : AMMO.c25, gun: kind === 'rail' ? GUNS.rail : GUNS.twin25, seed: seedOf('h8.' + name), sensor: { ...SENSOR_H8 } }) };
       this.h8Mounts.push(m);
       return m;
     };
@@ -166,7 +175,8 @@ export class Weapons {
     tr.matrixAutoUpdate = false;
     g.shipVis.exterior.add(tr);
     tr.traverse((o) => { if (o.isMesh) { o.layers.set(LAYER_NEAR); o.layers.enable(LAYER_MID); o.frustumCulled = false; } });
-    this.b29Mount = { name: 'pd', kind: 'pd', group: tr, dir: n, frame: f, local: p.clone(), cool: 0, alt: 0, recoil: 0, aim: null, flash: 0 };
+    this.b29Mount = { name: 'pd', kind: 'pd', group: tr, dir: n, frame: f, local: p.clone(), cool: 0, alt: 0, recoil: 0, aim: null, flash: 0, cur: n.clone(),
+      fc: new FireControl({ am: AMMO.p30, gun: GUNS.pd30, seed: seedOf('b29.pd'), sensor: { ...SENSOR_B29 }, accT: 1.0 }) };
   }
 
   // ------------------------------------------------------------------ who is where
@@ -184,39 +194,70 @@ export class Weapons {
     return { pos: g.flight.pos, vel: g.flight.vel, quat: g.flight.quat };
   }
 
-  /** what a vessel can shoot at: drones, rocks, and (H8) everything its display has locked */
+  /**
+   * What a vessel can shoot at: drones, rocks and (H8) everything its display has locked. Each:
+   * { id, kind, ref, pos, vel, acc, aim (the point to hit, ECI; null: its middle), R (the size it
+   * presents, m), agility (how hard it can jink, m/s^2), name, dist, threat, locked }; the
+   * focus first, then the threats, then the nearest
+   */
   targets(which) {
     const g = this.g, P = this.pose(which), out = [];
-    if (g.drones) for (const d of g.drones.list) if (d.alive) { const dist = d.pos.distanceTo(P.pos); if (dist < 12000) out.push({ kind: 'drone', ref: d, pos: d.pos, vel: d.vel, acc: d.thrust, R: d.R, name: d.id, dist, threat: true }); }
-    for (const a of g.asteroids.list) if (!a.dead && !a.hit) { const dist = a.pos.distanceTo(P.pos); if (dist < 4000) out.push({ kind: 'rock', ref: a, pos: a.pos, vel: a.vel, R: a.radius, name: '岩塊', dist }); }
-    if (which === 'h8' && g.h8 && g.h8.display) {
-      for (const l of g.h8.display.locks) {
+    const hud = which === 'h8' && g.h8 && g.h8.hud;
+    const lockOf = (id) => (hud ? hud.locks.find((l) => l.id === id) : null);
+    const add = (o) => {
+      const l = lockOf(o.id);
+      if (l) { o.locked = true; if (l.aim) o.aim = hud.aimPoint(l); }
+      o.dist = (o.aim || o.pos).distanceTo(P.pos);
+      out.push(o);
+    };
+    const reach = which === 'h8' ? MAX_RANGE + 5000 : 12000;
+    if (g.drones) for (const d of g.drones.list) if (d.alive && d.pos.distanceTo(P.pos) < reach) {
+      add({ id: 'dr:' + d.id, kind: 'drone', ref: d, pos: d.pos, vel: d.vel, acc: d.thrust, R: 1.0, agility: d.state === 'evade' ? 45 : d.state === 'attack' ? 14 : 6, name: d.id, threat: true });
+    }
+    for (const a of g.asteroids.list) if (!a.dead && !a.hit && a.pos.distanceTo(P.pos) < (which === 'h8' ? 8000 : 4000)) add({ id: rockId(a), kind: 'rock', ref: a, pos: a.pos, vel: a.vel, acc: null, R: a.radius, agility: 0, name: '岩塊' });
+    if (hud) {
+      for (const l of hud.locks) {
         const c = l.c;
         if (!c || c.kind === 'drone' || c.kind === 'rock' || c.kind === 'body' || !c.pos) continue;
-        const dist = c.pos.distanceTo(P.pos);
-        if (dist > 12000) continue;
-        const ref = c.kind === 'b29' ? g.flight : c.kind === 'station' ? g.stations.list.find((s) => 'st:' + s.id === c.id) : null;
-        out.push({ kind: c.kind, ref, pos: c.pos, vel: c.vel || P.vel, R: c.kind === 'station' ? 60 : 12, name: c.short || c.name, dist, locked: true });
+        if (c.pos.distanceTo(P.pos) > reach) continue;
+        const ref = c.ref || null;
+        // (a station shows less than its whole bounding sphere: trusses, panels, gaps)
+        const R = c.kind === 'station' ? hud.radiusOf(c) * 0.55 : c.kind === 'b29' ? 7 : hud.radiusOf(c) * 0.7;
+        const acc = c.kind === 'b29' ? g.flight.thrustAcc : null;
+        add({ id: c.id, kind: c.kind, ref, pos: c.pos, vel: c.vel || P.vel, acc, R, agility: c.kind === 'b29' ? 3 : 0, name: c.short || c.name, locked: true });
       }
     }
-    out.sort((a, b) => (b.threat ? 1 : 0) - (a.threat ? 1 : 0) || a.dist - b.dist);
+    const prim = hud ? hud.primaryId : null;
+    out.sort((a, b) => (b.id === prim ? 1 : 0) - (a.id === prim ? 1 : 0) || (b.threat ? 1 : 0) - (a.threat ? 1 : 0) || a.dist - b.dist);
     return out;
   }
 
-  /** the target the guns are on: the one Kaito picked (cycled), else the nearest threat */
+  /** the target the guns are on: H8's focus (else the nearest threat); B-29's: the one cycled to */
   primary(which) {
     const T = this.targets(which);
     if (!T.length) return null;
-    // H8: a locked target the display shows first if Kaito has locked something that is not a threat
-    const idx = this.tgtIndex[which] % T.length;
-    return T[idx];
+    if (which === 'h8') {
+      const hud = this.g.h8 && this.g.h8.hud;
+      return (hud && T.find((x) => x.id === hud.primaryId)) || T.find((x) => x.threat) || T[0];
+    }
+    return T[this.tgtIndex[which] % T.length];
   }
 
+  /** the next target: H8's display moves its focus on through the locks */
   cycleTarget() {
     const w = this.manned();
     if (!w) return;
-    this.tgtIndex[w] = (this.tgtIndex[w] + 1) % Math.max(1, this.targets(w).length);
-    this.g.audio.beep && this.g.audio.beep(1700, 0.04, 0.04, { direct: true });
+    const g = this.g;
+    if (w === 'h8' && g.h8 && g.h8.hud) {
+      const T = this.targets('h8');
+      if (T.length) {
+        const i = T.findIndex((x) => x.id === g.h8.hud.primaryId);
+        const next = T[(i + 1) % T.length];
+        const c = g.h8.cands.find((x) => x.id === next.id);
+        if (c) g.h8.hud.lock(c, true);
+      }
+    } else this.tgtIndex[w] = (this.tgtIndex[w] + 1) % Math.max(1, this.targets(w).length);
+    g.audio.beep && g.audio.beep(1700, 0.04, 0.04, { direct: true });
   }
 
   // ------------------------------------------------------------------ simulation
@@ -238,18 +279,29 @@ export class Weapons {
     } else this.fireHeld = false;
     // H8's guns
     const h8 = g.h8;
-    if (h8 && h8.mode !== 'parked' && h8.awake > 0.5) {
+    if (h8 && h8.mode !== 'parked' && h8.mode !== 'pod' && h8.mode !== 'lost' && h8.awake > 0.5) {
       this.railCharge = Math.min(1, this.railCharge + dt / 3.5);
+      // the sensors: H8's own (worse with the sensor circuit cut); HACHI reads the drones' runs
+      const sens = (1 + 6 * (1 - h8.circ('sensor', 0.1))) * (h8.mind ? h8.mind.spread('h8') : 1);
+      for (const m of this.h8Mounts) {
+        const S = m.fc.sensor;
+        S.ang = SENSOR_H8.ang * sens; S.range = SENSOR_H8.range * sens; S.vel = SENSOR_H8.vel * sens;
+        m.fc.accT = 0.6 * (h8.mind ? 1 - 0.5 * h8.mind.learn : 1);
+        m.fc.tick(dt);
+      }
       const auto = this.auto.hachi && !(w === 'h8' && this.fireHeld);
       const tgt = w === 'h8' ? this.primary('h8') : null;
       for (const m of this.h8Mounts) {
         if (m.kind !== 'twin') continue;
         m.cool -= dt;
-        let T = null;
-        if (w === 'h8' && this.fireHeld) T = tgt;
+        let T = null, manual = false;
+        if (w === 'h8' && this.fireHeld) { T = tgt; manual = true; }
         else if (auto) T = this.autoTarget('h8', 2800);
-        this.aimAndFire(m, 'h8', T, dt, !!T && (this.fireHeld || auto));
+        this.aimAndFire(m, 'h8', T, dt, !!T && (this.fireHeld || auto), manual);
       }
+      // the railgun's turret follows the focus while it is charged (so a shot can go at once)
+      const rail = this.h8Mounts.find((x) => x.kind === 'rail');
+      if (rail) { const T = w === 'h8' ? tgt : null; this.aimAndFire(rail, 'h8', T, dt, false, true); }
       // HACHI's missiles: at a drone that keeps coming, one at a time
       if (this.auto.hachi && w !== 'h8' && this.ammo.missile > 0 && g.drones && g.drones.attacking > 0) {
         this.autoMslT = (this.autoMslT || 6) - dt;
@@ -263,15 +315,19 @@ export class Weapons {
       this.mslT -= dt;
       if (this.salvo.length && this.mslT <= 0) { this.mslT = 0.35; this.launchMissile(this.salvo.shift(), true); }
     }
-    // B-29's defence gun
+    // B-29's defence gun (HACHI shares its track over the link: a better solution)
     if (this.b29Mount) {
       const m = this.b29Mount;
+      const linked = h8 && h8.mind ? h8.mind.spread('b29') : 1;
+      const S = m.fc.sensor;
+      S.ang = SENSOR_B29.ang * linked; S.range = SENSOR_B29.range * linked; S.vel = SENSOR_B29.vel * linked;
+      m.fc.tick(dt);
       m.cool -= dt;
       const manual = w === 'b29' && this.fireHeld;
       let T = null;
       if (manual) T = this.primary('b29');
       else if (this.auto.asphalt && !(g.h8 && g.h8.solo)) T = this.autoTarget('b29', 2200);
-      this.aimAndFire(m, 'b29', T, dt, !!T);
+      this.aimAndFire(m, 'b29', T, dt, !!T, manual);
     }
     this.lastTarget = w ? this.primary(w) : null;
   }
@@ -304,53 +360,117 @@ export class Weapons {
     return { pos, n: m.dir.clone().applyQuaternion(P.quat), P };
   }
 
-  /** turn the turret onto the lead point; fire when it is on and nothing of the ship is in the way */
-  aimAndFire(m, which, T, dt, wantFire) {
+  /**
+   * The fire control on a target: track it, solve the shot, turn the turret onto it at its slew
+   * rate; fire when the barrels are on the solution, the target is within reach and nothing
+   * friendly is in the line of fire. manual: Kaito's own fire (out to 30 km)
+   */
+  aimAndFire(m, which, T, dt, wantFire, manual = false) {
     const g = this.g;
-    if (!T) { m.aim = null; return; }
     const W = this.mountWorld(m, which);
+    const qi = _q.copy(W.P.quat).invert();
     const kind = m.kind === 'twin' ? 'cannon' : m.kind;
-    const speed = ROUNDS[kind].speed;
-    const dir = leadDir(W.pos, W.P.vel, T.pos, T.vel, speed, new THREE.Vector3(), T.acc);
-    if (!dir) { m.aim = null; return; }
+    // the turret swings toward where it is told to look (stowed when there is nothing)
+    const slew = (want) => {
+      const c = m.cur, ang = c.angleTo(want);
+      const step = m.fc.gun.slew * dt;
+      if (ang <= step) c.copy(want); else c.lerp(want, step / ang).normalize();
+    };
+    if (!T) { m.aim = null; m.sol = null; slew(m.dir); return; }
+    const F = m.fc;
+    F.observe(T.id, T.pos, T.vel, T.acc, dt);
+    const sol = F.solve(T.id, W.pos, W.P.vel, T.aim || null);
+    if (!sol) { m.aim = null; m.sol = null; slew(m.dir); return; }
+    const dir = sol.aimDir;
     // below the mount's horizon the hull blocks it
-    if (dir.dot(W.n) < -0.12) { m.aim = null; return; }
-    m.aim = dir.clone().applyQuaternion(_q.copy(W.P.quat).invert());     // vessel-local, for the visuals
-    const dist = T.pos.distanceTo(W.pos);
-    if (!wantFire || m.cool > 0 || dist > (kind === 'pd' ? 2600 : 3200)) return;
-    // never through the other ship (H8's guns while it rides on B-29's back, or B-29 close by)
-    if (this.blocked(which, W.pos, dir, dist)) return;
+    if (dir.dot(W.n) < -0.12) { m.aim = null; m.sol = null; slew(m.dir); return; }
+    m.sol = sol;
+    m.aim = dir.clone().applyQuaternion(qi);       // vessel-local, where the turret turns to
+    slew(m.aim);
+    if (m.kind === 'rail') return;
+    const dist = (T.aim || T.pos).distanceTo(W.pos);
+    const reach = manual && which === 'h8' ? Math.min(MAX_RANGE, F.am.maxRange) : (kind === 'pd' ? 2600 : 3200);
+    if (!wantFire || m.cool > 0 || dist > reach || !sol.ok) return;
+    // the barrels on the solution (within a milliradian)?
+    if (m.cur.angleTo(m.aim) > 1.2e-3) return;
+    // never through anything friendly
+    const block = this.blocked(which, W.pos, dir, dist, T, F.am.v0 * F.am.life);
+    if (block) { if (manual && which === 'h8' && g.h8) g.h8.say('hachi_friendly', {}, { minGap: 8, force: false }); return; }
     if (kind === 'cannon' && this.ammo.cannon <= 0) { this.dry(which); return; }
     if (kind === 'pd' && this.ammo.pd <= 0) { this.dry(which); return; }
-    // H8's fire control cut: the turrets shoot wide (and not at all once it is gone)
-    const fc = which === 'h8' && g.h8 ? g.h8.circuits.fire : 1;
-    if (fc < 0.12) { m.aim = null; return; }
-    m.cool = kind === 'pd' ? 1 / 8 : 1 / 12;
+    // H8's fire control circuit cut: the servo cannot hold the guns steady (and once it is gone,
+    // they do not fire at all)
+    const fcc = which === 'h8' && g.h8 ? g.h8.circuits.fire : 1;
+    if (fcc < 0.12) { m.aim = null; return; }
+    m.cool = 1 / F.gun.rof;
     m.alt = 1 - m.alt;
     this.ammo[kind]--;
     m.recoil = 1;
     m.flash = 0.05;
     const side = new THREE.Vector3().crossVectors(dir, W.n).normalize().multiplyScalar(m.kind === 'twin' ? (m.alt ? 0.075 : -0.075) : 0);
     const muzzle = W.pos.clone().addScaledVector(dir, 1.1).add(side);
-    // (HACHI's fire control tightens as it reads the drones' pattern; B-29's gun gets its track)
-    const fcs = g.h8 && g.h8.mind ? g.h8.mind.spread(which) : 1;
-    this.combat.fire({ kind, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, spread: 0.0035 * (1 + 5 * (1 - fc)) * fcs, byPlayer: true });
+    const round = F.fire(muzzle, W.P.vel, dir, 1 + 5 * (1 - fcc));
+    this.combat.fire({ kind, round, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, byPlayer: true });
     this.gunSound(which, kind);
   }
 
-  /** the line of fire from p along dir (ECI) runs into the other ship of the pair */
-  blocked(which, p, dir, range) {
+  /**
+   * Something friendly in the line of fire from p along dir (ECI): the other ship of the pair,
+   * B-29 or H8 nearby, a station (unless it is the target itself) — in front of the target or
+   * behind it, as far as a round that misses would fly on (reach, m). Returns what, or null
+   */
+  blocked(which, p, dir, range, T = null, reach = range) {
     const g = this.g;
-    const other = which === 'h8' ? { pos: g.flight.pos, quat: g.flight.quat, spheres: g.docking.shipSpheres } : g.h8 && g.h8.mode !== 'parked' ? { pos: g.h8.flight.pos, quat: g.h8.flight.quat, spheres: [{ c: V(0, 0, 0), r: H8.R + 0.6 }] } : null;
-    if (!other || other.pos.distanceTo(p) > 200) return false;
-    const qi = _q2.copy(other.quat).invert();
-    const o = p.clone().sub(other.pos).applyQuaternion(qi), d = dir.clone().applyQuaternion(qi);
-    for (const s of other.spheres) {
-      const t = s.c.clone().sub(o).dot(d);
-      if (t < 0 || t > range) continue;
-      if (o.clone().addScaledVector(d, t).distanceTo(s.c) < s.r + 0.8) return true;
+    const far = Math.max(range, reach);
+    const lineHits = (c, r) => {
+      const t = _v.copy(c).sub(p).dot(dir);
+      if (t < 0 || t > far + r) return false;
+      return _v.copy(p).addScaledVector(dir, t).distanceTo(c) < r;
+    };
+    // the other ship: close by, its real shape; further off, its size
+    const other = which === 'h8' ? { pos: g.flight.pos, quat: g.flight.quat, spheres: g.docking.shipSpheres, R: 24, kind: 'b29' } : g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'docked' && g.h8.mode !== 'lost' ? { pos: g.h8.flight.pos, quat: g.h8.flight.quat, spheres: [{ c: V(0, 0, 0), r: H8.R + 0.6 }], R: H8.R + 2, kind: 'h8' } : null;
+    if (other && !(T && T.kind === other.kind)) {
+      const d0 = other.pos.distanceTo(p);
+      if (d0 < 200) {
+        const qi = _q2.copy(other.quat).invert();
+        const o = p.clone().sub(other.pos).applyQuaternion(qi), d = dir.clone().applyQuaternion(qi);
+        for (const s of other.spheres) {
+          const t = s.c.clone().sub(o).dot(d);
+          if (t < 0 || t > range) continue;
+          if (o.clone().addScaledVector(d, t).distanceTo(s.c) < s.r + 0.8) return other.kind;
+        }
+      } else if (lineHits(other.pos, other.R + 6)) return other.kind;
     }
-    return false;
+    // the stations (their bounding spheres: rounds that miss scatter far beyond the target)
+    for (const s of g.stations.list) {
+      if (T && T.kind === 'station' && T.ref === s) continue;
+      if (s.dmg && s.dmg.destroyed) continue;
+      const R = (s.model && s.model.userData.radius) || 150;
+      if (s.pos.distanceTo(p) > far + R) continue;
+      if (lineHits(s.pos, R + 30)) return 'station';
+    }
+    return null;
+  }
+
+  /** the fire control's odds of a hit on a target (from targets()): 'cannon' (a 1 s burst from
+   * both turrets) or 'rail' (one slug); null when it cannot tell */
+  hitChance(T, kind = 'cannon') {
+    const g = this.g;
+    if (!T || !g.h8) return null;
+    const key = T.id + '|' + kind, now = performance.now();
+    this._odds = this._odds || new Map();
+    const c = this._odds.get(key);
+    if (c && now - c.t < 250) return c.p;
+    const m = kind === 'rail' ? this.h8Mounts.find((x) => x.kind === 'rail') : this.h8Mounts.find((x) => x.kind === 'twin');
+    if (!m) return null;
+    const W = this.mountWorld(m, 'h8');
+    if (!m.fc.tracks.has(T.id)) m.fc.observe(T.id, T.pos, T.vel, T.acc, 0);
+    const fcc = g.h8.circuits ? g.h8.circuits.fire : 1;
+    const o = m.fc.odds(T.id, W.pos, W.P.vel, T.R || 2, T.agility || 0, kind === 'rail' ? 1 : 24, 1 + 5 * (1 - fcc), T.aim || null);
+    const p = o ? (fcc < 0.12 ? 0 : o.pBurst) : null;
+    this._odds.set(key, { t: now, p });
+    if (this._odds.size > 64) this._odds.clear();
+    return p;
   }
 
   dry(which) {
@@ -370,15 +490,22 @@ export class Weapons {
     const T = this.primary('h8');
     if (!T) { h8.say('hachi_no_target', {}, { minGap: 4, force: false }); return; }
     const W = this.mountWorld(m, 'h8');
-    const dir = leadDir(W.pos, W.P.vel, T.pos, T.vel, ROUNDS.rail.speed, new THREE.Vector3(), T.acc);
-    if (!dir || dir.dot(W.n) < -0.12 || this.blocked('h8', W.pos, dir, T.pos.distanceTo(W.pos))) { h8.say('hachi_rail_blocked', {}, { minGap: 4, force: false }); return; }
+    const dist = (T.aim || T.pos).distanceTo(W.pos);
+    if (dist > MAX_RANGE) { h8.say('hachi_out_of_range', { d: (dist / 1000).toFixed(1) + ' km' }, { minGap: 4, force: false }); return; }
+    m.fc.observe(T.id, T.pos, T.vel, T.acc, 0);
+    const sol = m.fc.solve(T.id, W.pos, W.P.vel, T.aim || null);
+    const dir = sol && sol.aimDir;
+    if (!dir || dir.dot(W.n) < -0.12 || this.blocked('h8', W.pos, dir, dist, T, m.fc.am.v0 * m.fc.am.life)) { h8.say('hachi_rail_blocked', {}, { minGap: 4, force: false }); return; }
     m.aim = dir.clone().applyQuaternion(_q.copy(W.P.quat).invert());
+    m.cur.copy(m.aim);
     this.railCharge = 0;
     this.ammo.rail--;
     m.recoil = 1;
     m.flash = 0.18;
     h8.power.smes = Math.max(0, h8.power.smes - 900);
-    this.combat.fire({ kind: 'rail', pos: W.pos.clone().addScaledVector(dir, 2.4), vel: W.P.vel, dir, owner: h8, spread: 0.0006, byPlayer: manual });
+    const muzzle = W.pos.clone().addScaledVector(dir, 2.4);
+    const fcc = h8.circuits ? h8.circuits.fire : 1;
+    this.combat.fire({ kind: 'rail', round: m.fc.fire(muzzle, W.P.vel, dir, 1 + 5 * (1 - fcc)), pos: muzzle, vel: W.P.vel, dir, owner: h8, byPlayer: manual });
     this.gunSound('h8', 'rail');
     // the kick goes through H8 (and B-29 when they are joined)
     g.shake = Math.max(g.shake, h8.crew ? 1.6 : 0.6);
@@ -452,17 +579,17 @@ export class Weapons {
     const settle = (m) => {
       const ud = m.group.userData;
       let yawT = 0, pitchT = 0;
-      if (m.aim) {
+      const a = m.cur || m.aim;
+      if (a && (m.aim || a.angleTo(m.dir) > 1e-3)) {
         // into the mount's frame: yaw about +y, pitch up from the tangent plane
         const f = m.frame;
-        const a = m.aim;
         const ax = a.dot(f.x), ay = a.dot(f.y), az = a.dot(f.z);
         yawT = Math.atan2(-ax, -az);
         pitchT = Math.atan2(ay, Math.hypot(ax, az));
       }
-      const k = Math.min(1, dt * 7);
-      ud.yaw.rotation.y += (wrap(yawT - ud.yaw.rotation.y)) * k;
-      ud.pitch.rotation.x += (Math.max(-0.12, Math.min(1.45, pitchT)) - ud.pitch.rotation.x) * k;
+      // (the turret's pointing is simulated at its slew rate: the model shows exactly that)
+      ud.yaw.rotation.y = yawT;
+      ud.pitch.rotation.x = Math.max(-0.12, Math.min(1.45, pitchT));
       m.recoil = Math.max(0, m.recoil - dt * 9);
       ud.barrels.position.z = 0.09 * m.recoil;
       m.flash = Math.max(0, m.flash - dt);
@@ -479,7 +606,7 @@ export class Weapons {
   drawHud(origin, camWorld) {
     const g = this.g, cv = this.hud, ctx = this.hudCtx;
     if (!cv || !ctx) return;
-    const show = (g.mode === 'pilot' || g.mode === 'camera') && !(g.focus && !g.focus.out) && g.drones && g.drones.list.some((d) => d.alive && d.pos.distanceTo(this.pose(this.manned() || 'b29').pos) < 40000);
+    const show = (g.mode === 'pilot' || g.mode === 'camera') && this.manned() !== 'h8' && !(g.focus && !g.focus.out) && g.drones && g.drones.list.some((d) => d.alive && d.pos.distanceTo(this.pose(this.manned() || 'b29').pos) < 40000);
     if (!show) { if (this._hudOn) { ctx.clearRect(0, 0, cv.width, cv.height); cv.style.display = 'none'; this._hudOn = false; } return; }
     if (!this._hudOn) { cv.style.display = 'block'; this._hudOn = true; }
     const W = cv.clientWidth, H = cv.clientHeight, pr = Math.min(2, window.devicePixelRatio || 1);

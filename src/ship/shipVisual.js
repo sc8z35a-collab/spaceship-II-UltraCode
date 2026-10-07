@@ -8,6 +8,7 @@ import { createGlassMaterial, glassUniforms } from './glass.js';
 import { mergeGeometries } from './geom.js';
 import { setLayersDeep, LAYER_NEAR, LAYER_MID, LAYER_FAR, assignLayers } from '../core/layers.js';
 import { OPENINGS, CANOPY } from './hullShape.js';
+import { QUALITY } from '../core/quality.js';
 
 export class ShipVisual {
   constructor(engine) {
@@ -32,7 +33,8 @@ export class ShipVisual {
     const shell = buildInteriorShell(M);
     this.interiorBuilder = shell.builder;
     for (const fn of extraBuilders) fn(shell.builder, M);
-    this.interior = shell.builder.build(M);
+    // (LOW II: the cabin in sections along the ship, so what is behind the viewer is not drawn)
+    this.interior = shell.builder.build(M, QUALITY.level === 'low2' ? { chunks: [-6.5, -1.0, 4.0] } : {});
     this.root.add(this.interior);
     this.colliders = shell.builder.colliders;
     this.extColliders = ext.colliders;

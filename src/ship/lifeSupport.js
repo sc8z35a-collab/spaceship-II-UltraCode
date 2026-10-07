@@ -16,6 +16,8 @@ export const ZONES = {
   // floor hatch with the tunnel to B-29's port
   h8: { name: 'H8 操縦室', vol: 8, center: [0, 8.15, 0.5] },
   h8shaft: { name: 'H8 シャフト', vol: 2.6, center: [0, 5.6, 1.15] },
+  // H8's emergency shelter behind the cockpit (its own bottles and scrubber)
+  h8shelter: { name: 'H8 シェルター', vol: 1.1, center: [0, 8.22, 2.22] },
 };
 
 // gas constant factor: kPa*m^3/s per (m^2 * kPa) of upstream pressure, air at 293 K (choked)
@@ -87,6 +89,7 @@ export class LifeSupport {
 
   zoneAt(p) {
     const h8 = this.g.h8;
+    if (p.y > 2.8 && h8 && h8.shelter && h8.shelter.containsPF(p)) return 'h8shelter';
     if (p.y > 2.8 && h8 && (h8.containsPF(p) || h8.inVestibule(p))) return h8.inCockpitAir(p) ? 'h8' : 'h8shaft';
     if (p.y < -0.1) return 'under';
     if (p.z < -8.4) return 'cockpit';
@@ -120,6 +123,7 @@ export class LifeSupport {
     if (g.h8) {
       const a = g.h8.portFlowArea(); if (a > 1e-5) c.push(['corridor', 'h8shaft', a]);
       const f = g.h8.floorFlowArea(); if (f > 1e-5) c.push(['h8shaft', 'h8', f]);
+      const sh = g.h8.shelter ? g.h8.shelter.flowArea() : 0; if (sh > 1e-5) c.push(['h8', 'h8shelter', sh]);
     }
     // ducts (forced ventilation) — small effective areas between every zone and LS hub; the
     // dampers of a zone that is losing air shut on their own so it cannot drain the others

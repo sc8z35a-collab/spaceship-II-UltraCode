@@ -16,52 +16,36 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { MU_EARTH } from '../core/astro.js';
 import { LAYER_FAR, LAYER_MID, LAYER_NEAR, assignLayers } from '../core/layers.js';
+import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { H8 } from '../h8/h8Spec.js';
+import { AMMO, ENV, Rng, launch, step as flyStep, leadDir as bLead } from './ballistics.js';
 
-/** round types: muzzle speed (m/s, relative to the gun), effective energy on a hull (J), life (s),
- *  tracer colour / length, damage to a drone (0..1 of its health), to a station (health) */
+/** round types: their ammunition (ballistics.js: mass, muzzle velocity, scatter, self-destruct),
+ *  effective energy on a hull at the muzzle velocity (J), tracer colour / length, damage to a
+ *  drone (0..1 of its health), to a station (health), to a rock */
 export const ROUNDS = {
-  drone: { speed: 1650, E: 1.25e5, life: 3.2, color: [1.0, 0.36, 0.14], len: 24, w: 2.4, drone: 0.06, station: 0.0022, rock: 0.25 },
-  cannon: { speed: 1900, E: 1.6e5, life: 3.4, color: [1.0, 0.82, 0.32], len: 26, w: 2.6, drone: 0.075, station: 0.003, rock: 0.35 },
-  pd: { speed: 1500, E: 7e4, life: 3.0, color: [1.0, 0.92, 0.6], len: 18, w: 2.0, drone: 0.045, station: 0.0015, rock: 0.25 },
-  rail: { speed: 9000, E: 2.6e7, life: 1.6, color: [0.55, 0.85, 1.0], len: 320, w: 3.6, drone: 0.8, station: 0.035, rock: 6 },
+  drone: { am: AMMO.d20, E: 1.25e5, color: [1.0, 0.36, 0.14], len: 24, w: 2.4, drone: 0.06, station: 0.0022, rock: 0.25 },
+  cannon: { am: AMMO.c25, E: 1.6e5, color: [1.0, 0.82, 0.32], len: 26, w: 2.6, drone: 0.075, station: 0.003, rock: 0.35 },
+  pd: { am: AMMO.p30, E: 7e4, color: [1.0, 0.92, 0.6], len: 18, w: 2.0, drone: 0.045, station: 0.0015, rock: 0.25 },
+  rail: { am: AMMO.rail, E: 2.6e7, color: [0.55, 0.85, 1.0], len: 320, w: 3.6, drone: 0.8, station: 0.035, rock: 6 },
   missile: { speed: 120, E: 3.5e6, life: 28, color: [1.0, 0.7, 0.4], len: 0, w: 0, drone: 1.3, station: 0.06, rock: 8 },
 };
+for (const R of Object.values(ROUNDS)) if (R.am) { R.speed = R.am.v0; R.life = R.am.life; }
 
-const MAX_TRACERS = 400;
+const MAX_TRACERS = 900;
 const MAX_FLASH = 160;
-const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
 function grav(p, out) { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); }
 
-/**
- * where to aim a round of speed s from (P0, V0) at (P, V): the intercept direction, or null.
- * A: the target's own (non-gravitational) acceleration — a drone pulling 5 g round its circle
- * moves 15-20 m off a straight-line lead in the time a shell takes to get there (round and target
- * fall together, so gravity drops out)
- */
-export function leadDir(P0, V0, P, V, s, out = new THREE.Vector3(), A = null) {
-  const r = _v.copy(P).sub(P0), v = _v2.copy(V).sub(V0);
-  const a = v.lengthSq() - s * s, b = 2 * r.dot(v), c = r.lengthSq();
-  let t;
-  if (Math.abs(a) < 1e-6) t = -c / Math.max(1e-6, b);
-  else {
-    const D = b * b - 4 * a * c;
-    if (D < 0) return null;
-    const sq = Math.sqrt(D);
-    const t1 = (-b - sq) / (2 * a), t2 = (-b + sq) / (2 * a);
-    t = Math.min(t1, t2) > 0 ? Math.min(t1, t2) : Math.max(t1, t2);
-  }
-  if (!(t > 0)) return null;
-  if (A && A.lengthSq() > 1e-4) {
-    // refine for the acceleration (fixed point: time of flight to where it will then be)
-    for (let k = 0; k < 5; k++) t = _v3.copy(r).addScaledVector(v, t).addScaledVector(A, 0.5 * t * t).length() / s;
-    out.copy(r).addScaledVector(v, t).addScaledVector(A, 0.5 * t * t).normalize();
-  } else out.copy(r).addScaledVector(v, t).normalize();
-  out.t = t;
-  return out;
-}
+/** straight-line lead (the ballistics engine's; for quick estimates — the guns solve their shots
+ * by simulation, see ballistics.js) */
+export const leadDir = bLead;
+
+let ROCK_SEQ = 0;
+/** a rock's id for the sensors and the guns (the same everywhere) */
+export function rockId(a) { return a.trackId || (a.trackId = 'rk' + (++ROCK_SEQ)); }
 
 /** first contact of segment p0->p1 with a sphere (centre c, radius R): fraction along it, or -1 */
 function segSphere(p0, p1, c, R) {
@@ -133,28 +117,39 @@ export class Combat {
     this.missileMat = new THREE.MeshStandardMaterial({ color: 0xd8dcdf, metalness: 0.6, roughness: 0.4 });
     this.t = 0;
     this.stats = { fired: 0, hits: 0, on: {} };
+    // the scatter of rounds fired without a fire control of their own
+    this.rng = new Rng(20410601);
   }
 
   // ------------------------------------------------------------------ firing
   /**
    * fire a round. o: { kind, pos (ECI), vel (shooter's velocity), dir (unit, ECI), owner,
-   *   spread (rad), target (missiles), byPlayer }
+   *   round (a round launched by a fire control: ballistics.FireControl.fire), disp (scatter
+   *   multiplier, without one), target (missiles), byPlayer }
    */
   fire(o) {
     const R = ROUNDS[o.kind];
-    const dir = o.dir.clone();
-    if (o.spread) dir.add(new THREE.Vector3().randomDirection().multiplyScalar(Math.tan(o.spread) * Math.random())).normalize();
-    const r = {
-      kind: o.kind, R, pos: o.pos.clone(), prev: o.pos.clone(), vel: o.vel.clone().addScaledVector(dir, R.speed),
-      dir, owner: o.owner || null, age: 0, life: R.life, byPlayer: !!o.byPlayer, target: o.target || null, done: false,
-      boost: o.kind === 'missile' ? 0 : -1,
-    };
+    let r;
+    if (R.am) {
+      // a shell: the ballistics engine flies it (scatter, muzzle velocity, gravity, the air)
+      const b = o.round || launch(R.am, null, o.pos, o.vel, o.dir, this.rng, { disp: o.disp || 1 });
+      r = { kind: o.kind, R, am: R.am, pos: b.pos, prev: b.prev, vel: b.vel, dir: b.dir, t: 0, owner: o.owner || null, age: 0, life: R.am.life, byPlayer: !!o.byPlayer, target: null, done: false, boost: -1 };
+    } else {
+      const dir = o.dir.clone();
+      r = {
+        kind: o.kind, R, pos: o.pos.clone(), prev: o.pos.clone(), vel: o.vel.clone().addScaledVector(dir, R.speed),
+        dir, owner: o.owner || null, age: 0, life: R.life, byPlayer: !!o.byPlayer, target: o.target || null, done: false,
+        boost: 0,
+      };
+    }
     if (o.kind === 'missile') {
       r.mesh = new THREE.Mesh(this.missileGeo, this.missileMat);
       r.mesh.matrixAutoUpdate = false;
       r.mesh.frustumCulled = false;
+      // its motor's flame out of the tail
+      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.75)], r0: 0.1, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4 });
       this.g.engine.scene.add(r.mesh);
-      r.q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
+      r.q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), r.dir);
     }
     this.rounds.push(r);
     this.stats.fired++;
@@ -210,7 +205,7 @@ export class Combat {
       out.push({ kind, ref, pos, vel, R, p1 });
     };
     add('b29', g.flight, g.flight.pos, g.flight.vel, 20);
-    if (g.h8 && g.h8.mode !== 'parked') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
+    if (g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'pod' && g.h8.mode !== 'lost') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
     if (g.drones) for (const d of g.drones.list) if (d.alive) add('drone', d, d.pos, d.vel, d.R);
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) add('rock', a, a.pos, a.vel, a.radius);
     // stations: their exact pose now and a step on (their drawn position is a frame old)
@@ -244,11 +239,14 @@ export class Combat {
     for (const r of this.rounds) {
       if (r.done) continue;
       r.age += dt;
-      r.prev.copy(r.pos);
-      grav(r.pos, acc);
-      if (r.kind === 'missile') this.steerMissile(r, dt, acc);
-      r.pos.addScaledVector(r.vel, dt).addScaledVector(acc, 0.5 * dt * dt);
-      r.vel.addScaledVector(acc, dt);
+      if (r.am) flyStep(r, dt, ENV);
+      else {
+        r.prev.copy(r.pos);
+        grav(r.pos, acc);
+        if (r.kind === 'missile') this.steerMissile(r, dt, acc);
+        r.pos.addScaledVector(r.vel, dt).addScaledVector(acc, 0.5 * dt * dt);
+        r.vel.addScaledVector(acc, dt);
+      }
       // what did it run into on the way (each target in its own moving frame: the round went from
       // prev to pos while the target went from pos to p1)
       let best = null;
@@ -279,9 +277,17 @@ export class Combat {
         }
       }
       if (best) { this.onHit(r, best); r.done = true; continue; }
-      if (r.age > r.life) { r.done = true; if (r.kind === 'missile') this.explode(r.pos, r.vel, 0.6, false); }
+      if (r.age > r.life) {
+        r.done = true;
+        if (r.kind === 'missile') this.explode(r.pos, r.vel, 0.6, false);
+        else if (r.kind === 'cannon' || r.kind === 'pd') {
+          // the shell's self-destruct: a puff where it is (seen only from nearby)
+          const pv = g.playerVessel ? g.playerVessel() : null;
+          if (pv && pv.pos.distanceTo(r.pos) < 6000) this.flash(r.pos, [1, 0.7, 0.4], 2.2, 0.12, r.vel);
+        }
+      }
     }
-    this.rounds = this.rounds.filter((r) => { if (r.done && r.mesh) { g.engine.scene.remove(r.mesh); } return !r.done; });
+    this.rounds = this.rounds.filter((r) => { if (r.done && r.mesh) { g.engine.scene.remove(r.mesh); r.plume.dispose(); } return !r.done; });
     for (const f of this.flashes) f.t += dt;
     this.flashes = this.flashes.filter((f) => f.t < f.life);
     for (const w of this.wrecks) { w.t += dt; w.pos.addScaledVector(w.vel, dt); grav(w.pos, acc); w.pos.addScaledVector(acc, 0.5 * dt * dt); w.vel.addScaledVector(acc, dt); w.q.multiply(_q.setFromAxisAngle(w.axis, w.spin * dt)); }
@@ -373,8 +379,10 @@ export class Combat {
     this.flash(at, big ? [1, 0.85, 0.6] : [1, 0.7, 0.35], big ? 6 : 1.1, big ? 0.5 : 0.14, tg.vel);
     if (r.kind === 'missile') this.explode(at, tg.vel, 1, true);
     const relV = r.vel.clone().sub(tg.vel);
+    // (a shell's energy goes with the square of the speed it strikes at)
+    const Ek = r.am ? Math.min(2.5, (relV.length() / r.am.v0) ** 2) : 1;
     if (tg.kind === 'b29') {
-      const E = r.kind === 'missile' || r.kind === 'rail' ? R.E : R.E * Math.min(1.6, relV.length() / R.speed);
+      const E = r.kind === 'missile' ? R.E : R.E * Ek;
       g.damage.impact(hit.pLocal, hit.dirLocal, E, { shot: true, normal: hit.nLocal });
       g.systems.onImpact(E, hit.pLocal);
       if (g.combatLog) g.combatLog('b29', r);
@@ -382,14 +390,14 @@ export class Combat {
       const h8 = g.h8;
       const dirLocal = hit.n.clone().applyQuaternion(_q.copy(h8.flight.quat).invert());
       // H8's armour is built for this: shells spend most of their energy on the outer plates
-      h8.armourHit(R.E * (big ? 1 : 4), dirLocal, { shot: !big });
+      h8.armourHit(R.E * (big ? 1 : 4) * Ek, dirLocal, { shot: !big });
       if (h8.crew || h8.mode === 'docked') {
         g.audio.impact(dirLocal.clone().multiplyScalar(H8.R * 0.9).add(H8.dockAt), Math.min(1, 0.25 + (big ? 0.6 : 0.1)));
         g.shake = Math.max(g.shake, big ? 1.4 : 0.35);
       }
       if (g.combatLog) g.combatLog('h8', r);
     } else if (tg.kind === 'drone') {
-      g.drones.damage(tg.ref, R.drone, hit, r);
+      g.drones.damage(tg.ref, R.drone * Math.min(1.5, Ek), hit, r);
     } else if (tg.kind === 'rock') {
       const a = tg.ref;
       a.hp = (a.hp ?? Math.pow(a.radius / 0.5, 3) * 0.6) - R.rock;
@@ -435,11 +443,11 @@ export class Combat {
   }
 
   /** pieces of something that broke apart (meshes tumbling away) */
-  addWreck(mesh, pos, vel, life = 40) {
+  addWreck(mesh, pos, vel, life = 40, r = 3) {
     mesh.matrixAutoUpdate = false;
     mesh.frustumCulled = false;
     this.g.engine.scene.add(mesh);
-    this.wrecks.push({ mesh, pos: pos.clone(), vel: vel.clone(), q: new THREE.Quaternion().random(), axis: new THREE.Vector3().randomDirection(), spin: 0.5 + Math.random() * 3, t: 0, life });
+    this.wrecks.push({ mesh, pos: pos.clone(), vel: vel.clone(), q: new THREE.Quaternion().random(), axis: new THREE.Vector3().randomDirection(), spin: 0.5 + Math.random() * 3, t: 0, life, r });
   }
 
   // ------------------------------------------------------------------ per render frame
@@ -454,8 +462,12 @@ export class Combat {
         r.q.setFromUnitVectors(_v.set(0, 0, -1), r.dir);
         r.mesh.matrix.compose(rel, r.q, _v2.set(1, 1, 1));
         r.mesh.matrixWorld.copy(r.mesh.matrix);
+        r.mesh.updateMatrixWorld(true);
         const d = rel.distanceTo(camWorld);
         assignLayers(r.mesh, Math.max(0, d - 2), d + 2);
+        // (it lights at launch and burns to the end; gentler while it clears the launcher)
+        r.plume.update(dt, r.boost < 0.6 ? 0.55 : 1, 0, 0);
+        r.plume.setDistance(d);
         continue;
       }
       if (n >= MAX_TRACERS) break;
@@ -466,12 +478,16 @@ export class Combat {
       // streak along the motion relative to the camera's ship (what the eye sees move)
       const ref = g.playerVessel ? g.playerVessel() : { vel: r.vel };
       const rv = _v2.copy(r.vel).sub(ref.vel);
+      // a tracer burns for a few seconds, then the round flies on unseen
+      const burn = r.am ? r.am.tracer : 99;
+      if (r.age > burn + 0.3) continue;
+      const fade = r.age > burn ? 1 - (r.age - burn) / 0.3 : 1;
       const L = Math.min(R.len, rv.length() * 0.03) * (r.age < 0.05 ? r.age / 0.05 : 1);
       const tail = rv.normalize().multiplyScalar(-L).add(head);
       const i = n * 6;
       P[i] = head.x; P[i + 1] = head.y; P[i + 2] = head.z;
       P[i + 3] = tail.x; P[i + 4] = tail.y; P[i + 5] = tail.z;
-      const k = r.kind === 'rail' ? 6 : 3.2;
+      const k = (r.kind === 'rail' ? 6 : 3.2) * fade;
       C[i] = R.color[0] * k; C[i + 1] = R.color[1] * k; C[i + 2] = R.color[2] * k;
       C[i + 3] = R.color[0] * 0.15; C[i + 4] = R.color[1] * 0.15; C[i + 5] = R.color[2] * 0.15;
       n++;
@@ -519,11 +535,11 @@ export class Combat {
     // tumbling wreckage
     for (const w of this.wrecks) {
       const rel = _v.copy(w.pos).sub(origin);
-      w.mesh.matrix.compose(rel, w.q, _v2.set(1, 1, 1));
+      w.mesh.matrix.compose(rel, w.q, w.mesh.scale);
       w.mesh.matrixWorld.copy(w.mesh.matrix);
       w.mesh.updateMatrixWorld(true);
       const d = rel.distanceTo(camWorld);
-      w.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - 3), d + 3); });
+      w.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - w.r), d + w.r); });
     }
   }
 }

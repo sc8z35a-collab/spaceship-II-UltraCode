@@ -40,12 +40,19 @@ import { Drones } from './combat/drones.js';
 import { Weapons } from './combat/weapons.js';
 import { springVec, springQuat } from './core/spring.js';
 import { setFineVisible } from './ship/geom.js';
+import { shipUniforms } from './ship/materials.js';
+import { setSkyQuality } from './world/atmosphere.js';
 import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullShape.js';
 import { glassUniforms } from './ship/glass.js';
+import { StatusLine } from './ui/statusLine.js';
+import { ExtMarkers } from './ui/extMarkers.js';
+import { Photos } from './ui/photos.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
 const FAR_SURFACE = { h: 0, water: false };
+
+const _hjQ = new THREE.Quaternion(), _hjE = new THREE.Euler(), _hjM = new THREE.Matrix4();
 
 export class Game {
   constructor(engine, earth, params) {
@@ -132,6 +139,9 @@ export class Game {
     this.breakup = new Breakup(this);
     this.worldDamage = new WorldDamage(this);
     this.hud = new Hud(this);
+    this.statusLine = new StatusLine(this);
+    this.extMarkers = new ExtMarkers(this);
+    this.photos = new Photos(this);
     this.initWorldState();
     // H8 — Kaito's old sub-base (parked on its orbit until called)
     if (!this.params.has('noH8')) {
@@ -146,7 +156,7 @@ export class Game {
     this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
     P(0.6);
     // graphics quality chosen earlier in this browser (the engine already started at its resolution)
-    if (QUALITY.level === 'low') this.applyQuality('low');
+    if (QUALITY.level !== 'high') this.applyQuality(QUALITY.level);
     // warm-up: stream terrain, compile shaders, capture environment maps
     for (let i = 0; i < 30; i++) {
       this.updateRender(0.016);
@@ -251,10 +261,11 @@ export class Game {
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (this.mode === 'camera' && !focused) {
         // drag in the middle / top of the screen: look round with the external camera
+        // (more sensitive than it was: a short drag swings the view a long way round)
         const L = this.extLook;
-        L.zoom = Math.max(0.35, Math.min(4, (L.zoom || 1) * (inp.pinch || 1)));
-        L.yaw -= inp.lookDX * 0.0045;
-        L.pitch = Math.max(-1.45, Math.min(1.45, L.pitch - inp.lookDY * 0.0045));
+        L.zoom = Math.max(0.25, Math.min(6, (L.zoom || 1) * Math.pow(inp.pinch || 1, 1.6)));
+        L.yaw -= inp.lookDX * 0.011;
+        L.pitch = Math.max(-1.5, Math.min(1.5, L.pitch - inp.lookDY * 0.011));
         // a double tap puts it back
         for (const tap of inp.taps) {
           const now = performance.now();
@@ -262,6 +273,7 @@ export class Game {
         }
       }
       if (inp.pressed['b-drop']) this.systems.dropPressed();
+      if (inp.pressed['b-shot'] && this.photos) this.photos.shoot();
     }
     // ---- flight
     this.autopilot.update(sdt);
@@ -305,9 +317,12 @@ export class Game {
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     // ---- taps
+    if (this.h8 && !dead) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
       if (this.mode === 'camera' || dead) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
+      // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
+      if (this.h8 && this.h8.hudTap(tap)) continue;
       const hit = this.interact.tap(tap, this.engine.camera);
       if (!hit) this.systems.tapNothing(tap);
     }
@@ -317,6 +332,7 @@ export class Game {
     this.worldDamage.update(sdt);
     this.save.update(dt);
     this.hud.update(dt);
+    this.statusLine.update(dt);
   }
 
   /**
@@ -335,6 +351,7 @@ export class Game {
       const [bot, top] = heightRangeAt(c.z, c.x, 0);
       vis = c.y > bot - 0.05 && c.y < top + 0.05 && Math.abs(c.x) < halfWidthAt(c.z, c.y, 0) + 0.05;
     }
+    this._cabInside = vis;
     if (!vis) {
       const d = this._cabD || (this._cabD = new THREE.Vector3());
       if (d.copy(c).sub(CANOPY.P0).dot(CANOPY.N) > -0.1 && d.lengthSq() < 26 * 26) vis = true;
@@ -353,6 +370,66 @@ export class Game {
       for (const gr of this._cabin) gr.visible = vis;
       glassUniforms.uHollow.value = vis ? 0 : 1;
     }
+  }
+
+  /**
+   * LOW II, the eye in B-29's cabin: what lies outside (the Earth, the sky, stations...) shows only
+   * through the windows, the canopy, a hatch or a breach, so the far and middle passes are drawn
+   * only inside the box on the picture those cover (with none in view, not at all). They used to be
+   * shaded over the whole picture and then painted over by the cabin.
+   */
+  updateFarRect() {
+    const P = this.engine.mfPass;
+    P.farRect = null;
+    if (!this.engine.low2 || !this._cabInside || this.debugCam || this.mode === 'camera' || (this.h8 && this.h8.solo)) return;
+    const cam = this.engine.camera;
+    const M = this._frM || (this._frM = new THREE.Matrix4());
+    M.copy(cam.matrix).invert().premultiply(cam.projectionMatrix).multiply(this.shipVis.root.matrixWorld);
+    const C = this._frC || (this._frC = Array.from({ length: 8 }, () => new THREE.Vector4()));
+    const e = this._frE || (this._frE = new THREE.Vector3());
+    let x0 = 1, y0 = 1, x1 = -1, y1 = -1, any = false;
+    const EPS = 1e-3;
+    // a box (centre, three half axes) on the picture; the part of it behind the eye is cut off at
+    // the eye's plane (its edges clipped there), so a window beside the eye still counts right
+    const box = (c, a, b, n) => {
+      let bx0 = 1e9, by0 = 1e9, bx1 = -1e9, by1 = -1e9, front = 0;
+      const add = (x, y, w) => { const px = x / w, py = y / w; bx0 = Math.min(bx0, px); bx1 = Math.max(bx1, px); by0 = Math.min(by0, py); by1 = Math.max(by1, py); };
+      for (let i = 0; i < 8; i++) {
+        e.copy(c).addScaledVector(a, i & 1 ? 1 : -1).addScaledVector(b, i & 2 ? 1 : -1).addScaledVector(n, i & 4 ? 1 : -1);
+        C[i].set(e.x, e.y, e.z, 1).applyMatrix4(M);
+        if (C[i].w > EPS) { front++; add(C[i].x, C[i].y, C[i].w); }
+      }
+      if (front === 0) return;                      // wholly behind the eye
+      if (front < 8) {
+        for (let i = 0; i < 8; i++) for (const bit of [1, 2, 4]) {
+          if (i & bit) continue;
+          const p = C[i], q = C[i | bit];
+          if ((p.w > EPS) === (q.w > EPS)) continue;
+          const t = (EPS - p.w) / (q.w - p.w);
+          add(p.x + (q.x - p.x) * t, p.y + (q.y - p.y) * t, EPS);
+        }
+      }
+      if (bx1 < -1 || bx0 > 1 || by1 < -1 || by0 > 1) return;
+      any = true;
+      x0 = Math.min(x0, bx0); x1 = Math.max(x1, bx1); y0 = Math.min(y0, by0); y1 = Math.max(y1, by1);
+    };
+    const A = this._frA || (this._frA = { a: new THREE.Vector3(), b: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3() });
+    for (const o of OPENINGS) box(o.center, A.a.copy(o.u).multiplyScalar(o.halfW + 0.06), A.b.copy(o.v).multiplyScalar(o.halfH + 0.06), A.n.copy(o.normal).multiplyScalar(0.62));
+    // the canopy
+    box(A.c.set(0, 0.35, -11.65), A.a.set(3.35, 0, 0), A.b.set(0, 2.98, 0), A.n.set(0, 0, 2.4));
+    // breaches in the hull
+    const BR = shipUniforms.uBreach.value;
+    for (let i = 0; i < BR.length; i++) {
+      const B = BR[i];
+      if (B.w <= 0) continue;
+      const r = B.w * 1.8 + 0.45;
+      box(A.c.set(B.x, B.y, B.z), A.a.set(r, 0, 0), A.b.set(0, r, 0), A.n.set(0, 0, r));
+    }
+    if (!any) { P.farRect = 'none'; return; }
+    const W = this.engine.composer.inputBuffer.width, H = this.engine.composer.inputBuffer.height;
+    const px0 = Math.max(0, Math.floor((Math.max(-1, x0) + 1) / 2 * W) - 2), px1 = Math.min(W, Math.ceil((Math.min(1, x1) + 1) / 2 * W) + 2);
+    const py0 = Math.max(0, Math.floor((Math.max(-1, y0) + 1) / 2 * H) - 2), py1 = Math.min(H, Math.ceil((Math.min(1, y1) + 1) / 2 * H) + 2);
+    P.farRect = { x: px0, y: py0, w: Math.max(1, px1 - px0), h: Math.max(1, py1 - py0) };
   }
 
   /** lean in to a monitor so it fills the view (taps then go to its buttons) */
@@ -424,7 +501,7 @@ export class Game {
   lookExternal(c, dt) {
     const L = this.extLook;
     if (L.cam !== this.extCam) { L.cam = this.extCam; L.yaw = L.pitch = L.sy = L.sp = 0; L.zoom = L.sz = 1; }
-    const k = 1 - Math.exp(-dt * 12);
+    const k = 1 - Math.exp(-dt * 20);
     L.sy += (L.yaw - L.sy) * k; L.sp += (L.pitch - L.sp) * k;
     L.sz = (L.sz || 1) + ((L.zoom || 1) - (L.sz || 1)) * k;
     if (Math.abs(L.sy) < 1e-4 && Math.abs(L.sp) < 1e-4 && Math.abs(L.sz - 1) < 1e-3) return c;
@@ -448,21 +525,26 @@ export class Game {
   }
 
   /**
-   * Graphics quality, 'high' or 'low', applied at once and remembered in this browser. Low is about
-   * half the GPU work: ~0.72x pixel ratio, light anti-aliasing and bloom, 8 of the 16 cabin lights,
-   * a quarter-size sun shadow map and no earthshine shadow, coarser terrain, one-projection surface
-   * detail on the ship, stations drawn out to 160 km instead of 400 km, slower camera feeds and
-   * screen redraws, no light shafts. Shaders recompile once when it changes.
+   * Graphics quality, 'high', 'low' or 'low2' (LOW II), applied at once and remembered in this
+   * browser. Low is about half the GPU work: ~0.72x pixel ratio, light anti-aliasing and bloom, 8 of
+   * the 16 cabin lights, a quarter-size sun shadow map and no earthshine shadow, coarser terrain,
+   * one-projection surface detail on the ship, stations drawn out to 160 km instead of 400 km,
+   * slower camera feeds and screen redraws, no light shafts. LOW II: 0.45x pixel ratio, no
+   * anti-aliasing pass, 4 cabin lights, a small shadow map redrawn every eighth frame, plain ship
+   * surfaces, lighter sky, clouds and ground, far passes only where the cabin's windows are,
+   * stations out to 80 km, feeds and screens slower again (its coarser, sectioned ship and sky
+   * come with a start on LOW II). Shaders recompile once when it changes.
    */
   applyQuality(level) {
-    const low = saveQuality(level) === 'low';
-    this.engine.setQuality(QUALITY.level);
-    this.space.setQuality(low);
-    if (this.systems && this.systems.setLightPool) this.systems.setLightPool(low ? 8 : 16);
+    const q = saveQuality(level), low = q !== 'high', low2 = q === 'low2';
+    this.engine.setQuality(q);
+    this.space.setQuality(low, low2);
+    if (this.systems && this.systems.setLightPool) this.systems.setLightPool(low2 ? 4 : low ? 8 : 16);
     if (this.shafts) this.shafts.enabled = !low;
-    if (this.stations) this.stations.visRange = low ? 1.6e5 : 4.0e5;
-    if (this.monitors && this.monitors.setQuality) this.monitors.setQuality(low);
+    if (this.stations) this.stations.visRange = low2 ? 8e4 : low ? 1.6e5 : 4.0e5;
+    if (this.monitors && this.monitors.setQuality) this.monitors.setQuality(low, low2);
     if (this.drones) this.drones.setQuality(low);
+    setSkyQuality(q);
     // the small surface detail (bolts, greebles, clamps...) goes at once; built only on a high start
     setFineVisible(this.engine.scene, !low);
     this.engine.scene.traverse((o) => {
@@ -486,6 +568,16 @@ export class Game {
     if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
     fr.matrixWorld.copy(fr.matrix);
     fr.updateMatrixWorld(true);
+    // re-entry: the hull itself shudders under the eye (the frame the eye rides holds still)
+    const hj = this.hullJitter || 0;
+    if (hj > 0.01 && !solo) {
+      const t = performance.now() / 1000, n = (a, b, c) => Math.sin(t * a + b) * 0.6 + Math.sin(t * c + b * 1.7) * 0.4;
+      const r = 0.0065 * hj, d = 0.035 * hj;
+      _hjQ.setFromEuler(_hjE.set(n(41, 0.3, 67) * r, n(37, 1.1, 59) * r * 0.6, n(53, 2.2, 31) * r));
+      _hjM.makeRotationFromQuaternion(_hjQ).setPosition(n(47, 0.7, 71) * d, n(43, 1.9, 61) * d, n(29, 2.8, 83) * d * 0.5);
+      root.matrix.multiply(_hjM);
+      root.matrixWorld.copy(root.matrix);
+    }
     const frameQ = new THREE.Quaternion().setFromRotationMatrix(fr.matrix);
     const frameP = new THREE.Vector3().setFromMatrixPosition(fr.matrix);
     // the docked station's habitat ring turns (and Kaito with it, if he is inside)
@@ -552,6 +644,7 @@ export class Game {
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
+    if (this.extMarkers) this.extMarkers.update();
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());
       const ls = this.lifeSupport;
@@ -566,6 +659,7 @@ export class Game {
     this.fx.alpha.pts.material.uniforms.uScale.value = sc;
     this.fx.update(Math.min(dt * this.timeScale, 0.1));
     if (this.systems) this.systems.updateVisual(dt, this.camWorld.length());
+    this.updateFarRect();
     // listener at the player's head (also while watching an external camera); while Kaito is away
     // in H8, B-29's own machinery is far behind him
     this.audio.mutePred = solo ? (p) => this.h8.muteB29Sound(p) : null;

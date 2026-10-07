@@ -6,9 +6,11 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 import { QUALITY } from '../core/quality.js';
 
 // low graphics quality (chosen before start-up): coarser tessellation everywhere the Builder is
-// used (rounded boxes keep a single chamfer, round shapes get about half the segments)
-const lowQ = () => QUALITY.level === 'low';
-const half = (n, min) => (lowQ() ? Math.max(min, Math.ceil(n * 0.5)) : n);
+// used (rounded boxes keep a single chamfer, round shapes get about half the segments); LOW II:
+// a third of the segments, small roundings become plain boxes
+const lowQ = () => QUALITY.level !== 'high';
+const low2 = () => QUALITY.level === 'low2';
+const half = (n, min) => (lowQ() ? Math.max(min, Math.ceil(n * (low2() ? 0.34 : 0.5))) : n);
 
 // small surface detail (bolts, greebles, clamps, cooling tubes...) goes into meshes of its own,
 // marked userData.fine: hidden at once when the quality is turned down, and not built at all
@@ -103,9 +105,12 @@ export class Builder {
 
   /** rounded box centred at pos (with autoRound, chunky boxes get soft, well-rounded edges) */
   box(w, h, d, key, pos = [0, 0, 0], rot, r = 0.02, seg = 2, col = false) {
+    // (a builder can ask for plain boxes below some rounding: bulk props, far structures)
+    if (this.plainUpTo !== undefined && r <= this.plainUpTo && seg < 3) r = 0;
     const m = Math.min(w, h, d);
     if (this.autoRound && m > 0.12) { r = Math.max(r, Math.min(0.075, m * 0.17)); seg = Math.max(seg, 3); }
     if (lowQ()) seg = 1;
+    if (low2() && r < 0.08) r = 0;
     const geo = r > 0.0005 ? new RoundedBoxGeometry(w, h, d, seg, Math.min(r, w / 2 - 1e-4, h / 2 - 1e-4, d / 2 - 1e-4)) : new THREE.BoxGeometry(w, h, d);
     this.add(geo, key, pos, rot);
     if (col) this.colBox(w, h, d, pos, rot);
@@ -125,7 +130,7 @@ export class Builder {
   }
 
   torus(R, r, key, pos = [0, 0, 0], rot, seg = 24, arc = Math.PI * 2) {
-    this.add(new THREE.TorusGeometry(R, r, lowQ() ? 5 : 8, half(seg, 8), arc), key, pos, rot);
+    this.add(new THREE.TorusGeometry(R, r, low2() ? 4 : lowQ() ? 5 : 8, half(seg, 8), arc), key, pos, rot);
     return this;
   }
 
@@ -169,7 +174,7 @@ export class Builder {
   }
 
   extrude(shape, depth, key, pos, rot, bevel = 0.01, curveSegments = 8) {
-    const g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: bevel > 0, bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments });
+    const g = new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: bevel > 0 && !low2(), bevelThickness: bevel, bevelSize: bevel, bevelSegments: 2, curveSegments: low2() ? Math.max(3, Math.ceil(curveSegments * 0.5)) : curveSegments });
     g.translate(0, 0, -depth / 2);
     this.add(g, key, pos, rot);
     return this;
@@ -205,8 +210,12 @@ export class Builder {
     return this;
   }
 
-  /** merge into meshes; materials: map key -> material */
-  build(materials, { castShadow = true, receiveShadow = true } = {}) {
+  /**
+   * merge into meshes; materials: map key -> material. chunks: z values to cut the parts at (each
+   * part goes by its middle; long ones in a chunk of their own) so the camera's frustum can leave
+   * out what is behind the viewer
+   */
+  build(materials, { castShadow = true, receiveShadow = true, chunks = null } = {}) {
     const group = new THREE.Group();
     for (const [key, list] of this.parts) {
       if (!list.length) continue;
@@ -214,20 +223,55 @@ export class Builder {
       const base = fine ? key.slice(0, -FINE.length) : key;
       const mat = materials[base];
       if (!mat) { console.warn('missing material', base); continue; }
-      const merged = mergeGeometries(list, false);
-      if (!merged) continue;
-      merged.computeBoundingSphere();
-      const mesh = new THREE.Mesh(merged, mat);
-      mesh.name = base;
-      if (fine) { mesh.userData.fine = true; mesh.visible = !lowQ(); }
-      mesh.castShadow = castShadow && !mat.transparent;
-      mesh.receiveShadow = receiveShadow;
-      if (mat.userData && mat.userData.depthMat) mesh.customDepthMaterial = mat.userData.depthMat;
-      mesh.matrixAutoUpdate = false;
-      group.add(mesh);
+      for (const part of chunks ? splitByZ(list, chunks) : [list]) {
+        if (!part.length) continue;
+        const merged = mergeGeometries(part, false);
+        if (!merged) continue;
+        merged.computeBoundingSphere();
+        const mesh = new THREE.Mesh(merged, mat);
+        mesh.name = base;
+        if (fine) { mesh.userData.fine = true; mesh.visible = !lowQ(); }
+        mesh.castShadow = castShadow && !mat.transparent;
+        mesh.receiveShadow = receiveShadow;
+        if (mat.userData && mat.userData.depthMat) mesh.customDepthMaterial = mat.userData.depthMat;
+        mesh.matrixAutoUpdate = false;
+        group.add(mesh);
+      }
     }
     return group;
   }
+}
+
+/**
+ * parts into z sections (by their middle); a long part (a hull skin, a floor, a pipe down the
+ * ship) is cut up, each triangle going to the section it lies in (normals untouched: no seams)
+ */
+function splitByZ(list, cuts) {
+  const nb = cuts.length + 1;
+  const out = Array.from({ length: nb }, () => []);
+  const span = (cuts[cuts.length - 1] - cuts[0]) / Math.max(1, cuts.length - 1);
+  const at = (z) => { let i = 0; while (i < cuts.length && z > cuts[i]) i++; return i; };
+  for (const g of list) {
+    if (!g.boundingBox) g.computeBoundingBox();
+    const bb = g.boundingBox;
+    if (g.index || bb.max.z - bb.min.z <= span * 0.75) { out[at((bb.min.z + bb.max.z) / 2)].push(g); continue; }
+    const P = g.attributes.position.array, n = P.length / 9;
+    const tris = Array.from({ length: nb }, () => []);
+    for (let t = 0; t < n; t++) tris[at((P[t * 9 + 2] + P[t * 9 + 5] + P[t * 9 + 8]) / 3)].push(t);
+    tris.forEach((ts, k) => { if (ts.length) out[k].push(pickTris(g, ts)); });
+  }
+  return out;
+}
+
+/** the listed triangles of a non-indexed geometry, as a geometry of their own */
+function pickTris(g, ts) {
+  const ng = new THREE.BufferGeometry();
+  for (const [k, a] of Object.entries(g.attributes)) {
+    const w = a.itemSize * 3, src = a.array, dst = new src.constructor(ts.length * w);
+    ts.forEach((t, i) => dst.set(src.subarray(t * w, t * w + w), i * w));
+    ng.setAttribute(k, new THREE.BufferAttribute(dst, a.itemSize, a.normalized));
+  }
+  return ng;
 }
 
 // ---------------- shape helpers ----------------

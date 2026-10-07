@@ -122,10 +122,11 @@ export class Player {
       if (s.gimbal) {
         // a seat on a gimbal: it turns all the way round after the head, and tips back or forward
         // after it too (lying back to look straight up, leaning over to look at the floor)
+        // (it swings round quickly: turning to look behind used to leave the body lagging)
         const d = this.yaw - s.yawSeat;
-        if (Math.abs(d) > 0.6) s.yawSeat += (d - Math.sign(d) * 0.6) * Math.min(1, dt * 5);
+        if (Math.abs(d) > 0.5) s.yawSeat += (d - Math.sign(d) * 0.5) * Math.min(1, dt * 20);
         const dp = this.pitch - (s.pitchSeat || 0);
-        if (Math.abs(dp) > 0.42) s.pitchSeat = (s.pitchSeat || 0) + (dp - Math.sign(dp) * 0.42) * Math.min(1, dt * 4);
+        if (Math.abs(dp) > 0.4) s.pitchSeat = (s.pitchSeat || 0) + (dp - Math.sign(dp) * 0.4) * Math.min(1, dt * 16);
         s.pitchSeat = Math.max(-0.95, Math.min(1.4, s.pitchSeat || 0));
         if (s.eyeLocal) this.eyeLocal.copy(s.eyeLocal).add(s.dock || _v.set(0, 0, 0));
         else this.eyeLocal.copy(s.eye);

@@ -27,7 +27,10 @@ export class Flight {
    * acceleration, its inertial damper, the health of its drive)
    */
   constructor(spec = {}) {
-    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1, tank: B29_TANK }, spec);
+    this.spec = Object.assign({ normalMax: NORMAL_MAX, ultraMax: ULTRA_MAX, aMax: 15, mass: SHIP_MASS, CdA: 27, comfortK: 1, rampK: 1, turnK: 1, tank: B29_TANK }, spec);
+    // how quickly it turns (x): H8's thrusters swing the little sphere round several times faster
+    // than B-29's; the pair gets some of that while H8 rides on B-29's back
+    this.turnK = this.spec.turnK;
     // propellant { kg, cap, ve (exhaust speed, m/s) }; a docked H8 pushes on its own tank (extTank)
     // and adds its mass (extMass)
     this.tank = this.spec.tank ? { kg: this.spec.tank.cap, cap: this.spec.tank.cap, ve: this.spec.tank.ve } : null;
@@ -35,6 +38,12 @@ export class Flight {
     this.extMass = 0;
     this.fuelK = 1;
     this.mul = 1;
+    // H8's drive modes on top of ULTRA (h8.js setDriveMode): the ULTRA speed limit (x), the drive's
+    // thrust (x) and its exhaust speed (x: the power it draws goes into a faster exhaust)
+    this.ultraK = 1;
+    this.aK = 1;
+    this.veK = 1;
+    this.maxMode = false;
     this.aExtra = 0;
     this.boostDamp = false;
     this.extHealth = 0;
@@ -77,7 +86,7 @@ export class Flight {
 
   /** speed limits with whatever drive is attached */
   get vNormal() { return this.spec.normalMax * this.mul; }
-  get vUltra() { return this.spec.ultraMax * this.mul; }
+  get vUltra() { return this.spec.ultraMax * this.mul * this.ultraK; }
 
   /** the drive that moves the ship: B-29's engine, or H8 pushing when docked */
   get driveHealth() { return Math.max(this.engineHealth, this.extHealth); }
@@ -166,7 +175,7 @@ export class Flight {
       const from = this.setSpeed;
       const to = this.preUltraSpeed;
       const steps = [];
-      const n = Math.max(1, Math.ceil((from - to) / (120 * this.spec.rampK * this.mul)));
+      const n = Math.max(1, Math.ceil((from - to) / (120 * this.spec.rampK * this.mul * this.ultraK)));
       for (let i = 1; i <= n; i++) steps.push(from + (to - from) * (i / n));
       this.ultraDown = { steps, i: 0, hold: 0 };
       this.events.push('ultra_off');
@@ -193,12 +202,14 @@ export class Flight {
     const surf = terrainHeight ? terrainHeight(pos) : { h: 0, water: true };
     this.surfaceH = surf.h;
     this.inWaterSurface = surf.water;
-    this.groundAlt = alt - surf.h - HULL_BOTTOM;
+    const HB = this.spec.hullBottom ?? HULL_BOTTOM;
+    this.groundAlt = alt - surf.h - HB;
 
     // --- attitude control (relative to LVLH)
-    const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180;
+    const tk = this.turnK || 1;
+    const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180 * tk;
     const rcs = Math.max(0.15, this.rcsHealth);
-    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1);
+    const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1) * tk;
     const wDes = _v2.set(0, 0, 0);
     if (inp && !this.landed) wDes.set(inp.pitch * maxRate, -inp.yaw * maxRate, -inp.roll * maxRate);
     if (this.autopilot && this.autopilot.wDes) wDes.copy(this.autopilot.wDes);
@@ -221,12 +232,12 @@ export class Flight {
       this.setSpeed += inp.throttle * rate * dt * (Math.abs(this.setSpeed) < 5 ? 0.5 : 1);
       if (Math.abs(inp.throttle) > 0.25) this.ultraAuto = false;
     }
-    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(this.vUltra, this.setSpeed + 14 * this.mul * this.spec.rampK * dt);
+    if (this.ultra && this.ultraAuto && !this.autopilot) this.setSpeed = Math.min(this.vUltra, this.setSpeed + 14 * this.mul * this.spec.rampK * this.ultraK * dt);
     if (this.ultraDown) {
       const u = this.ultraDown;
       const target = u.steps[u.i];
       // each stage: ramp at ~2.5 m/s^2 then hold briefly
-      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 14.0 * this.mul * this.spec.rampK * dt);
+      if (this.setSpeed > target + 0.5) this.setSpeed = Math.max(target, this.setSpeed - 14.0 * this.mul * this.spec.rampK * this.ultraK * dt);
       else { u.hold += dt; if (u.hold > 0.9) { u.i++; u.hold = 0; this.events.push('ultra_stage'); if (u.i >= u.steps.length) this.ultraDown = null; } }
     }
     this.speedLimit = this.ultra ? this.vUltra : (this.ultraDown ? Math.max(this.vNormal, this.setSpeed) : this.vNormal);
@@ -255,6 +266,7 @@ export class Flight {
     const ffwd = this.autopilot && this.autopilot.aff ? this.autopilot.aff.clone() : up.clone().multiplyScalar(-vh.lengthSq() / r);
     // --- drag
     const rho = airDensity(alt);
+    this.rho = rho;
     const vAir = _v3.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
     const vRelAir = vel.clone().sub(vAir);
     const sp = vRelAir.length();
@@ -271,15 +283,15 @@ export class Flight {
     // --- thrust
     const ownDry = this.tank && this.tank.kg <= 0, extDry = this.extTank && this.extTank.kg <= 0;
     this.fuelK = ownDry ? RESERVE_K : 1;
-    const aOwn = this.spec.aMax * Math.max(0, this.engineHealth) * this.fuelK;
-    const aExt = this.aExtra * (extDry ? RESERVE_K : 1);
+    const aOwn = this.spec.aMax * Math.max(0, this.engineHealth) * this.fuelK * this.aK;
+    const aExt = this.aExtra * (extDry ? RESERVE_K : 1) * this.aK;
     const aMaxEngine = aOwn + aExt;
     let aComp = ffwd.clone().sub(g).sub(drag);
     if (aComp.length() > aMaxEngine) aComp.setLength(aMaxEngine);
     // stays stable for coarse (catch-up) steps too; tighter during a docking manoeuvre
-    const tau = Math.max(this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
+    const tau = Math.max(this.autopilot && this.autopilot.tau ? this.autopilot.tau : this.autopilot && this.autopilot.fast ? 0.8 : 2.5, dt * 1.5);
     const fast = this.autopilot && this.autopilot.fast;   // station docking manoeuvre
-    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.driveHealth) * (this.mul > 1 ? Math.min(6, this.mul) : 1) * this.spec.comfortK;
+    const comfort = (this.ultraDown ? 9.0 : this.ultra ? 8.0 : fast ? 6.0 : 1.3) * Math.max(0.3, this.driveHealth) * (this.mul > 1 ? Math.min(6, this.mul) : 1) * this.spec.comfortK * (this.ultra || this.ultraDown ? this.aK : 1);
     const extra = Math.max(0, aMaxEngine - aComp.length());
     const corrLim = Math.min(comfort + (alt < 140000 ? 6 : 0), extra);
     // altitude (radial) errors are corrected first, the rest of the budget goes to the
@@ -303,8 +315,8 @@ export class Flight {
       if (aMag > 1e-5) {
         const F = aMag * (this.spec.mass + this.extMass);
         const share = aExt > 0 && this.extTank ? aExt / Math.max(1e-6, aOwn + aExt) : 0;
-        if (!ownDry) this.tank.kg = Math.max(0, this.tank.kg - F * (1 - share) * dt / this.tank.ve);
-        if (share > 0 && !extDry) this.extTank.kg = Math.max(0, this.extTank.kg - F * share * dt / this.extTank.ve);
+        if (!ownDry) this.tank.kg = Math.max(0, this.tank.kg - F * (1 - share) * dt / (this.tank.ve * this.veK));
+        if (share > 0 && !extDry) this.extTank.kg = Math.max(0, this.extTank.kg - F * share * dt / (this.extTank.ve * this.veK));
       }
     }
 
@@ -330,7 +342,7 @@ export class Flight {
         pos.addScaledVector(vel, dt);
         // keep on the surface
         const rr = pos.length();
-        const target = R_EARTH + this.surfaceH + HULL_BOTTOM - (this.inWater ? 1.2 + Math.sin(performance.now() / 1300) * 0.15 : 0);
+        const target = R_EARTH + this.surfaceH + HB - (this.inWater ? 1.2 + Math.sin(performance.now() / 1300) * 0.15 : 0);
         pos.multiplyScalar(target / rr);
         this.properAcc.copy(g).negate(); // ground pushes up
         this.vertSpeed = 0;
@@ -349,13 +361,13 @@ export class Flight {
 
     // --- ground / water contact
     const rr = pos.length();
-    const gAlt = rr - R_EARTH - this.surfaceH - HULL_BOTTOM;
+    const gAlt = rr - R_EARTH - this.surfaceH - HB;
     if (gAlt <= 0) {
       const vrel = vel.clone().sub(vAir);
       const vn = -vrel.dot(up);           // downward speed
       const vt = vrel.clone().addScaledVector(up, vrel.dot(up)).length();
       const impact = Math.hypot(vn, vt * 0.35);
-      pos.multiplyScalar((R_EARTH + this.surfaceH + HULL_BOTTOM) / rr);
+      pos.multiplyScalar((R_EARTH + this.surfaceH + HB) / rr);
       this.inWater = !!this.inWaterSurface;
       if (impact > 2.5 && this.impactCallback) this.impactCallback(impact, vn, this.inWater);
       this.landed = true;
@@ -385,6 +397,7 @@ export class Flight {
       pos: this.pos.toArray(), vel: this.vel.toArray(), hRef: this.hRef.toArray(),
       qRel: this.qRel.toArray(), wRel: this.wRel.toArray(), setSpeed: this.setSpeed,
       ultra: this.ultra, preUltraSpeed: this.preUltraSpeed, landed: this.landed, inWater: this.inWater,
+      drive: this.ultraK !== 1 || this.aK !== 1 ? { u: this.ultraK, a: this.aK, ve: this.veK, max: this.maxMode } : undefined,
       engineHealth: this.engineHealth, rcsHealth: this.rcsHealth, hullTemp: this.hullTemp,
       fuel: this.tank ? Math.round(this.tank.kg * 10) / 10 : null,
     };
@@ -394,6 +407,8 @@ export class Flight {
     this.pos.fromArray(d.pos); this.vel.fromArray(d.vel); this.hRef.fromArray(d.hRef);
     this.qRel.fromArray(d.qRel); this.wRel.fromArray(d.wRel);
     this.setSpeed = d.setSpeed; this.ultra = d.ultra; this.preUltraSpeed = d.preUltraSpeed || 0;
+    const dr = d.drive || {};
+    this.ultraK = dr.u || 1; this.aK = dr.a || 1; this.veK = dr.ve || 1; this.maxMode = !!dr.max;
     this.landed = d.landed; this.inWater = d.inWater;
     this.engineHealth = d.engineHealth ?? 1; this.rcsHealth = d.rcsHealth ?? 1; this.hullTemp = d.hullTemp ?? 290;
     if (this.tank && typeof d.fuel === 'number') this.tank.kg = Math.max(0, Math.min(this.tank.cap, d.fuel));

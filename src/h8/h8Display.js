@@ -2,17 +2,18 @@
 // shown on every surface round Kaito — the whole inside of the cockpit sphere and the floor under
 // his feet (the floor is a sheet of display glass; the hatch in it slides away under the glass).
 // While he is inside, H8's own hull is left out of the picture (the cameras look past it), so the
-// world shows as if there were no walls at all — through faint panel seams and the thin line where
-// one camera hands over to the next. On top:
-//   - the horizon and pitch ladder, drawn by the display itself (always sharp, every frame);
-//   - small markers on everything trackable, placed along the line from Kaito's eye so they sit
-//     exactly on the object behind them (on the floor too);
-//   - lock-on: whatever he keeps looking at for a moment is locked (several at once; rocks on a
-//     collision course and hostile drones lock themselves), each with its bracket, name, range and
-//     closing speed;
-//   - the information tabs (h8Tabs.js), which he can fold and move anywhere on the sphere.
-// A damaged camera shows: its quarter of the picture goes grainy, tears, drops blocks, turns murky
-// and, when the camera is gone, dead grey static with "NO SIGNAL" — blended across the seams.
+// world shows as if there were no walls at all — through faint panel seams. On top, drawn by the
+// display itself: the horizon and pitch ladder (always sharp). The markers, lock boxes and the
+// focus frame are drawn by h8Hud.js; the information tabs (h8Tabs.js) sit on the glass.
+//
+// Damage, as the glass shows it:
+//   - a hurt camera: its sector of the picture goes grainy, tears, drops blocks, slips its colours;
+//   - a camera that dies: its sector breaks down — a white flash, a few frames of chaos (tearing,
+//     colour slips, blocks of garbage, whole frames dropping out), then the picture folds into a
+//     bright line like an old tube, the line shrinks to a dot, the dot glows out — and that part
+//     of the display is black. Nothing shows there any more: no world, no markers, no tabs;
+//   - a hard knock through the armour can kill single display panels: black, with the crack star
+//     of the broken glass and backlight bleeding at its edges, or flickering, discoloured, striped.
 // Big hits make the whole display stutter. Dark when H8 is powered down; the panels come up one
 // by one.
 import * as THREE from 'three';
@@ -33,19 +34,159 @@ void main(){
 #endif
   gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
 
+/**
+ * The display's damage at a point of the glass, shared by the display itself and the tabs on it.
+ * displayFx(P (H8-local point on the glass), d (line of sight through it), sp (screen pixel), ui (1:
+ * for something drawn on the glass, which a hurt camera's noise does not touch)) gives the colour
+ * laid over the picture there, how opaque it is, and whether the display is dead there (1: black —
+ * nothing drawn on it shows).
+ */
+export const DISPLAY_FX = /* glsl */`
+uniform vec3 uCam[4];
+uniform float uCamH[4];     // camera health (1 fine .. 0 gone)
+uniform float uCamFail[4];  // seconds since that camera died (-1: alive)
+uniform sampler2D tPanel;   // the sphere's 30 x 15 panels (r: health, g: seed)
+uniform sampler2D tFloorP;  // the floor's 0.24 m tiles (16 x 16)
+uniform vec3 uC;            // cockpit centre
+uniform float uFloorY;
+uniform float uTime;
+float dhs(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+
+void displayFx(vec3 P, vec3 d, vec2 sp, float ui, out vec3 fc, out float fa, out float dead){
+  fc = vec3(0.0); fa = 0.0; dead = 0.0;
+  float tt = floor(uTime * 24.0);
+  // ---- which camera's picture this is (nearest axis), its health and its own sector coordinates
+  float b1 = -2.0, b2 = -2.0, h = 1.0, f = -1.0;
+  vec3 ax = vec3(0.0, 1.0, 0.0);
+  for (int i = 0; i < 4; i++){
+    float k = dot(d, uCam[i]);
+    if (k > b1){ b2 = b1; b1 = k; h = uCamH[i]; f = uCamFail[i]; ax = uCam[i]; } else if (k > b2){ b2 = k; }
+  }
+  vec3 rgt = normalize(cross(ax, abs(ax.y) > 0.9 ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 1.0, 0.0)));
+  vec3 upv = cross(rgt, ax);
+  vec2 sc = vec2(dot(d, rgt), dot(d, upv)) / 0.85;
+  // ---- the display panel here (sphere: by direction from the centre; floor: square tiles)
+  float ph = 1.0, pseed = 0.0; vec2 pf;
+  if (P.y < uFloorY + 0.004){
+    vec2 g = P.xz / 0.24; vec2 pan = floor(g); pf = fract(g);
+    vec4 t = texture2D(tFloorP, (pan + 8.5) / 16.0); ph = t.r; pseed = t.g;
+  } else {
+    vec3 dC = normalize(P - uC);
+    vec2 g = vec2(atan(dC.x, -dC.z) / 6.28318 * 30.0, asin(clamp(dC.y, -1.0, 1.0)) / 3.14159 * 15.0);
+    vec2 pan = floor(g); pf = fract(g);
+    vec4 t = texture2D(tPanel, (pan + vec2(16.5, 8.5)) / vec2(32.0, 16.0)); ph = t.r; pseed = t.g;
+  }
+  // ---- a camera that died: its sector breaks down, then stays black
+  if (f >= 0.0){
+    if (f < 0.09){ fc = vec3(1.3, 1.26, 1.2); fa = 0.93; return; }
+    if (f < 0.95){
+      float k = (f - 0.09) / 0.86;
+      float rh = 3.0 + 14.0 * dhs(vec2(tt, 3.1));
+      float row = floor(sp.y / rh);
+      float tear = step(0.62 - 0.35 * k, dhs(vec2(row, tt)));
+      vec2 blkP = floor(sp / (10.0 + 34.0 * dhs(vec2(tt, 5.0))));
+      float blk = step(1.0 - 0.8 * k, dhs(blkP + tt * 0.37));
+      float n = dhs(floor(sp / 2.0) + vec2(tt * 1.3, tt * 0.7));
+      vec3 c = vec3(0.15 + 0.7 * n);
+      c = mix(c, vec3(0.75, 0.05, 0.6), step(0.86, dhs(vec2(row * 1.7, tt))));
+      c = mix(c, vec3(0.05, 0.75, 0.3), step(0.9, dhs(vec2(row * 2.3, tt + 1.0))));
+      c = mix(c, vec3(0.02), blk);
+      float drop = step(0.82, dhs(vec2(tt, 9.0)));            // whole frames drop out
+      fc = mix(c, vec3(0.0), drop);
+      fa = max(max(tear * (0.55 + 0.4 * k), blk), drop);
+      fa = max(fa, 0.25 + 0.6 * k);
+      return;
+    }
+    dead = 1.0; fa = 1.0;
+    if (f < 1.35){
+      // the picture folds up into a line, like an old tube: what is left of it squeezes into a
+      // narrowing band that grows brighter as it narrows (streaks of the last frame in it)
+      float s = (f - 0.95) / 0.4;
+      float band = mix(0.9, 0.006, smoothstep(0.0, 1.0, s));
+      float inBand = 1.0 - smoothstep(band, band + 0.012, abs(sc.y));
+      float streak = 0.55 + 0.45 * dhs(vec2(floor(sp.y / 2.0), tt));
+      float lum = min(3.0, 0.07 / max(band, 0.02));
+      fc = vec3(0.85, 0.92, 1.0) * lum * streak * inBand;
+      return;
+    }
+    if (f < 1.75){
+      // the line shrinks to a dot
+      float s = (f - 1.35) / 0.4;
+      float w = mix(1.0, 0.004, s);
+      float line = (1.0 - smoothstep(0.004, 0.014, abs(sc.y))) * (1.0 - smoothstep(w * 0.85, w, abs(sc.x)));
+      fc = vec3(0.95, 0.97, 1.0) * line * (3.2 - 1.6 * s);
+      return;
+    }
+    if (f < 2.9){
+      // the dot glows out; a few pixels spark as the panels let go
+      float s = (f - 1.75) / 1.15;
+      float dotg = exp(-dot(sc, sc) * 1400.0) * (1.0 - s) * 2.5;
+      float spark = step(0.9994, dhs(floor(sp / 2.0) + floor(uTime * 9.0))) * (1.0 - s);
+      fc = vec3(0.7, 0.8, 1.0) * (dotg + spark);
+      return;
+    }
+    return;
+  }
+  // ---- a dead or broken panel
+  if (ph < 0.35){
+    dead = 1.0; fa = 1.0;
+    // the crack star of the broken glass, backlight bleeding at the edges, a few stuck pixels
+    vec2 c0 = vec2(0.3 + 0.4 * fract(pseed * 7.13), 0.3 + 0.4 * fract(pseed * 3.71));
+    vec2 q = pf - c0;
+    float a = atan(q.y, q.x), r = length(q);
+    float rays = 0.0;
+    for (int k = 0; k < 6; k++){
+      float ak = fract(pseed * (13.0 + float(k) * 5.0)) * 6.28318;
+      float da = abs(mod(a - ak + 3.14159, 6.28318) - 3.14159);
+      rays = max(rays, (1.0 - smoothstep(0.0, 0.02 + 0.03 * r, da * r)) * step(r, 0.25 + 0.5 * fract(pseed * float(k + 3) * 1.9)));
+    }
+    float ring = 1.0 - smoothstep(0.0, 0.012, abs(r - 0.08 - 0.06 * fract(pseed * 2.3)));
+    float bleed = smoothstep(0.42, 0.5, max(abs(pf.x - 0.5), abs(pf.y - 0.5)));
+    float stuck = step(0.9985, dhs(floor(sp / 1.5) + pseed * 100.0));
+    fc = vec3(0.32, 0.34, 0.36) * max(rays, ring * 0.7) + vec3(0.1, 0.25, 0.45) * bleed * 0.45 + vec3(0.8, 0.2, 0.9) * stuck;
+    return;
+  }
+  // ---- a hurt camera: grain, tearing, dropped blocks, slipping colours (screen pixels: stays
+  // fine when zoomed)
+  // (not over what the display draws itself — the tabs: they are not in the camera's picture)
+  float dmg = smoothstep(0.995, 0.3, h) * (1.0 - ui);
+  if (dmg > 0.01){
+    float px = 1.0 + floor(dmg * 3.5);
+    float n = dhs(floor(sp / px) + vec2(tt * 1.37, tt * 0.71));
+    float snow = smoothstep(0.08, 1.0, dmg) * (0.2 + 0.8 * dmg);
+    float row = floor(sp.y / (2.0 + 7.0 * dmg));
+    float tear = step(1.0 - 0.22 * dmg * dmg, dhs(vec2(row, tt)));
+    float blk = step(1.0 - dmg * dmg * 0.6, dhs(floor(sp / 22.0) * 1.7 + floor(uTime * (1.5 + 5.0 * dmg)) * 0.37));
+    float murk = smoothstep(0.25, 0.85, dmg) * 0.55;
+    vec3 c = mix(vec3(0.03, 0.035, 0.04), vec3(0.08 + 0.6 * n), snow);
+    float a = max(murk, snow * (0.3 + 0.45 * n));
+    c += vec3(0.35, 0.0, 0.25) * step(0.985 - 0.04 * dmg, dhs(vec2(floor(sp.y / 3.0), tt + 7.0))) * dmg;
+    if (tear > 0.5){ c = mix(c, vec3(0.65, 0.7, 0.75) * dhs(vec2(row, tt + 3.0)), 0.85); a = max(a, 0.45 + 0.45 * dmg); }
+    if (blk > 0.5 && dmg > 0.3){ c = vec3(0.012) + vec3(0.07 * n); a = max(a, 0.94); }
+    // now and then the sector drops out for a few frames
+    if (dmg > 0.5 && dhs(vec2(floor(uTime * 6.0), ax.x * 13.0 + ax.z * 7.0)) > 1.08 - dmg * 0.25){ c = vec3(0.0); a = 1.0; }
+    fc = c; fa = a;
+  }
+  // ---- a panel that took a knock: flickering, a colour cast, a stripe of dead pixels
+  if (ph < 0.95){
+    float k = (0.95 - ph) / 0.6;
+    float flick = step(0.75 - 0.3 * k, dhs(vec2(floor(uTime * (4.0 + 10.0 * pseed)), pseed * 50.0)));
+    vec3 tint = mix(vec3(0.25, 0.0, 0.3), vec3(0.0, 0.25, 0.1), step(0.5, pseed));
+    float stripe = 1.0 - smoothstep(0.0, 0.015, abs(pf.x - fract(pseed * 3.3)));
+    fc = mix(fc, tint + vec3(0.6) * stripe, 0.6);
+    fa = max(fa, max(flick * (0.4 + 0.5 * k), stripe * 0.9) * k + 0.12 * k);
+  }
+}`;
+
 const FRAG = /* glsl */`
 uniform float uPower;     // 0 off .. 1 on (the boot sweeps through it)
-uniform vec3 uCam[4];
-uniform float uCamH[4];   // camera health (1 fine .. 0 gone)
-uniform vec3 uC;          // cockpit centre
 uniform vec3 uEye;        // Kaito's eye (H8-local)
 uniform vec3 uUp;         // local vertical (H8-local), for the horizon
 uniform float uLadder;    // 0..1 horizon / ladder brightness
-uniform float uTime;
 uniform float uZoom;      // view magnification (the fine lines fade while zoomed)
 uniform float uGlitch;    // the whole display stutters (power dips after hits)
 varying vec3 vP;
-float hsh(vec2 p){ return fract(sin(dot(p, vec2(12.9898, 78.233))) * 43758.5453); }
+${DISPLAY_FX}
 // a line where x == 0, w pixels wide, antialiased by its size on screen (no shimmer when moving)
 float aline(float x, float w){ float fw = max(fwidth(x), 1e-6); return 1.0 - smoothstep(w * 0.5, w * 0.5 + 1.0, abs(x) / fw); }
 void main(){
@@ -62,17 +203,16 @@ void main(){
   vec2 pan = floor(g);
   vec2 fg = fract(g) - 0.5;
   float bez = max(aline(fg.x, 1.3), aline(fg.y, 1.3)) * zoomFade;
-  float bootK = uPower * 1.15 - hsh(pan) * 0.9;
+  float bootK = uPower * 1.15 - dhs(pan) * 0.9;
   float on = smoothstep(0.0, 0.08, bootK);
-  // which camera sees this way; the damage of its sector, blended across the seam
-  float b1 = -2.0, b2 = -2.0, h1 = 1.0, h2 = 1.0;
-  for (int i = 0; i < 4; i++){
-    float k = dot(d, uCam[i]);
-    if (k > b1){ b2 = b1; h2 = h1; b1 = k; h1 = uCamH[i]; } else if (k > b2){ b2 = k; h2 = uCamH[i]; }
-  }
-  float hl = mix(0.5 * (h1 + h2), h1, smoothstep(0.0, 0.07, b1 - b2));
-  float seam = aline(b1 - b2, 1.2) * zoomFade;
-  float dmg = 1.0 - hl;
+  vec3 col = vec3(0.0);
+  float alpha = mix(1.0, 0.035, on);
+  // ---- damage over the picture (a dead part is black: no ladder, no seams)
+  vec3 fc; float fa, dead;
+  displayFx(vP, d, gl_FragCoord.xy, 0.0, fc, fa, dead);
+  if (dead > 0.5 && on > 0.5){ gl_FragColor = vec4(fc, 1.0); return; }
+  col = mix(col, fc, fa);
+  alpha = max(alpha, fa * on);
   // horizon and pitch ladder, seen from the eye
   float s = dot(d, uUp);
   vec3 e1 = normalize(cross(uUp, abs(uUp.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
@@ -86,42 +226,15 @@ void main(){
     float dn = aline(el + a, 1.0) * step(0.5, fract(az * 18.0 / 3.14159));
     lad = max(lad, (up + dn) * 0.38);
   }
-  lad *= uLadder * mix(0.35, 1.0, zoomFade);
-  vec3 col = vec3(0.0);
-  float alpha = mix(1.0, 0.035, on);
-  // ---- a damaged camera's sector (noise in screen pixels: it stays fine when zoomed)
+  lad *= uLadder * mix(0.35, 1.0, zoomFade) * (1.0 - fa);
+  // the whole display stutters
   vec2 sp = gl_FragCoord.xy;
   float tt = floor(uTime * 24.0);
-  if (dmg > 0.04){
-    float px = 1.0 + floor(dmg * 3.5);
-    float n = hsh(floor(sp / px) + vec2(tt * 1.37, tt * 0.71));
-    float snow = smoothstep(0.08, 1.0, dmg) * (0.2 + 0.8 * dmg);
-    float row = floor(sp.y / (2.0 + 7.0 * dmg));
-    float tear = step(1.0 - 0.22 * dmg * dmg, hsh(vec2(row, tt)));
-    float blk = step(1.0 - dmg * dmg * 0.75, hsh(pan * 1.7 + floor(uTime * (1.5 + 5.0 * dmg)) * 0.37));
-    float murk = smoothstep(0.25, 0.85, dmg) * 0.6;
-    vec3 c = mix(vec3(0.03, 0.035, 0.04), vec3(0.08 + 0.6 * n), snow);
-    float aa = max(murk, snow * (0.3 + 0.45 * n));
-    // colour fringes: the picture's channels slip apart
-    c += vec3(0.35, 0.0, 0.25) * step(0.985 - 0.04 * dmg, hsh(vec2(floor(sp.y / 3.0), tt + 7.0))) * dmg;
-    if (tear > 0.5){ c = mix(c, vec3(0.65, 0.7, 0.75) * hsh(vec2(row, tt + 3.0)), 0.85); aa = max(aa, 0.45 + 0.45 * dmg); }
-    if (blk > 0.5 && dmg > 0.3){ c = vec3(0.012) + vec3(0.07 * n); aa = max(aa, 0.94); }
-    // the camera is gone: dead grey static, rolling
-    if (hl < 0.15){
-      float roll = fract(sp.y / 220.0 - uTime * 0.6);
-      c = vec3(0.035, 0.04, 0.045) + vec3(0.14 * n) + vec3(0.05) * smoothstep(0.96, 1.0, roll);
-      aa = 0.97;
-    }
-    col = c;
-    alpha = max(alpha, aa * on);
-  }
-  // the whole display stutters
   if (uGlitch > 0.0){
-    float gb = step(1.0 - 0.35 * uGlitch, hsh(vec2(floor(sp.y / 4.0), tt)));
+    float gb = step(1.0 - 0.35 * uGlitch, dhs(vec2(floor(sp.y / 4.0), tt)));
     col = mix(col, vec3(0.75), gb * 0.7);
     alpha = max(alpha, gb * 0.65 * uGlitch);
   }
-  col += vec3(0.25, 0.45, 0.6) * seam * 0.05 * on;
   col += vec3(0.5, 0.9, 1.0) * lad * on;
   alpha = max(alpha, lad * 0.8 * on);
   alpha = max(alpha, bez * (0.45 * on + 0.75 * (1.0 - on)));
@@ -132,10 +245,6 @@ void main(){
 }`;
 
 export const HUD_COL = { cyan: 'rgba(130,232,255,0.95)', dim: 'rgba(150,215,245,0.62)', red: 'rgba(255,92,64,0.98)', amber: 'rgba(255,190,90,0.97)', green: 'rgba(120,255,170,0.95)', white: 'rgba(225,242,255,0.96)' };
-const C = HUD_COL;
-const FONT = '"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP","Yu Gothic",system-ui,sans-serif';
-const MONO = '"SF Mono","Menlo","Consolas","Noto Sans Mono",monospace';
-const DEG = Math.PI / 180;
 
 /** a short readable distance */
 export function fmtDist(m) {
@@ -146,10 +255,8 @@ export function fmtDist(m) {
 
 export function altOf(pos) { return pos.length() - R_EARTH; }
 
-const MARK_R = 0.9;        // sprite sizes are set for this distance (they are moved onto the display)
-const LOCK_MAX = 8;
-const FOCUS = 6.5 * DEG;   // the focus cone round the line of sight
-const DWELL = 0.4;         // s of looking before a lock
+/** the camera health below which a camera is gone (its part of the display goes black) */
+export const CAM_DEAD = 0.3;
 
 /** the floor: a disc of display glass at H8.floorY with the round hatch opening behind the seat */
 export const FLOOR = (() => {
@@ -157,29 +264,6 @@ export const FLOOR = (() => {
   const r = Math.sqrt(R * R - (Cc.y - H8.floorY) ** 2);
   return { y: H8.floorY, r, c: new THREE.Vector3(Cc.x, H8.floorY, Cc.z), hatch: new THREE.Vector3(0, H8.floorY, H8.shaftZ), hatchR: H8.shaftR + 0.02 };
 })();
-
-function canvasTex(w, h) {
-  const c = document.createElement('canvas');
-  c.width = w; c.height = h;
-  const tex = new THREE.CanvasTexture(c);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  tex.generateMipmaps = false;
-  tex.minFilter = THREE.LinearFilter;
-  tex.anisotropy = 4;
-  return { c, g: c.getContext('2d'), tex };
-}
-
-function sprite(w, h, angW, center) {
-  const t = canvasTex(w, h);
-  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: t.tex, transparent: true, depthWrite: false, toneMapped: false }));
-  const sw = 2 * MARK_R * Math.tan(angW * DEG / 2);
-  sp.scale.set(sw, sw * h / w, 1);
-  if (center) sp.center.set(center[0], center[1]);
-  sp.layers.set(LAYER_NEAR);
-  sp.renderOrder = 25;
-  sp.visible = false;
-  return Object.assign(t, { sp });
-}
 
 const inLocker = (az, el) => {
   const L = H8.locker;
@@ -189,7 +273,16 @@ const inLocker = (az, el) => {
   return Math.abs(d) < L.hw && el > L.el0 && el < L.el1;
 };
 
-/** the inside of the cockpit sphere above the floor (facing in), less the suit locker's panel */
+const inShelterDoor = (az, el) => {
+  const S = H8.shelter;
+  let d = az - S.az;
+  while (d > Math.PI) d -= Math.PI * 2;
+  while (d < -Math.PI) d += Math.PI * 2;
+  return Math.abs(d) < S.hw && el > S.el0 && el < S.el1;
+};
+
+/** the inside of the cockpit sphere above the floor (facing in), less the suit locker's and the
+ * shelter's panels */
 function sphereGeometry() {
   const Cc = H8.cockpitC, R = H8.cockpitR;
   const pos = [], idx = [];
@@ -206,7 +299,7 @@ function sphereGeometry() {
     if (Cc.y + Math.sin(elTop) * R < H8.floorY - 0.005) continue;      // under the floor
     for (let i = 0; i < NA; i++) {
       const az = -Math.PI + (i + 0.5) / NA * Math.PI * 2, el = -Math.PI / 2 + Math.PI * (j + 0.5) / NE;
-      if (inLocker(az, el)) continue;
+      if (inLocker(az, el) || inShelterDoor(az, el)) continue;
       const a = j * (NA + 1) + i, b = a + 1, c = a + NA + 1, d = c + 1;
       idx.push(a, b, c, b, d, c);
     }
@@ -217,16 +310,15 @@ function sphereGeometry() {
   return g;
 }
 
-/** the locker's panel: the patch of the sphere it covers (it slides along the sphere to open) */
-function lockerGeometry() {
-  const Cc = H8.cockpitC, R = H8.cockpitR - 0.006, L = H8.locker;
+/** a patch of the sphere (a panel that slides along it to open): az +- hw, el0..el1 */
+function patchGeometry(az0, hw, el0, el1) {
+  const Cc = H8.cockpitC, R = H8.cockpitR - 0.006;
   const pos = [], idx = [];
   const NA = 12, NE = 16;
-  const a0 = -L.hw, a1 = L.hw;
   for (let j = 0; j <= NE; j++) {
-    const el = L.el0 + (L.el1 - L.el0) * j / NE;
+    const el = el0 + (el1 - el0) * j / NE;
     for (let i = 0; i <= NA; i++) {
-      const az = L.az + a0 + (a1 - a0) * i / NA;
+      const az = az0 - hw + 2 * hw * i / NA;
       pos.push(Cc.x + Math.sin(az) * Math.cos(el) * R, Cc.y + Math.sin(el) * R, Cc.z - Math.cos(az) * Math.cos(el) * R);
     }
   }
@@ -255,20 +347,38 @@ function floorGeometry() {
   return g;
 }
 
+function panelTexture(w, h) {
+  const data = new Uint8Array(w * h * 4);
+  for (let i = 0; i < w * h; i++) { data[i * 4] = 255; data[i * 4 + 1] = Math.floor(Math.random() * 255); data[i * 4 + 2] = 0; data[i * 4 + 3] = 255; }
+  const t = new THREE.DataTexture(data, w, h, THREE.RGBAFormat);
+  t.magFilter = THREE.NearestFilter; t.minFilter = THREE.NearestFilter;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+}
+
 export class H8Display {
   constructor() {
+    this.panelTex = panelTexture(32, 16);
+    this.floorTex = panelTexture(16, 16);
     const uniforms = {
       uPower: { value: 0 },
-      uCam: { value: CAMERAS.map((c) => c.dir.clone()) }, uCamH: { value: [1, 1, 1, 1] },
+      uCam: { value: CAMERAS.map((c) => c.dir.clone()) }, uCamH: { value: [1, 1, 1, 1] }, uCamFail: { value: [-1, -1, -1, -1] },
+      tPanel: { value: this.panelTex }, tFloorP: { value: this.floorTex }, uFloorY: { value: H8.floorY },
       uC: { value: H8.cockpitC.clone() }, uEye: { value: H8.cockpitC.clone() },
       uUp: { value: new THREE.Vector3(0, 1, 0) }, uLadder: { value: 1 },
       uTime: { value: 0 }, uZoom: { value: 1 }, uGlitch: { value: 0 }, uDoorM: { value: new THREE.Matrix4() },
     };
     this.uniforms = uniforms;
-    const mk = (defines) => new THREE.ShaderMaterial({ uniforms, defines, vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide });
+    // (a piece that moves — a sliding panel, the hatch cover — has its own placement: uDoorM)
+    const mk = (defines, own) => new THREE.ShaderMaterial({
+      uniforms: own ? Object.assign({}, uniforms, { uDoorM: { value: new THREE.Matrix4() } }) : uniforms,
+      defines: own ? Object.assign({ DOOR: 1 }, defines) : defines,
+      vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, side: THREE.DoubleSide,
+    });
     this.mat = mk({});
     this.matFloor = mk({ FLOOR: 1 });
-    this.matDoor = mk({ DOOR: 1 });
+    this.mk = mk;
     this.mesh = new THREE.Group();
     this.mesh.name = 'h8Display';
     const add = (geo, mat, order) => {
@@ -284,52 +394,37 @@ export class H8Display {
     // the hatch cover: a disc of the same glass; it slides away sideways under the floor
     const hg = new THREE.CircleGeometry(FLOOR.hatchR + 0.002, 48);
     hg.rotateX(-Math.PI / 2);
-    this.hatchMesh = add(hg, this.matFloor, 19);
+    this.matHatch = mk({ FLOOR: 1 }, true);
+    this.hatchMesh = add(hg, this.matHatch, 19);
     this.hatchOpen = 0;
     this.setHatch(0);
-    // the suit locker's panel: a piece of the display that slides aside along the sphere
-    this.lockerPivot = new THREE.Group();
-    this.lockerPivot.position.set(H8.cockpitC.x, 0, H8.cockpitC.z);
-    this.mesh.add(this.lockerPivot);
-    this.lockerDoor = new THREE.Mesh(lockerGeometry(), this.matDoor);
-    this.lockerDoor.renderOrder = 19;
-    this.lockerDoor.frustumCulled = false;
-    this.lockerDoor.layers.set(LAYER_NEAR);
-    this.lockerPivot.add(this.lockerDoor);
-    // its edge glows while it moves
-    const eg = new THREE.EdgesGeometry(lockerGeometry(), 30);
-    this.lockerEdge = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x9fe0ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
-    this.lockerEdge.layers.set(LAYER_NEAR);
-    this.lockerEdge.renderOrder = 21;
-    this.lockerPivot.add(this.lockerEdge);
+    // the suit locker's panel and the shelter's: pieces of the display that slide aside along the
+    // sphere (each with its own placement)
+    const slider = (az, hw, el0, el1) => {
+      const pivot = new THREE.Group();
+      pivot.position.set(H8.cockpitC.x, 0, H8.cockpitC.z);
+      this.mesh.add(pivot);
+      const mat = mk({}, true);
+      const door = new THREE.Mesh(patchGeometry(az, hw, el0, el1), mat);
+      door.renderOrder = 19; door.frustumCulled = false; door.layers.set(LAYER_NEAR);
+      pivot.add(door);
+      const eg = new THREE.EdgesGeometry(patchGeometry(az, hw, el0, el1), 30);
+      const edge = new THREE.LineSegments(eg, new THREE.LineBasicMaterial({ color: 0x9fe0ff, transparent: true, opacity: 0, depthWrite: false, toneMapped: false }));
+      edge.layers.set(LAYER_NEAR); edge.renderOrder = 21;
+      pivot.add(edge);
+      return { pivot, door, edge, mat, hw };
+    };
+    const L = H8.locker, S = H8.shelter;
+    this.lockerS = slider(L.az, L.hw, L.el0, L.el1);
+    this.shelterS = slider(S.az, S.hw, S.el0, S.el1);
     this.power = 0;
     this.t = 0;
     this.glitch = 0;
     this.zoom = 1;
-    // the markers sit on the display along the lines from the eye
-    this.marks = new THREE.Group();
-    this.mesh.add(this.marks);
-    this.orbit = {};
-    for (const k of ['pro', 'retro', 'zen', 'nad']) {
-      const s = sprite(128, 104, 5.2, [0.5, 64 / 104]);
-      this.drawOrbitMark(s, k);
-      this.marks.add(s.sp);
-      this.orbit[k] = s;
-    }
-    this.pips = [];
-    for (let i = 0; i < 28; i++) { const s = sprite(256, 64, 9, [24 / 256, 0.5]); s.key = ''; this.marks.add(s.sp); this.pips.push(s); }
-    this.lockSlots = [];
-    for (let i = 0; i < LOCK_MAX + 4; i++) { const s = sprite(512, 192, 18, [96 / 512, 0.5]); s.used = false; this.marks.add(s.sp); this.lockSlots.push(s); }
-    this.focus = sprite(128, 128, 2 * FOCUS / DEG * 1.05);
-    this.marks.add(this.focus.sp);
-    // what a damaged camera's sector says about itself
-    this.camLabels = CAMERAS.map(() => { const s = sprite(320, 72, 13); s.key = ''; this.marks.add(s.sp); return s; });
     this.camH = [1, 1, 1, 1];
-    this.locks = [];          // { id, c (candidate), slot, t, redraw }
-    this.dwell = new Map();   // id -> s looked at
-    this.lastFocus = -1;
-    this.fkS = 0;             // the dwell arc as drawn (eased)
-    this.pulse = 0;           // the ring's flash when something locks
+    this.failT = [null, null, null, null];
+    this.panelHP = new Float32Array(32 * 16).fill(1);
+    this.floorHP = new Float32Array(16 * 16).fill(1);
     this.eye = H8.cockpitC.clone();
   }
 
@@ -338,18 +433,26 @@ export class H8Display {
     this.hatchOpen = e;
     const k = e * e * (3 - 2 * e);
     this.hatchMesh.position.set(FLOOR.hatch.x + k * (FLOOR.hatchR * 2 + 0.06), FLOOR.y - 0.012 * Math.min(1, e * 6), FLOOR.hatch.z);
+    this.hatchMesh.updateMatrix();
+    this.matHatch.uniforms.uDoorM.value.copy(this.hatchMesh.matrix);
     this.hatchMesh.visible = e < 0.999;
   }
 
-  /** the suit locker's panel: 0 shut .. 1 slid aside (toward the bow, over the display next to it) */
-  setLocker(e) {
+  slide(S, e, dir) {
     const k = e * e * (3 - 2 * e);
-    this.lockerPivot.rotation.y = -k * (H8.locker.hw * 2 + 0.06);
-    this.lockerPivot.updateMatrix();
-    this.uniforms.uDoorM.value.copy(this.lockerPivot.matrix);
-    this.lockerEdge.material.opacity = Math.min(1, Math.sin(Math.min(1, e) * Math.PI) * 1.5 + (e > 0.01 && e < 0.99 ? 0.3 : 0));
-    this.lockerEdge.visible = this.lockerEdge.material.opacity > 0.01;
+    S.pivot.rotation.y = dir * k * (S.hw * 2 + 0.06);
+    S.pivot.updateMatrix();
+    S.mat.uniforms.uDoorM.value.copy(S.pivot.matrix);
+    S.edge.material.opacity = Math.min(1, Math.sin(Math.min(1, e) * Math.PI) * 1.5 + (e > 0.01 && e < 0.99 ? 0.3 : 0));
+    S.edge.visible = S.edge.material.opacity > 0.01;
+    S.door.visible = e < 0.999;
   }
+
+  /** the suit locker's panel: 0 shut .. 1 slid aside (toward the bow, over the display next to it) */
+  setLocker(e) { this.slide(this.lockerS, e, -1); }
+
+  /** the shelter's panel (at the back of the cockpit): 0 shut .. 1 slid aside */
+  setShelter(e) { this.slide(this.shelterS, e, 1); }
 
   /**
    * How far the display is from the eye E (H8-local) along dir: the sphere above the floor, or the
@@ -368,31 +471,112 @@ export class H8Display {
     return Math.max(0.05, t);
   }
 
-  /** where Kaito's eye is (H8-local): the markers hang along the lines from it */
+  /** where Kaito's eye is (H8-local) */
   setEye(camLocal) {
-    this.marks.position.copy(camLocal);
     this.uniforms.uEye.value.copy(camLocal);
     this.eye.copy(camLocal);
   }
 
-  /** a marker (sprite) placed on the display along dir from the eye */
-  place(sp, dir) {
-    const t = this.surface(this.eye, dir);
-    const r = t - 0.03;
-    sp.position.copy(dir).multiplyScalar(r);
-    if (!sp.userData.s0) sp.userData.s0 = sp.scale.clone();
-    // the same angular size at any zoom (the view narrows, the markers must not grow)
-    sp.scale.copy(sp.userData.s0).multiplyScalar(r / MARK_R / this.zoom);
-    sp.visible = true;
-    return true;
+  /** camera health from the hull's record: a camera that has just died starts its breakdown */
+  setCameras(health, restoring = false) {
+    for (let i = 0; i < 4; i++) {
+      const h = health[i];
+      const was = this.camH[i];
+      this.uniforms.uCamH.value[i] = h;
+      this.camH[i] = h;
+      if (h < CAM_DEAD && this.failT[i] === null) this.failT[i] = restoring || was < CAM_DEAD ? -1e6 : this.t;
+      else if (h >= CAM_DEAD) this.failT[i] = null;
+    }
   }
 
-  setCameras(health) { for (let i = 0; i < 4; i++) { this.uniforms.uCamH.value[i] = health[i]; this.camH[i] = health[i]; } }
+  /**
+   * Is the display dead along this line of sight (H8-local, from the eye): its camera gone (its
+   * breakdown included once it is past the first flash), or — with P, the point of the glass there
+   * — that panel broken
+   */
+  deadAt(dir, P) {
+    let best = -2, h = 1, i0 = 0;
+    for (let i = 0; i < 4; i++) { const k = dir.dot(CAMERAS[i].dir); if (k > best) { best = k; h = this.camH[i]; i0 = i; } }
+    if (h < CAM_DEAD && this.failT[i0] !== null && this.t - this.failT[i0] > 0.95) return true;
+    if (P) return this.panelAt(P) < 0.35;
+    return false;
+  }
+
+  /** the health of the display panel at a point of the glass (H8-local) */
+  panelAt(P) {
+    if (P.y < FLOOR.y + 0.004) {
+      const ix = Math.floor(P.x / 0.24) + 8, iz = Math.floor(P.z / 0.24) + 8;
+      return ix >= 0 && ix < 16 && iz >= 0 && iz < 16 ? this.floorHP[iz * 16 + ix] : 1;
+    }
+    const C = H8.cockpitC;
+    const dx = P.x - C.x, dy = P.y - C.y, dz = P.z - C.z, l = Math.hypot(dx, dy, dz) || 1;
+    const ia = Math.floor(Math.atan2(dx / l, -dz / l) / (Math.PI * 2) * 30) + 16;
+    const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, dy / l))) / Math.PI * 15) + 8;
+    return ia >= 0 && ia < 32 && ie >= 0 && ie < 16 ? this.panelHP[ie * 32 + ia] : 1;
+  }
+
+  /** how far a direction's camera is hurt (0 fine .. 1 gone) */
+  damageAt(dir) {
+    let best = -2, h = 1;
+    for (let i = 0; i < 4; i++) { const k = dir.dot(CAMERAS[i].dir); if (k > best) { best = k; h = this.camH[i]; } }
+    return Math.max(0, Math.min(1, (0.995 - h) / (0.995 - CAM_DEAD)));
+  }
 
   setZoom(z) { this.zoom = z; this.uniforms.uZoom.value = z; }
 
   /** a hard knock: the picture stutters for a moment */
   stutter(k) { this.glitch = Math.min(1, Math.max(this.glitch, k)); }
+
+  /**
+   * A blow through the armour shakes the display panels on that side (dirLocal: H8-local, toward
+   * the blow): some flicker, some go dark with their glass cracked
+   */
+  panelHit(dirLocal, E) {
+    if (E < 6e5) return;
+    const n = Math.min(9, Math.floor(1 + E / 2.5e6));
+    const d = dirLocal.clone().normalize();
+    for (let k = 0; k < n; k++) {
+      const j = d.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.35)).normalize();
+      const hurt = Math.min(1, 0.25 + Math.random() * 0.5 + E / 3e7);
+      if (j.y < -0.55) {
+        // the floor: where that line meets it
+        const t = (FLOOR.y - H8.cockpitC.y) / j.y;
+        const x = H8.cockpitC.x + j.x * t, z = H8.cockpitC.z + j.z * t;
+        const ix = Math.floor(x / 0.24) + 8, iz = Math.floor(z / 0.24) + 8;
+        if (ix >= 0 && ix < 16 && iz >= 0 && iz < 16) this.floorHP[iz * 16 + ix] = Math.max(0, this.floorHP[iz * 16 + ix] - hurt);
+      } else {
+        const ia = Math.floor(Math.atan2(j.x, -j.z) / (Math.PI * 2) * 30) + 16;
+        const ie = Math.floor(Math.asin(Math.max(-1, Math.min(1, j.y))) / Math.PI * 15) + 8;
+        if (ia >= 0 && ia < 32 && ie >= 0 && ie < 16) this.panelHP[ie * 32 + ia] = Math.max(0, this.panelHP[ie * 32 + ia] - hurt);
+      }
+    }
+    this.syncPanels();
+  }
+
+  syncPanels() {
+    const P = this.panelTex.image.data, F = this.floorTex.image.data;
+    for (let i = 0; i < this.panelHP.length; i++) P[i * 4] = Math.round(this.panelHP[i] * 255);
+    for (let i = 0; i < this.floorHP.length; i++) F[i * 4] = Math.round(this.floorHP[i] * 255);
+    this.panelTex.needsUpdate = true;
+    this.floorTex.needsUpdate = true;
+  }
+
+  /** the repair dock replaces the broken panels */
+  repairPanels() { this.panelHP.fill(1); this.floorHP.fill(1); this.syncPanels(); }
+
+  /** broken panels for the save: [[i, hp], ...] (floor indices offset by 1000) */
+  serializePanels() {
+    const out = [];
+    this.panelHP.forEach((h, i) => { if (h < 0.999) out.push([i, +h.toFixed(3)]); });
+    this.floorHP.forEach((h, i) => { if (h < 0.999) out.push([1000 + i, +h.toFixed(3)]); });
+    return out;
+  }
+
+  restorePanels(list) {
+    this.panelHP.fill(1); this.floorHP.fill(1);
+    for (const [i, h] of list || []) { if (i >= 1000) { if (i - 1000 < this.floorHP.length) this.floorHP[i - 1000] = h; } else if (i < this.panelHP.length) this.panelHP[i] = h; }
+    this.syncPanels();
+  }
 
   update(dt, on) {
     // boot: the panels come up over ~2 s; switching off is quicker
@@ -404,196 +588,6 @@ export class H8Display {
     U.uPower.value = this.power;
     U.uTime.value = this.t % 600;
     U.uGlitch.value = this.glitch;
-    this.marks.visible = this.power > 0.3;
-    if (this.power <= 0 && this.locks.length) this.clearLocks();
-  }
-
-  // ------------------------------------------------------------------ markers
-  drawOrbitMark(s, kind) {
-    const g = s.g;
-    g.clearRect(0, 0, 128, 104);
-    const col = kind === 'pro' || kind === 'retro' ? 'rgba(140,255,175,0.9)' : 'rgba(150,215,245,0.7)';
-    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 3;
-    g.beginPath(); g.arc(64, 64, 13, 0, Math.PI * 2); g.stroke();
-    if (kind === 'pro') for (const a of [0, Math.PI / 2, Math.PI]) { g.beginPath(); g.moveTo(64 + Math.cos(a + Math.PI) * 13, 64 + Math.sin(a + Math.PI) * 13); g.lineTo(64 + Math.cos(a + Math.PI) * 25, 64 + Math.sin(a + Math.PI) * 25); g.stroke(); }
-    if (kind === 'retro') { g.beginPath(); g.moveTo(55, 55); g.lineTo(73, 73); g.moveTo(73, 55); g.lineTo(55, 73); g.stroke(); }
-    if (kind === 'zen') { g.beginPath(); g.moveTo(64, 51); g.lineTo(64, 40); g.stroke(); }
-    if (kind === 'nad') { g.beginPath(); g.arc(64, 64, 4, 0, Math.PI * 2); g.fill(); }
-    g.font = `500 22px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
-    g.fillText({ pro: '進行', retro: '逆行', zen: '天頂', nad: '天底' }[kind], 64, 18);
-    s.tex.needsUpdate = true;
-  }
-
-  drawPip(s, c) {
-    const g = s.g, key = (c.threat ? 'T' : '') + c.kind + '|' + (c.short || c.name);
-    if (s.key === key) return;
-    s.key = key;
-    g.clearRect(0, 0, 256, 64);
-    const col = c.threat ? C.red : c.kind === 'b29' ? C.amber : c.kind === 'body' ? C.white : C.dim;
-    g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 3;
-    g.beginPath(); g.moveTo(24, 20); g.lineTo(36, 32); g.lineTo(24, 44); g.lineTo(12, 32); g.closePath(); g.stroke();
-    g.font = `500 24px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle';
-    g.fillText(c.short || c.name, 46, 33);
-    s.tex.needsUpdate = true;
-  }
-
-  /** a damaged camera labels its sector (centred on where it looks) */
-  updateCamLabels() {
-    for (let i = 0; i < 4; i++) {
-      const s = this.camLabels[i], h = this.camH[i];
-      if (h > 0.8) { s.sp.visible = false; continue; }
-      const dead = h < 0.15;
-      const key = dead ? 'dead' : 'w' + Math.round(h * 20);
-      const blink = dead ? (Math.floor(this.t * 1.5) % 2) : 1;
-      this.place(s.sp, CAMERAS[i].dir);
-      s.sp.material.opacity = dead ? 0.55 + 0.45 * blink : 0.85;
-      if (s.key === key) continue;
-      s.key = key;
-      const g = s.g;
-      g.clearRect(0, 0, 320, 72);
-      g.fillStyle = dead ? 'rgba(40,6,4,0.55)' : 'rgba(30,18,4,0.45)';
-      g.fillRect(4, 8, 312, 56);
-      g.strokeStyle = dead ? C.red : C.amber; g.lineWidth = 2; g.strokeRect(4, 8, 312, 56);
-      g.textAlign = 'center'; g.textBaseline = 'middle';
-      g.font = `700 24px ${MONO}`; g.fillStyle = dead ? C.red : C.amber;
-      g.fillText(dead ? `${CAMERAS[i].name.split(' ')[0]}  NO SIGNAL` : `${CAMERAS[i].name.split(' ')[0]}  映像劣化 ${Math.round(h * 100)}%`, 160, 37);
-      s.tex.needsUpdate = true;
-    }
-  }
-
-  /**
-   * Per frame. cands: [{ id, kind, name, short, dir (H8-local unit), dist, closing, threat, extra }],
-   * gaze: line of sight (H8-local unit, or null), orbit: { pro, retro, zen, nad } (H8-local units),
-   * up: the local vertical (H8-local); onLock(c): a new lock
-   */
-  updateMarks(dt, cands, gaze, orbit, up, onLock) {
-    if (up) this.uniforms.uUp.value.copy(up);
-    if (!this.marks.visible) return;
-    const live = this.power > 0.5;
-    const byId = new Map(cands.map((c) => [c.id, c]));
-    // locks: drop what is gone, refresh the rest
-    this.locks = this.locks.filter((l) => { const c = byId.get(l.id); if (!c) { this.freeLock(l); return false; } l.c = c; return true; });
-    // focus dwell on what lies in the cone round the line of sight (narrower when zoomed)
-    let focusK = 0;
-    const inFocus = new Set();
-    const cone = FOCUS / Math.max(1, Math.sqrt(this.zoom));
-    if (gaze && live) {
-      for (const c of cands) {
-        if (c.dir.angleTo(gaze) > cone) continue;
-        inFocus.add(c.id);
-        if (this.locks.some((l) => l.id === c.id)) continue;
-        const d = (this.dwell.get(c.id) || 0) + dt;
-        this.dwell.set(c.id, d);
-        focusK = Math.max(focusK, d / DWELL);
-        if (d >= DWELL && this.lock(c)) onLock && onLock(c);
-      }
-    }
-    for (const id of [...this.dwell.keys()]) if (!inFocus.has(id)) this.dwell.delete(id);
-    // threats lock themselves
-    if (live) for (const c of cands) if (c.threat && !this.locks.some((l) => l.id === c.id) && this.lock(c)) onLock && onLock(c);
-    // pips for the rest
-    let pi = 0;
-    for (const c of cands) {
-      if (pi >= this.pips.length) break;
-      if (this.locks.some((l) => l.id === c.id)) continue;
-      const s = this.pips[pi];
-      this.place(s.sp, c.dir);
-      pi++;
-      this.drawPip(s, c);
-    }
-    for (; pi < this.pips.length; pi++) this.pips[pi].sp.visible = false;
-    // lock markers
-    for (const l of this.locks) {
-      l.t += dt;
-      const sp = l.slot.sp;
-      this.place(sp, l.c.dir);
-      // it snaps on: in from a little larger and fainter over a fifth of a second
-      const e = Math.min(1, l.t / 0.22), k = 1 - (1 - e) * (1 - e) * (1 - e);
-      if (k < 1) sp.scale.multiplyScalar(1 + 0.6 * (1 - k));
-      sp.material.opacity = 0.25 + 0.75 * k;
-      l.redraw -= dt;
-      if (l.redraw <= 0 || l.t < 0.9) { l.redraw = 0.25; this.drawLock(l); }
-    }
-    // orbit markers
-    for (const k of ['pro', 'retro', 'zen', 'nad']) {
-      const s = this.orbit[k], d = orbit && orbit[k];
-      if (d) this.place(s.sp, d); else s.sp.visible = false;
-    }
-    this.updateCamLabels();
-    // the focus ring rides the line of sight (with a dwell arc while something is being locked)
-    const F = this.focus;
-    if (gaze && live) this.place(F.sp, gaze); else F.sp.visible = false;
-    // the dwell arc fills smoothly (and runs back instead of vanishing when the gaze moves off);
-    // a lock flashes the ring and closes its corner ticks in
-    this.fkS += (Math.min(1, focusK) - this.fkS) * (1 - Math.exp(-dt * (focusK > this.fkS ? 30 : 10)));
-    if (this.fkS < 0.004) this.fkS = 0;
-    this.pulse = Math.max(0, this.pulse - dt * 3.2);
-    const fk = Math.round(this.fkS * 240), pk = Math.round(this.pulse * 24);
-    if (F.sp.visible && this.pulse > 0) F.sp.scale.multiplyScalar(1 - 0.12 * Math.sin(this.pulse * Math.PI));
-    if (fk !== this.lastFocus || pk !== this.lastPulse) {
-      this.lastFocus = fk; this.lastPulse = pk;
-      const g = F.g, p = pk / 24;
-      g.clearRect(0, 0, 128, 128);
-      g.strokeStyle = `rgba(150,230,255,${0.3 + 0.6 * p})`; g.lineWidth = 2 + 2 * p;
-      const gap = 0.22 + 0.25 * p;
-      for (let a = 0; a < 4; a++) { g.beginPath(); g.arc(64, 64, 58, a * Math.PI / 2 + Math.PI / 4 - gap, a * Math.PI / 2 + Math.PI / 4 + gap); g.stroke(); }
-      if (fk > 0) {
-        g.strokeStyle = 'rgba(160,240,255,0.9)'; g.lineWidth = 4; g.lineCap = 'round';
-        g.beginPath(); g.arc(64, 64, 52, -Math.PI / 2, -Math.PI / 2 + fk / 240 * Math.PI * 2); g.stroke();
-        g.lineCap = 'butt';
-      }
-      if (p > 0) { g.fillStyle = `rgba(170,245,255,${0.18 * p})`; g.beginPath(); g.arc(64, 64, 50, 0, Math.PI * 2); g.fill(); }
-      F.tex.needsUpdate = true;
-    }
-  }
-
-  lock(c) {
-    this.pulse = 1;
-    if (this.locks.length >= LOCK_MAX) {
-      // make room: the oldest lock that is not a threat
-      const i = this.locks.findIndex((l) => !l.c.threat);
-      if (i < 0) return false;
-      this.freeLock(this.locks[i]);
-      this.locks.splice(i, 1);
-    }
-    const slot = this.lockSlots.find((x) => !x.used);
-    if (!slot) return false;
-    slot.used = true;
-    slot.sp.visible = true;
-    this.locks.push({ id: c.id, c, slot, t: 0, redraw: 0 });
-    this.dwell.delete(c.id);
-    return true;
-  }
-
-  freeLock(l) { l.slot.used = false; l.slot.sp.visible = false; }
-
-  clearLocks() { for (const l of this.locks) this.freeLock(l); this.locks.length = 0; }
-
-  drawLock(l) {
-    const { g, tex } = l.slot, c = l.c;
-    g.clearRect(0, 0, 512, 192);
-    const col = c.threat ? C.red : c.kind === 'b29' ? C.amber : c.kind === 'body' ? C.white : C.cyan;
-    const x = 96, y = 96;
-    // acquisition: the brackets close in and square up, LOCK flashes
-    const e = Math.min(1, l.t / 0.42), k = 1 - Math.pow(1 - e, 3);
-    const s = 74 - 30 * k, rot = (1 - k) * Math.PI / 4;
-    g.save(); g.translate(x, y); g.rotate(rot);
-    g.strokeStyle = col; g.lineWidth = c.threat ? 5 : 4;
-    for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { g.beginPath(); g.moveTo(sx * s, sy * (s - 15)); g.lineTo(sx * s, sy * s); g.lineTo(sx * (s - 15), sy * s); g.stroke(); }
-    g.restore();
-    if (c.threat) { g.fillStyle = col; g.beginPath(); g.arc(x, y, 5, 0, Math.PI * 2); g.fill(); }
-    if (l.follow) { g.strokeStyle = C.green; g.lineWidth = 3; g.beginPath(); g.arc(x, y, 58, 0, Math.PI * 2); g.stroke(); }
-    g.textBaseline = 'middle'; g.textAlign = 'left';
-    if (l.t < 0.8 && Math.floor(l.t * 8) % 2 === 0) { g.font = `700 26px ${MONO}`; g.fillStyle = col; g.fillText('LOCK', x - 34, 178); }
-    g.font = `700 30px ${FONT}`; g.fillStyle = col;
-    g.fillText(c.name, 180, 46);
-    g.font = `500 27px ${MONO}`; g.fillStyle = C.white;
-    g.fillText(fmtDist(c.dist), 180, 86);
-    const cl = c.closing;
-    g.font = `400 24px ${FONT}`;
-    g.fillStyle = cl > 0.5 ? (c.threat ? C.red : 'rgba(255,215,140,0.95)') : C.dim;
-    g.fillText(Math.abs(cl) < 0.05 ? '相対 0 m/s' : (cl > 0 ? '接近 ' : '離隔 ') + Math.abs(cl).toFixed(Math.abs(cl) > 100 ? 0 : 1) + ' m/s', 180, 122);
-    if (c.extra) { g.font = `500 23px ${FONT}`; g.fillStyle = c.threat ? C.red : C.dim; g.fillText(c.extra, 180, 156); }
-    tex.needsUpdate = true;
+    for (let i = 0; i < 4; i++) U.uCamFail.value[i] = this.failT[i] === null ? -1 : Math.min(1e5, this.t - this.failT[i]);
   }
 }

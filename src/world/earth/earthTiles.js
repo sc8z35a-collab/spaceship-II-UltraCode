@@ -2,6 +2,7 @@
 // sub-point. Four slots form a 2x2 block of 45-degree tiles; they fade in when loaded.
 import * as THREE from 'three';
 import { assetUrl } from './earthAssets.js';
+import { QUALITY } from '../../core/quality.js';
 
 export const TILE_GLSL = /* glsl */`
 uniform sampler2D tTileC0; uniform sampler2D tTileC1; uniform sampler2D tTileC2; uniform sampler2D tTileC3;
@@ -37,7 +38,7 @@ function makeTex(bmp, srgb) {
   t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
   t.minFilter = THREE.LinearMipmapLinearFilter;
   t.magFilter = THREE.LinearFilter;
-  t.anisotropy = 8;
+  t.anisotropy = QUALITY.level === 'low2' ? 2 : 8;   // (LOW II: lighter filtering)
   t.generateMipmaps = true;
   t.needsUpdate = true;
   return t;
