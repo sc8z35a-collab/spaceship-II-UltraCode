@@ -559,55 +559,39 @@ export class H8Shelter {
   }
 
   // ------------------------------------------------------------------ sound
-  sfx(kind) {
+  /** the run's sounds, in the ship's one family of mechanism sounds (audio.mech); open: the part
+   * opening (or running out) rather than closing */
+  sfx(kind, open = true) {
     const A = this.v.g.audio;
     if (!A || !A.ready) return;
     const seatP = V(0, 0.1, SEAT.G.z + this.ride * SHELTER.ride).add(DOCK);
     const doorP = V(0, 0.2, 1.0).add(DOCK), floorP = V(0, FY, -0.3).add(DOCK);
     switch (kind) {
-      case 'guard': A.click(seatP, 0.32); A.beep(1760, 0.04, 0.05, { pos: seatP }); break;
+      case 'guard': A.mech(seatP, 'latch', { open, gain: 0.45, pitch: 1.6 }); break;
       case 'press':
         A._burst(seatP, { dur: 0.16, freq: 160, q: 0.8, gain: 0.45, type: 'brown', filter: 'lowpass' });
         A.beep(880, 0.11, 0.07, { pos: seatP, type: 'square' });
         A.beep(660, 0.11, 0.07, { pos: seatP, type: 'square', when: 0.13 });
         A.beep(880, 0.11, 0.07, { pos: seatP, type: 'square', when: 0.26 });
         break;
-      case 'servo': this.servo(floorP, 0.42, 380, 620, 0.045); break;
-      case 'door': this.servo(doorP, 0.5, 120, 210, 0.06); A._burst(doorP, { dur: 0.3, freq: 1800, q: 0.6, gain: 0.06, type: 'pink' }); break;
+      case 'leaves': A.mech(floorP, 'door', { open, dur: 0.4, pitch: 1.35 }); break;
+      case 'door': A.mech(doorP, 'hatch', { open, dur: 0.5, pitch: 1.2 }); break;
       case 'rail':
-        this.servo(floorP, 0.4, 520, 900, 0.04);
-        for (let i = 0; i < 6; i++) setTimeout(() => A.click(floorP, 0.14), 60 + i * 62);
+        A.mech(floorP, 'servo', { open, dur: 0.4, pitch: 0.8 });
+        for (let i = 0; i < 5; i++) setTimeout(() => A.click(floorP, 0.12), 70 + i * 70);
         break;
       case 'shove':
         A._burst(seatP, { dur: 0.22, freq: 110, q: 0.7, gain: 0.75, type: 'brown', filter: 'lowpass' });
         A._burst(seatP, { dur: 0.6, freq: 1400, q: 0.5, gain: 0.22, type: 'white', sweep: 0.2 });
         break;
-      case 'glide': this.servo(seatP, 1.0, 160, 260, 0.05); break;
+      case 'glide': A.mech(seatP, 'heavy', { open: false, dur: 1.0, pitch: 1.7 }); break;
       case 'stop':
-        A._burst(seatP, { dur: 0.3, freq: 90, q: 0.8, gain: 0.8, type: 'brown', filter: 'lowpass' });
-        A.beep(1240, 0.05, 0.05, { pos: seatP, type: 'triangle' });
-        A.beep(2210, 0.08, 0.025, { pos: seatP, type: 'sine', when: 0.01 });
-        setTimeout(() => A.click(seatP, 0.3), 140);
+        A._burst(seatP, { dur: 0.3, freq: 90, q: 0.8, gain: 0.7, type: 'brown', filter: 'lowpass' });
+        A.mech(seatP, 'latch', { open: false, gain: 0.9 });
         break;
-      case 'seal':
-        A._burst(doorP, { dur: 0.22, freq: 140, q: 0.8, gain: 0.4, type: 'brown', filter: 'lowpass' });
-        setTimeout(() => A._burst(doorP, { dur: 0.7, freq: 2600, q: 0.7, gain: 0.08, type: 'pink', sweep: 0.5 }), 120);
-        break;
-      case 'shutter': this.servo(V(SHELTER.X, 0.3, 1.3).add(DOCK), 0.7, 240, 340, 0.04); break;
+      case 'shutter': A.mech(V(SHELTER.X, 0.3, 1.3).add(DOCK), 'servo', { open, dur: 0.7, pitch: 0.7 }); break;
       default: break;
     }
-  }
-
-  /** a motor's whine sweeping f0 -> f1 over dur */
-  servo(pos, dur, f0, f1, gain) {
-    const A = this.v.g.audio, ctx = A.ctx;
-    if (!ctx) return;
-    const t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
-    o.frequency.setValueAtTime(f0, t); o.frequency.linearRampToValueAtTime(f1, t + dur);
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 1400;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.04); g.gain.setValueAtTime(gain, t + dur - 0.06); g.gain.linearRampToValueAtTime(0, t + dur);
-    o.connect(lp); lp.connect(g); g.connect(A._out(pos)); o.start(t); o.stop(t + dur + 0.05);
   }
 
   // ------------------------------------------------------------------ per step
@@ -615,7 +599,7 @@ export class H8Shelter {
     const v = this.v, g = v.g, pl = g.player, ls = g.lifeSupport;
     this.occupied = pl.state === 'seated' && pl.seat === this.seat;
     // the guard drops again if the second press does not come
-    if (this.guardT >= 0) { this.guardT -= dt; if (this.guardT < 0) this.sfx('guard'); }
+    if (this.guardT >= 0) { this.guardT -= dt; if (this.guardT < 0) this.sfx('guard', false); }
     this.guard = clamp01(this.guard + (this.guardT >= 0 ? 1 : -1) * dt / 0.18);
     this.sequence(dt);
     // the shutter over the suit
@@ -681,10 +665,11 @@ export class H8Shelter {
       const r = run((t - T.ride[0]) / dur, 0.2, 0.2);
       this.ride = t < T.ride[0] ? 0 : r.s;
       this.acc = t > T.ride[0] && t < T.ride[1] ? r.acc * D / (dur * dur) : 0;
-      if (hit(T.leaves[0])) this.sfx('servo');
+      if (hit(T.leaves[0])) this.sfx('leaves');
       if (hit(T.door[0])) this.sfx('door');
       if (hit(T.ext[0])) this.sfx('rail');
       if (hit(T.ride[0])) { this.sfx('shove'); v.seatMotion && v.seatMotion.jolt(1.6); }
+      if (hit(T.shut[0])) this.sfx('door', false);
       if (hit(T.ride[1])) {
         // in: stopped hard on the shelter's rail and latched; Kaito's seat is the shelter's now
         this.sfx('stop');
@@ -697,9 +682,9 @@ export class H8Shelter {
           pl.teleport(SHELTER.center.clone().add(DOCK));
         }
       }
-      if (hit(T.shut[1])) { this.sfx('seal'); setTimeout(() => this.occupied && v.say('hachi_shelter_in', { t: this.o2Text() }, { force: true }), 700); }
-      if (hit(T.retract[0])) this.sfx('rail');
-      if (hit(T.close[0])) this.sfx('servo');
+      if (hit(T.shut[1])) setTimeout(() => this.occupied && v.say('hachi_shelter_in', { t: this.o2Text() }, { force: true }), 700);
+      if (hit(T.retract[0])) this.sfx('rail', false);
+      if (hit(T.close[0])) this.sfx('leaves', false);
       if (t >= T.end) { this.state = 'in'; this.t = T.end; }
     } else {
       const T = BACK;
@@ -712,14 +697,14 @@ export class H8Shelter {
       const r = run((t - T.ride[0]) / dur, 0.4, 0.4);
       this.ride = t < T.ride[0] ? 1 : 1 - r.s;
       this.acc = t > T.ride[0] && t < T.ride[1] ? -r.acc * D / (dur * dur) : 0;
-      if (hit(T.leaves[0] + 0.001)) this.sfx('servo');
+      if (hit(T.leaves[0] + 0.001)) this.sfx('leaves');
       if (hit(T.door[0])) this.sfx('door');
       if (hit(T.ext[0])) this.sfx('rail');
       if (hit(T.ride[0])) this.sfx('glide');
       if (hit(T.ride[1])) { this.sfx('stop'); v.seatMotion && v.seatMotion.jolt(0.8); }
-      if (hit(T.retract[0])) this.sfx('rail');
-      if (hit(T.shut[1])) this.sfx('seal');
-      if (hit(T.close[0])) this.sfx('servo');
+      if (hit(T.retract[0])) this.sfx('rail', false);
+      if (hit(T.shut[0])) this.sfx('door', false);
+      if (hit(T.close[0])) this.sfx('leaves', false);
       if (t >= T.end) {
         this.state = 'home'; this.t = 0;
         if (this.pilotSeat) this.pilotSeat.lockAim = false;

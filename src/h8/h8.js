@@ -1719,7 +1719,7 @@ export class H8Vessel {
     const want = open === null ? (LK.target > 0.5 ? 0 : 1) : open ? 1 : 0;
     if (want === LK.target) return;
     LK.target = want;
-    this.shelter.sfx('shutter');
+    this.shelter.sfx('shutter', want > 0.5);
   }
 
   /** the suit in the shelter: open its shutter, put the suit on, or take it off and stow it (from
