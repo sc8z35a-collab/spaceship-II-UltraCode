@@ -14,6 +14,7 @@ import { HULL_BOTTOM } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
 import { H8 } from '../h8/h8Spec.js';
 import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
+import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
 
 // rations aboard B-29 (days for one): eaten day by day, restocked at the Origin's berth
 export const FOOD_FULL = 60;
@@ -124,28 +125,8 @@ export class Gameplay {
       g.shipVis.root.add(s, s.target);
       this.flood.push(s);
     }
-    // engine plume
-    const plumeMat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uP: { value: 0 } },
-      vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
-      fragmentShader: `uniform float uT; uniform float uP; varying vec2 vUv;
-        void main(){ float r = abs(vUv.x - 0.5) * 2.0; float a = vUv.y; float core = exp(-r * r * 6.0) * a * a;
-          float shock = 0.5 + 0.5 * sin(vUv.y * 40.0 + uT * 30.0);
-          vec3 c = mix(vec3(0.35, 0.55, 1.0), vec3(1.0, 0.85, 0.7), core) * core * (0.8 + 0.4 * shock) * uP * 6.0;
-          gl_FragColor = vec4(c, 1.0); }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    const plumeGeo = new THREE.CylinderGeometry(0.55, 1.15, 7, 24, 1, true);
-    plumeGeo.rotateX(Math.PI / 2);          // narrow top (uv.y = 1) -> +z
-    plumeGeo.rotateY(Math.PI);              // ... -> -z (toward the nozzle)
-    plumeGeo.translate(0, 0, 3.5);          // root at the origin, plume extends aft (+z)
-    const plume = new THREE.Mesh(plumeGeo, plumeMat);
-    plume.position.set(0, 0.4, 15.4 + 1.25 + 2.1);
-    plume.frustumCulled = false;
-    setLayersDeep(plume, LAYER_NEAR, LAYER_MID);
-    plume.visible = false;
-    g.shipVis.root.add(plume);
-    this.plume = plume;
+    // engine plume (ray-marched exhaust: core, shock cells, the flame spreading aft)
+    this.plume = new EnginePlume(g.shipVis.root, { exits: [V(0, 0.4, 15.4 + 1.25 + 2.1)], r0: 1.12, len: 52, style: 'fusion', spread: 0.24, dia: 0.5, seed: 1.3 });
     // re-entry fire round the whole hull (shock layer, hot core, the long wake of flame)
     this.fire = new ReentryFire(g.shipVis.root, { center: V(0, 0.4, -0.5), shell: V(5.4, 4.6, 19.5), r0: 6, r1: 26, len: 420 });
     // and its light through the windows (lamps that join the cabin's light pool while it burns)
@@ -1071,10 +1052,7 @@ export class Gameplay {
     const fwdThrust = Math.max(0, -thrLocal.z) / 15;
     const p = Math.min(1.3, fwdThrust * 2.2 + (f.ultra ? 0.3 : 0)) * (f.engineHealth > 0.05 ? 1 : 0);
     this.plumeP += (p - this.plumeP) * Math.min(1, dt * 4);
-    this.plume.visible = this.plumeP > 0.01;
-    this.plume.material.uniforms.uP.value = this.plumeP;
-    this.plume.material.uniforms.uT.value = t % 100;
-    this.plume.scale.set(1, 1, 0.6 + this.plumeP);
+    this.plume.update(dt, p, plumeAir(f.rho || 0), f.ultra ? 1 : 0);
     M.nozzle.emissiveIntensity = this.plumeP * 2.5 + (f.ultra ? 0.8 : 0);
     if (this.plumeP > 0.04 && g.running) {
       g.audio.humLoop('engine', { freq: 36, gain: 0.08, harm: [1, 0.7, 0.45, 0.3] });

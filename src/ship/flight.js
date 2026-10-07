@@ -266,6 +266,7 @@ export class Flight {
     const ffwd = this.autopilot && this.autopilot.aff ? this.autopilot.aff.clone() : up.clone().multiplyScalar(-vh.lengthSq() / r);
     // --- drag
     const rho = airDensity(alt);
+    this.rho = rho;
     const vAir = _v3.set(OMEGA_EARTH * pos.z, 0, -OMEGA_EARTH * pos.x);
     const vRelAir = vel.clone().sub(vAir);
     const sp = vRelAir.length();

@@ -11,6 +11,7 @@ import { droneMaterials, droneHi, droneMid, droneLo } from './droneModel.js';
 import { QUALITY } from '../core/quality.js';
 import { MU_EARTH } from '../core/astro.js';
 import { assignLayers, LAYER_FAR, LAYER_MID } from '../core/layers.js';
+import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 
@@ -55,8 +56,13 @@ export class Drones {
         game.engine.scene.add(grp);
         lods[k] = grp;
       }
+      // the four pods' flames (one draw), in a frame that follows the drone
+      const jets = new THREE.Group();
+      jets.matrixAutoUpdate = false;
+      game.engine.scene.add(jets);
+      const plume = new EnginePlume(jets, { exits: [[-1, -1], [1, -1], [-1, 1], [1, 1]].map(([sx, sy]) => new THREE.Vector3(sx * 0.82, sy * 0.34, 0.72)), r0: 0.1, len: 3.4, style: 'blue', spread: 0.35, dia: 0.45, seed: i * 1.7 });
       this.list.push({
-        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, lods, lod: null, own,
+        i, id: 'D-' + (i + 1), kind: 'drone', R: 1.25, lods, lod: null, own, jets, plume,
         pos: new THREE.Vector3(), vel: new THREE.Vector3(), q: new THREE.Quaternion(), thrust: new THREE.Vector3(),
         alive: false, hp: 1, state: 'patrol', t: 0, burst: 0, shotT: 0, cool: rand(1, 3), respawnT: 0,
         slot: { r: rand(650, 1150), ph: rand(0, Math.PI * 2), w: rand(0.12, 0.22) * (Math.random() < 0.5 ? -1 : 1), tilt: rand(-0.7, 0.7) },
@@ -377,7 +383,7 @@ export class Drones {
     const zoomK = Math.tan(cam.fov * Math.PI / 360) / Math.tan(base * Math.PI / 360);
     for (const d of this.list) {
       const i = d.i;
-      if (!d.alive) { this.showLod(d, null); this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
+      if (!d.alive) { this.showLod(d, null); d.plume.mesh.visible = false; this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
       const rel = d.pos.clone().sub(origin);
       const dist = rel.distanceTo(camWorld);
       const eff = dist * zoomK;
@@ -396,6 +402,15 @@ export class Drones {
         mesh.updateMatrixWorld(true);
         mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, dist - 2), dist + 2); });
         d.own.jet.emissiveIntensity = 0.8 + 5 * thrustK;
+        // the pods push it nose-first (and a little whichever way it is steering)
+        const tl = _v2.copy(d.thrust).applyQuaternion(_q.copy(d.q).invert());
+        d.jets.matrix.copy(mesh.matrix);
+        d.jets.matrixWorld.copy(mesh.matrix);
+        d.jets.updateMatrixWorld(true);
+        d.plume.update(dt, Math.min(1.2, Math.max(0, -tl.z) / A_MAX * 1.3 + thrustK * 0.25), 0, 0);
+        d.plume.setDistance(dist);
+      } else d.plume.mesh.visible = false;
+      if (mesh) {
         // (a deep red: brighter, it bloomed out into a pale disc)
         d.own.eye.emissiveIntensity = (k === 'hi' ? 2.6 : 4.5) + (k === 'hi' ? 1.4 : 2.5) * Math.sin(t * 9 + i) * (d.state === 'attack' ? 1 : 0.2);
         d.own.lamp.emissiveIntensity = (t * 1.3 + i * 0.37) % 1 < 0.07 ? 12 : 0;

@@ -9,8 +9,10 @@ import { Builder } from '../ship/geom.js';
 import { guidance, ratesNose, ratesToward } from './h8Pilot.js';
 import { assignLayers } from '../core/layers.js';
 import { SHELTER } from './h8Shelter.js';
+import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+const _tl = new THREE.Vector3(), _tq = new THREE.Quaternion();
 const NOSE = 5.5;                                    // tug origin to the face of its collar
 // latched: the tug's origin in the shelter's (H8's) frame, the tug in the same attitude, its nose
 // (-z) against the back plate
@@ -31,7 +33,6 @@ function mats() {
     navR: S({ color: 0x000000, emissive: new THREE.Color(1, 0.08, 0.04), emissiveIntensity: 5 }),
     navG: S({ color: 0x000000, emissive: new THREE.Color(0.1, 1, 0.25), emissiveIntensity: 5 }),
     flood: S({ color: 0x000000, emissive: new THREE.Color(0.95, 0.97, 1), emissiveIntensity: 4 }),
-    flame: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.55, 0.75, 1.6), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false }),
   };
   return MATS;
 }
@@ -64,13 +65,7 @@ function tugModel() {
   for (const s of [-1, 1]) b.cyl(0.16, 0.16, 0.08, 'flood', [s * 0.6, 0.9, -4.7], [Math.PI / 2, 0, 0], 10);
   const g = b.build(M, { castShadow: false });
   // the drive's plume (shown while it burns)
-  const cone = new THREE.ConeGeometry(0.75, 6, 14, 1, true);
-  cone.rotateX(-Math.PI / 2);
-  cone.translate(0, 0, 8.1);
-  const flame = new THREE.Mesh(cone, M.flame);
-  flame.frustumCulled = false;
-  g.add(flame);
-  g.userData.flame = flame;
+  g.userData.plume = new EnginePlume(g, { exits: [V(0, 0, 5.1)], r0: 1.0, len: 26, style: 'blue', spread: 0.32, dia: 0.45, seed: 6.2 });
   g.matrixAutoUpdate = false;
   return g;
 }
@@ -193,12 +188,16 @@ export class RescueTug {
     const M = mats();
     const ph = (performance.now() / 1400) % 1;
     M.strobe.emissiveIntensity = ph < 0.05 || (ph > 0.14 && ph < 0.19) ? 8 : 0;
-    const burn = Math.min(1, f.thrustAcc.length() / 12);
-    M.flame.opacity = this.state === 'latched' ? 0 : 0.15 + 0.6 * burn;
-    m.userData.flame.scale.set(1, 1, 0.4 + 0.8 * burn);
+    // the main engine burns for what it pushes forward (the RCS does the fine work)
+    const thr = _tl.copy(f.thrustAcc).applyQuaternion(_tq.copy(f.quat).invert());
+    const burn = this.state === 'latched' ? 0 : Math.min(1.2, Math.max(0, -thr.z) / 14 + thr.length() / 60);
+    const P = m.userData.plume;
+    P.update(dt, burn, plumeAir(f.rho || 0), 0);
+    P.setDistance(d);
   }
 
   dispose() {
     this.g.engine.scene.remove(this.mesh);
+    this.mesh.userData.plume.dispose();
   }
 }

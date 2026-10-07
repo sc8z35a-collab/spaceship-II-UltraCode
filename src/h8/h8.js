@@ -22,6 +22,7 @@ import { H8Hud } from './h8Hud.js';
 import { H8Shelter, shelterMaterials, SHELTER } from './h8Shelter.js';
 import { RescueTug } from './rescueTug.js';
 import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
+import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
@@ -64,7 +65,7 @@ export const JUNCTIONS = {
 // the outer materials that dent (the plates themselves can be torn through); lights, glass and
 // the drive's glow do not
 const PLATES = new Set(['armor', 'armorPlain', 'trim', 'decal']);
-const NO_DENT = new Set(['plume', 'plumeCore', 'auxPlume', 'ledG', 'ledR', 'ledA', 'ledB', 'navR', 'navG', 'strobe', 'flood', 'coil', 'throat', 'dome']);
+const NO_DENT = new Set(['ledG', 'ledR', 'ledA', 'ledB', 'navR', 'navG', 'strobe', 'flood', 'coil', 'throat', 'dome']);
 
 // H8-local points of interest
 const NECK_HATCH = V(0, H8.neckHatchY, H8.shaftZ);
@@ -107,6 +108,9 @@ export class H8Vessel {
     this.structure = 1;          // the frame, once the inner armour is gone (0: H8 breaks up)
     // re-entry fire round the sphere
     this.fire = new ReentryFire(this.root, { center: V(0, -0.4, 0), shell: V(4.9, 5.4, 4.9), r0: 5, r1: 17, len: 240 });
+    // the drive's plasma plume out of the magnetic nozzle, the auxiliary engines' flames
+    this.plumeMain = new EnginePlume(this.root, { exits: [this.ext.parts.driveExit], r0: 0.9, len: 34, style: 'plasma', spread: 0.15, dia: 0.65, seed: 2.1 });
+    this.plumeAux = new EnginePlume(this.root, { exits: this.ext.parts.auxExits, r0: 0.3, len: 7.5, style: 'chem', spread: 0.42, dia: 0.25, gain: 0.9, seed: 4.7 });
     // the tabs are drawn over the finished picture (unmagnified by the zoom)
     game.engine.uiScene.add(this.tabs.group);
     this.extMeshes = [];
@@ -2027,7 +2031,7 @@ export class H8Vessel {
       if (sp > 1e-3) flow.divideScalar(-sp); else flow.set(0, 0, 1);
       this.fire.update(dt, live ? fireLevel(fl.heatFlux || 0) : 0, flow);
     }
-    if (this.mode === 'pod' || this.mode === 'lost') { this.wreckVisual(dt, eyePF, dCam); return; }
+    if (this.mode === 'pod' || this.mode === 'lost') { this.plumeMain.mesh.visible = this.plumeAux.mesh.visible = false; this.wreckVisual(dt, eyePF, dCam); return; }
     // where H8 is this frame, for the dents (they are worked out in H8's own frame)
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
     DENT_U.uH8Root.value.copy(rw);
@@ -2099,14 +2103,13 @@ export class H8Vessel {
     H8_UNIFORMS.uTime.value = t % 1000;
     M.coil.emissiveIntensity = 0.3 * aw + 6 * this.drive;
     M.throat.emissiveIntensity = 0.2 * aw + 14 * this.drive;
-    for (const p of this.ext.parts.plumes) {
-      const k = p.main ? this.drive : this.aux * 0.6;
-      p.group.visible = k > 0.01;
-      if (!p.group.visible) continue;
-      const flick = 0.9 + 0.1 * Math.sin(t * 61 + (p.main ? 0 : 3));
-      p.cones.forEach((c, i) => { c.material.opacity = k * (i === 0 ? 0.32 : 0.14) * flick; c.scale.set(1, 1, 0.6 + 0.4 * k); });
-      if (p.core) p.core.material.opacity = k * 0.9 * flick;
-    }
+    // the plumes (pushed past its rating, ULTRA / MAX, the drive burns whiter and longer)
+    const air = plumeAir(fl.rho || 0);
+    const boost = fl.ultra ? (this.driveMode === 'max' ? 2 : this.driveMode === 'ultra' ? 1 : 0) : 0;
+    this.plumeMain.update(dt, drive > 0 ? Math.min(1.3, along * 1.6) : 0, air, boost);
+    this.plumeAux.update(dt, this.aux * 0.8, air, 0);
+    if (this.mode === 'docked') for (const p of [this.plumeMain, this.plumeAux]) { p.mesh.layers.set(LAYER_NEAR); p.mesh.layers.enable(LAYER_MID); }
+    else { this.plumeMain.setDistance(dCam); this.plumeAux.setDistance(dCam); }
     // radiators glow with the waste heat; they fold up while B-29 lies at a station's berth
     const heat = Math.min(1, this.power.reactor * 0.9 + this.drive * 0.6);
     M.radiator.emissiveIntensity = heat * heat * 0.35;

@@ -16,6 +16,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial.js';
 import { MU_EARTH } from '../core/astro.js';
 import { LAYER_FAR, LAYER_MID, LAYER_NEAR, assignLayers } from '../core/layers.js';
+import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { H8 } from '../h8/h8Spec.js';
 import { AMMO, ENV, Rng, launch, step as flyStep, leadDir as bLead } from './ballistics.js';
@@ -145,6 +146,8 @@ export class Combat {
       r.mesh = new THREE.Mesh(this.missileGeo, this.missileMat);
       r.mesh.matrixAutoUpdate = false;
       r.mesh.frustumCulled = false;
+      // its motor's flame out of the tail
+      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.75)], r0: 0.1, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4 });
       this.g.engine.scene.add(r.mesh);
       r.q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), r.dir);
     }
@@ -284,7 +287,7 @@ export class Combat {
         }
       }
     }
-    this.rounds = this.rounds.filter((r) => { if (r.done && r.mesh) { g.engine.scene.remove(r.mesh); } return !r.done; });
+    this.rounds = this.rounds.filter((r) => { if (r.done && r.mesh) { g.engine.scene.remove(r.mesh); r.plume.dispose(); } return !r.done; });
     for (const f of this.flashes) f.t += dt;
     this.flashes = this.flashes.filter((f) => f.t < f.life);
     for (const w of this.wrecks) { w.t += dt; w.pos.addScaledVector(w.vel, dt); grav(w.pos, acc); w.pos.addScaledVector(acc, 0.5 * dt * dt); w.vel.addScaledVector(acc, dt); w.q.multiply(_q.setFromAxisAngle(w.axis, w.spin * dt)); }
@@ -459,8 +462,12 @@ export class Combat {
         r.q.setFromUnitVectors(_v.set(0, 0, -1), r.dir);
         r.mesh.matrix.compose(rel, r.q, _v2.set(1, 1, 1));
         r.mesh.matrixWorld.copy(r.mesh.matrix);
+        r.mesh.updateMatrixWorld(true);
         const d = rel.distanceTo(camWorld);
         assignLayers(r.mesh, Math.max(0, d - 2), d + 2);
+        // (it lights at launch and burns to the end; gentler while it clears the launcher)
+        r.plume.update(dt, r.boost < 0.6 ? 0.55 : 1, 0, 0);
+        r.plume.setDistance(d);
         continue;
       }
       if (n >= MAX_TRACERS) break;

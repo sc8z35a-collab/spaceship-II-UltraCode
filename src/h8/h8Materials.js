@@ -219,9 +219,6 @@ export function createH8Materials() {
   M.strobe = S({ color: 0x000000, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
   M.flood = S({ color: 0x000000, emissive: new THREE.Color(0.95, 0.97, 1), emissiveIntensity: 4 });
   M.decal = S({ map: decalTexture(), transparent: true, roughness: 0.6, metalness: 0.1, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
-  M.plume = new THREE.MeshBasicMaterial({ color: new THREE.Color(0.45, 0.62, 1.0), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-  M.plumeCore = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.95, 1.0), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
-  M.auxPlume = new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.62, 0.35), transparent: true, opacity: 0, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide });
   return M;
 }
 
