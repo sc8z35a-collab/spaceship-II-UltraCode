@@ -565,8 +565,10 @@ export function createMaterials() {
   M.uvLamp = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.55, 0.3, 1.0), emissiveIntensity: 6.0 });
   M.hazard = patchShipMaterial(std(0xffffff, 0.6, 0.1, { map: hazardTexture() }), { wear: 0.8, grime: 0.5 });
   M.rubberHose = patchShipMaterial(std(0x26282b, 0.8, 0.0), { wear: 0.3, grime: 0.3 });
-  M.plant = std(0x3e7a2e, 0.7, 0.0);
-  M.plant2 = std(0x5c9a3a, 0.7, 0.0);
+  // (leaves are single sheets: lit and seen from both faces, else half of every plant vanished
+  // depending on the side it was looked at from)
+  M.plant = std(0x3e7a2e, 0.7, 0.0, { side: THREE.DoubleSide });
+  M.plant2 = std(0x5c9a3a, 0.7, 0.0, { side: THREE.DoubleSide });
   M.soil = std(0x3a2a1c, 0.95, 0.0);
   M.paper = std(0xe8e2d0, 0.9, 0.0);
   M.book1 = std(0x7a2f2f, 0.8, 0.0); M.book2 = std(0x2f4a7a, 0.8, 0.0); M.book3 = std(0x4f6a3a, 0.8, 0.0); M.book4 = std(0x8a7a4a, 0.8, 0.0);
