@@ -50,6 +50,8 @@ export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JS
 
 const FAR_SURFACE = { h: 0, water: false };
 
+const _hjQ = new THREE.Quaternion(), _hjE = new THREE.Euler(), _hjM = new THREE.Matrix4();
+
 export class Game {
   constructor(engine, earth, params) {
     this.engine = engine;
@@ -498,6 +500,16 @@ export class Game {
     if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
     fr.matrixWorld.copy(fr.matrix);
     fr.updateMatrixWorld(true);
+    // re-entry: the hull itself shudders under the eye (the frame the eye rides holds still)
+    const hj = this.hullJitter || 0;
+    if (hj > 0.01 && !solo) {
+      const t = performance.now() / 1000, n = (a, b, c) => Math.sin(t * a + b) * 0.6 + Math.sin(t * c + b * 1.7) * 0.4;
+      const r = 0.0065 * hj, d = 0.035 * hj;
+      _hjQ.setFromEuler(_hjE.set(n(41, 0.3, 67) * r, n(37, 1.1, 59) * r * 0.6, n(53, 2.2, 31) * r));
+      _hjM.makeRotationFromQuaternion(_hjQ).setPosition(n(47, 0.7, 71) * d, n(43, 1.9, 61) * d, n(29, 2.8, 83) * d * 0.5);
+      root.matrix.multiply(_hjM);
+      root.matrixWorld.copy(root.matrix);
+    }
     const frameQ = new THREE.Quaternion().setFromRotationMatrix(fr.matrix);
     const frameP = new THREE.Vector3().setFromMatrixPosition(fr.matrix);
     // the docked station's habitat ring turns (and Kaito with it, if he is inside)

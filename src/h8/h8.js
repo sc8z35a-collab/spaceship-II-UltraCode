@@ -21,6 +21,7 @@ import { H8Zoom, OPT_MAX, DIG_MAX } from './h8Zoom.js';
 import { H8Hud } from './h8Hud.js';
 import { H8Shelter, shelterMaterials, SHELTER } from './h8Shelter.js';
 import { RescueTug } from './rescueTug.js';
+import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
 import { SeatMotion, SEAT } from './h8Seat.js';
 import { HachiMind } from './hachiMind.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
@@ -104,6 +105,8 @@ export class H8Vessel {
     this.root.add(this.shelter.group, this.shelter.pod);
     this.shelter.buildDoorLiner(this.display.shelterS.pivot);
     this.structure = 1;          // the frame, once the inner armour is gone (0: H8 breaks up)
+    // re-entry fire round the sphere
+    this.fire = new ReentryFire(this.root, { center: V(0, -0.4, 0), shell: V(4.9, 5.4, 4.9), r0: 5, r1: 17, len: 240 });
     // the tabs are drawn over the finished picture (unmagnified by the zoom)
     game.engine.uiScene.add(this.tabs.group);
     this.extMeshes = [];
@@ -122,7 +125,9 @@ export class H8Vessel {
     this.buildNeckHatch();
     this.buildBeacon();
     // ---------------------------------------------------------------- flight & pilot
-    this.flight = new Flight({ normalMax: 60 * H8.speedMulInternal, ultraMax: 900 * H8.speedMulInternal, aMax: H8.accel, mass: H8.mass, CdA: 18, comfortK: 5, rampK: 6, turnK: H8.turnK, tank: { cap: H8.propKg, ve: H8.ve } });
+    // (it stands on the bottom of its neck, 4.3 m under its centre)
+    this.flight = new Flight({ normalMax: 60 * H8.speedMulInternal, ultraMax: 900 * H8.speedMulInternal, aMax: H8.accel, mass: H8.mass, CdA: 18, comfortK: 5, rampK: 6, turnK: H8.turnK, tank: { cap: H8.propKg, ve: H8.ve }, hullBottom: -H8.neckBottom });
+    this.flight.impactCallback = (speed, vn, water) => this.groundImpact(speed, vn, water);
     this.pilot = new HachiPilot(this);
     // ---------------------------------------------------------------- damage you can see
     this.hull = new H8Hull(this);
@@ -987,6 +992,25 @@ export class H8Vessel {
       f.updateAttitude();
       f.thrustAcc.set(0, 0, 0); f.properAcc.set(0, 0, 0);
       this.gLocal.set(0, 0, 0);
+      // down on the ground or the sea: it stays there (a hard fall kills)
+      const surf = g.terrainAt ? g.terrainAt(f.pos) : null;
+      if (surf) {
+        const r = f.pos.length(), floor = R_EARTH + Math.max(0, surf.h) + 1.2;
+        if (r < floor) {
+          const vAir = _v3.set(OMEGA_EARTH * f.pos.z, 0, -OMEGA_EARTH * f.pos.x);
+          const up = _v2.copy(f.pos).divideScalar(r);
+          const vn = -_v.copy(f.vel).sub(vAir).dot(up);
+          f.pos.multiplyScalar(floor / r);
+          f.vel.copy(vAir);
+          f.wRel.multiplyScalar(0.2);
+          f.properAcc.copy(up).multiplyScalar(MU_EARTH / (r * r));
+          if (!this.podDown) {
+            this.podDown = true;
+            if (this.crew && vn > 30 && g.player.state !== 'dead') { g.shake = 3; setTimeout(() => g.gameplay.die(), 600); }
+            else if (this.crew && vn > 3) { g.shake = Math.max(g.shake, Math.min(3, vn / 8)); if (g.audio.ready) g.audio.impact(V(0, 8.2, 2.2), Math.min(1, vn / 25)); }
+          }
+        } else if (r > floor + 5) this.podDown = false;
+      }
       this.shelter.update(dt);
       // who comes for it: B-29 if it can (Asphalt sets off by itself after a little while), else
       // the nearest station's rescue craft
@@ -1787,6 +1811,26 @@ export class H8Vessel {
     }
   }
 
+  /** H8 comes down on the ground or the sea (its flight model's contact): the armour takes it */
+  groundImpact(speed, vn, water) {
+    const g = this.g;
+    if (this.mode !== 'free') return;
+    const lethal = water ? 70 : 45;
+    if (this.crew) {
+      g.shake = Math.max(g.shake, Math.min(3, 0.5 + speed / 15));
+      if (g.audio.ready) { g.audio.impact(V(0, -3.5, 0.8).add(DOCK), Math.min(1, 0.2 + speed / 40)); if (water) g.audio.splash && g.audio.splash(0.5 + speed / 60); }
+    }
+    const E = 0.5 * H8.mass * speed * speed * (water ? 0.5 : 1);
+    if (speed > lethal) {
+      // too fast: the armour gives and the frame with it
+      this.armour.outer = 0; this.armour.inner = 0; this.structure = Math.min(this.structure, 0.02);
+      this.armourHit(Math.max(E, 4e7), V(0, -1, 0));
+      return;
+    }
+    if (speed > 4) this.armourHit(E * 0.35, V(0, -1, 0));
+    this.say(water ? 'hachi_splash' : 'hachi_touchdown', {}, { minGap: 5, force: false });
+  }
+
   /** armour takes a blow: the outer plates first, then the inner pressure armour. dirLocal: from
    * H8's centre toward the point hit (H8-local) */
   armourHit(E, dirLocal, opts = {}) {
@@ -1973,6 +2017,16 @@ export class H8Vessel {
       dCam = rel.distanceTo(camWorld);
     }
     if (this.rescue) this.rescue.updateVisual(dt, origin, camWorld);
+    // re-entry fire (on B-29's back: the pair's airflow and heating)
+    {
+      const fl = this.mode === 'docked' ? g.flight : this.flight;
+      const live = this.mode === 'docked' || this.mode === 'free';
+      const vAir = _v.set(OMEGA_EARTH * fl.pos.z, 0, -OMEGA_EARTH * fl.pos.x);
+      const flow = _v2.copy(fl.vel).sub(vAir).applyQuaternion(_q.copy(fl.quat).invert());
+      const sp = flow.length();
+      if (sp > 1e-3) flow.divideScalar(-sp); else flow.set(0, 0, 1);
+      this.fire.update(dt, live ? fireLevel(fl.heatFlux || 0) : 0, flow);
+    }
     if (this.mode === 'pod' || this.mode === 'lost') { this.wreckVisual(dt, eyePF, dCam); return; }
     // where H8 is this frame, for the dents (they are worked out in H8's own frame)
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;

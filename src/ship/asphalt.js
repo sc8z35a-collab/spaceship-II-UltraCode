@@ -213,6 +213,8 @@ const HACHI = {
   hachi_home: ['停泊軌道へ戻る。'],
   hachi_parked: ['停泊。省電力。'],
   hachi_arrived: ['{name}に到着。'],
+  hachi_touchdown: ['着地。'],
+  hachi_splash: ['着水。'],
   hachi_berth_go: ['{name}へ向かい、そのままドッキングする。'],
   hachi_berthed: ['{name}に係留。電力と推進剤を受け取る。'],
   hachi_unberth: ['{name}から離脱。'],

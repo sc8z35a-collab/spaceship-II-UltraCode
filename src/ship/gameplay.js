@@ -13,6 +13,7 @@ import { R_EARTH } from '../core/astro.js';
 import { HULL_BOTTOM } from './flight.js';
 import { R as RAPIER } from '../physics/localPhysics.js';
 import { H8 } from '../h8/h8Spec.js';
+import { ReentryFire, fireLevel } from '../fx/reentryFire.js';
 
 // rations aboard B-29 (days for one): eaten day by day, restocked at the Origin's berth
 export const FOOD_FULL = 60;
@@ -27,6 +28,7 @@ function distToSeg(p, a, b) {
   return a.clone().addScaledVector(ab, t).distanceTo(p);
 }
 const HATCH = OPENINGS.find((o) => o.kind === 'hatch');
+const _flow = new THREE.Vector3();
 
 export class Gameplay {
   constructor(game) {
@@ -144,38 +146,13 @@ export class Gameplay {
     plume.visible = false;
     g.shipVis.root.add(plume);
     this.plume = plume;
-    // re-entry plasma sheath
-    const plasmaMat = new THREE.ShaderMaterial({
-      uniforms: { uT: { value: 0 }, uH: { value: 0 }, uDir: { value: new THREE.Vector3(0, 0, -1) } },
-      vertexShader: 'varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw; void main(){ vP = position; vN = normal; vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; vNw = normalize(mat3(modelMatrix) * normal); gl_Position = projectionMatrix * viewMatrix * w; }',
-      fragmentShader: `uniform float uT; uniform float uH; uniform vec3 uDir; varying vec3 vP; varying vec3 vN; varying vec3 vW; varying vec3 vNw;
-        float h(vec3 p){ return fract(sin(dot(p, vec3(12.9898,78.233,45.164))) * 43758.5453); }
-        float n3(vec3 p){ vec3 i = floor(p), f = fract(p); f = f*f*(3.0-2.0*f);
-          return mix(mix(mix(h(i), h(i+vec3(1,0,0)), f.x), mix(h(i+vec3(0,1,0)), h(i+vec3(1,1,0)), f.x), f.y), mix(mix(h(i+vec3(0,0,1)), h(i+vec3(1,0,1)), f.x), mix(h(i+vec3(0,1,1)), h(i+vec3(1,1,1)), f.x), f.y), f.z); }
-        void main(){
-          vec3 N = normalize(vN);
-          float facing = dot(N, uDir);
-          float bow = pow(max(facing, 0.0), 3.0);                 // shock layer in front
-          vec3 V = normalize(cameraPosition - vW);
-          float rim = 1.0 - abs(dot(V, normalize(vNw)));          // glowing shell, see-through middle
-          // streaks flowing back along the hull
-          vec3 q = vP - uDir * dot(vP, uDir);
-          float s = n3(q * 2.4 + uDir * (dot(vP, uDir) * 0.35 - uT * 6.0)) * 0.65 + n3(vP * 5.0 - uDir * uT * 15.0) * 0.35;
-          float st = smoothstep(0.35, 0.85, s);                    // thin hot filaments
-          float wake = smoothstep(0.2, -0.6, facing) * pow(rim, 3.0) * st;
-          float a = uH * (bow * (0.6 + 0.6 * s) + pow(rim, 4.0) * 0.5 * smoothstep(-0.3, 0.6, facing) * (0.25 + st) + wake * 0.4);
-          vec3 c = mix(vec3(1.0, 0.25, 0.06), vec3(1.0, 0.86, 0.62), clamp(bow * 1.3, 0.0, 1.0)) * a * 2.2;
-          gl_FragColor = vec4(c, 1.0); }`,
-      transparent: true, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide,
-    });
-    const sheath = new THREE.Mesh(new THREE.SphereGeometry(1, 48, 24), plasmaMat);
-    sheath.scale.set(4.6, 3.8, 18.5);
-    sheath.position.set(0, 0.4, -1.0);
-    sheath.visible = false;
-    sheath.frustumCulled = false;
-    setLayersDeep(sheath, LAYER_NEAR, LAYER_MID);
-    g.shipVis.root.add(sheath);
-    this.sheath = sheath;
+    // re-entry fire round the whole hull (shock layer, hot core, the long wake of flame)
+    this.fire = new ReentryFire(g.shipVis.root, { center: V(0, 0.4, -0.5), shell: V(5.4, 4.6, 19.5), r0: 6, r1: 26, len: 420 });
+    // and its light through the windows (lamps that join the cabin's light pool while it burns)
+    this.fireLamps = [{ pos: V(0, 1.5, -11.4), room: 'cockpit' }];
+    for (const o of OPENINGS) if (o.kind !== 'hatch') this.fireLamps.push({ pos: o.center.clone().addScaledVector(o.normal, -0.7), room: o.room });
+    for (const l of this.fireLamps) Object.assign(l, { color: 0xff7a30, intensity: 0, range: 7, fire: true });
+    this.fireLampsOn = false;
     // dust motes in the cabin
     if (g.fx) {
       g.fx.emitter('dust', V(-1.6, 1.3, -6), V(0, 1, 0), 0.5, { speed: 0.02, spread: 3 });
@@ -783,6 +760,54 @@ export class Gameplay {
     if (integ < 0.4 && Math.random() < dt * (0.45 - integ) * 0.6) g.audio.creak(V((Math.random() - 0.5) * 3, Math.random() * 2.2, -9 + Math.random() * 16), 0.4 + Math.random() * 0.4);
   }
 
+  /**
+   * The fire of re-entry round the hull, its light through the windows, and the ship shaking:
+   * the hull itself shudders (the eye rides the frame, so the cabin shakes round Kaito), loose
+   * things rattle, the frame creaks and a deep rumble fills the cabin.
+   */
+  updateFire(dt, q, travel) {
+    const g = this.g;
+    const lvl = fireLevel(q);
+    this.fire.update(dt, lvl, _flow.copy(travel).negate());
+    this.fireLvl = lvl;
+    const t = performance.now() / 1000;
+    // window light: on while it burns (joins the light pool), flickering
+    const on = lvl > 0.04;
+    if (on !== this.fireLampsOn) {
+      this.fireLampsOn = on;
+      if (on) g.systems.lamps.push(...this.fireLamps);
+      else {
+        g.systems.lamps = g.systems.lamps.filter((l) => !l.fire);
+        for (const slot of g.systems.pool) if (slot.lamp && slot.lamp.fire) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
+      }
+    }
+    if (on) this.fireLamps.forEach((l, i) => { l.intensity = lvl * (2.4 + 1.1 * Math.sin(t * 23 + i * 1.7) + 0.7 * Math.sin(t * 37.3 + i)); });
+    // the hull shudders, harder the hotter (see Game.updateRender)
+    g.hullJitter = lvl;
+    if (lvl > 0.05) {
+      g.shake = Math.max(g.shake, Math.min(3.2, 0.4 + 2.9 * lvl));
+      // loose things rattle about, the frame creaks
+      this.fireKickT = (this.fireKickT || 0) - dt;
+      if (this.fireKickT <= 0) {
+        this.fireKickT = 0.18 + Math.random() * 0.3;
+        g.phys.kick(V((Math.random() - 0.5) * 0.9, (Math.random() - 0.5) * 1.1, (Math.random() - 0.5) * 0.9).multiplyScalar(lvl), 1.2 * lvl, null, 0.04 * lvl);
+        if (Math.random() < 0.35 * lvl && g.audio.ready) g.audio.creak(V((Math.random() - 0.5) * 4, Math.random() * 2.4, -10 + Math.random() * 18), 0.3 + 0.5 * lvl);
+      }
+      // embers stream off the hull, back along the flow
+      if (g.fx && Math.random() < dt * 60 * lvl) {
+        const p = V((Math.random() - 0.5) * 5.5, 0.4 + (Math.random() - 0.5) * 4.5, -11 + Math.random() * 22).addScaledVector(travel, 3);
+        g.fx.burst('spark', p, _flow, 2, { speed: 28 + 40 * lvl, spread: 0.18 });
+      }
+    }
+    // a deep rumble under the roar
+    if (g.audio.ready) {
+      if (lvl > 0.02 || g.audio.loops.has('fireRumble')) {
+        g.audio.noiseLoop('fireRumble', { type: 'brown', freq: 55, q: 0.8, gain: 0, filter: 'lowpass', direct: true });
+        g.audio.setLoopGain('fireRumble', Math.min(0.55, lvl * 0.6), 0.4);
+      }
+    }
+  }
+
   // ================================================================== break-up
   breakup(reason) {
     const g = this.g;
@@ -983,10 +1008,7 @@ export class Gameplay {
     g.shipVis.setHeat(heat, travel);
     g.engine.grade.set('uHeat', Math.min(1, heat * 0.8));
     const plasma = Math.min(1.3, Math.max(0, q - 1.2e4) / 2.2e5);
-    this.sheath.visible = plasma > 0.01;
-    this.sheath.material.uniforms.uH.value = plasma;
-    this.sheath.material.uniforms.uT.value = performance.now() / 1000 % 100;
-    this.sheath.material.uniforms.uDir.value.copy(travel);
+    this.updateFire(dt, q, travel);
     if (q > 3e3) {
       g.shake = Math.max(g.shake, Math.min(2, q / 5e4));
       const gain = Math.min(0.6, q / 8e4);

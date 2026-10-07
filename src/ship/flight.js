@@ -202,7 +202,8 @@ export class Flight {
     const surf = terrainHeight ? terrainHeight(pos) : { h: 0, water: true };
     this.surfaceH = surf.h;
     this.inWaterSurface = surf.water;
-    this.groundAlt = alt - surf.h - HULL_BOTTOM;
+    const HB = this.spec.hullBottom ?? HULL_BOTTOM;
+    this.groundAlt = alt - surf.h - HB;
 
     // --- attitude control (relative to LVLH)
     const tk = this.turnK || 1;
@@ -340,7 +341,7 @@ export class Flight {
         pos.addScaledVector(vel, dt);
         // keep on the surface
         const rr = pos.length();
-        const target = R_EARTH + this.surfaceH + HULL_BOTTOM - (this.inWater ? 1.2 + Math.sin(performance.now() / 1300) * 0.15 : 0);
+        const target = R_EARTH + this.surfaceH + HB - (this.inWater ? 1.2 + Math.sin(performance.now() / 1300) * 0.15 : 0);
         pos.multiplyScalar(target / rr);
         this.properAcc.copy(g).negate(); // ground pushes up
         this.vertSpeed = 0;
@@ -359,13 +360,13 @@ export class Flight {
 
     // --- ground / water contact
     const rr = pos.length();
-    const gAlt = rr - R_EARTH - this.surfaceH - HULL_BOTTOM;
+    const gAlt = rr - R_EARTH - this.surfaceH - HB;
     if (gAlt <= 0) {
       const vrel = vel.clone().sub(vAir);
       const vn = -vrel.dot(up);           // downward speed
       const vt = vrel.clone().addScaledVector(up, vrel.dot(up)).length();
       const impact = Math.hypot(vn, vt * 0.35);
-      pos.multiplyScalar((R_EARTH + this.surfaceH + HULL_BOTTOM) / rr);
+      pos.multiplyScalar((R_EARTH + this.surfaceH + HB) / rr);
       this.inWater = !!this.inWaterSurface;
       if (impact > 2.5 && this.impactCallback) this.impactCallback(impact, vn, this.inWater);
       this.landed = true;
