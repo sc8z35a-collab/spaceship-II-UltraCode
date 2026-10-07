@@ -6,6 +6,11 @@
 // back for a while; shot to pieces, it blows apart (its pieces tumble away) and another one comes
 // a couple of hours later. The stations' point-defence guns fire on any that come too close.
 // When the first of them comes within 50 km of Kaito's vessel he is told — just that: 敵が来ました.
+// Each is graded ★1 to ★5: the higher, the harder it accelerates, the faster its nose swings and it
+// reacts, the faster it flies (2000 m/s at most, against the local orbit) and the better its gun
+// tracks. A missile coming at one is the first thing it deals with: once it has noticed it (its
+// reaction time), it jinks across the missile's line while it keeps on with its attack, and turns
+// its gun on the missile as soon as it is in reach (six hits bring a missile down).
 // Everything flies in ECI with gravity, like the ships.
 import * as THREE from 'three';
 import { droneMaterials, droneHi, droneMid, droneLo } from './droneModel.js';
@@ -21,14 +26,28 @@ const SENSOR = 80e3;         // detection range (m)
 const NOTICE = 50e3;         // Kaito is told when the first one comes this close (m)
 const NOTICE_CLEAR = 65e3;   // ...and again only after every one has been beyond this
 const GUN_RANGE = 2600;
-const A_MAX = 60;            // m/s^2: unmanned, six g
 const V_HUNT = 2400;         // closing speed while hunting (m/s, relative)
 const V_SEARCH = 1100;       // speed of the search legs
 const RESPAWN = 2 * 3600;    // s of game time
 const AMMO_N = 180;          // rounds a drone carries
 const RELOAD = 25 * 60;      // s: away to rearm when it has shot its drum empty
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _q = new THREE.Quaternion();
+const _vh = new THREE.Vector3(), _vr = new THREE.Vector3(), _vl = new THREE.Vector3();
 const Z = new THREE.Vector3(0, 0, -1);
+/** the grades (★1 .. ★5): acceleration (m/s^2), nose swing (rad/s), reaction time (s), top speed
+ * against the local orbit (m/s), how far off its fire control's track is (x); against missiles:
+ * how far out it opens fire (m), how quickly its track follows a missile's manoeuvre (s) */
+export const GRADES = [null,
+  { a: 45, turn: 2.2, react: 1.2, v: 1100, sens: 1.3, mR: 2000, mT: 0.6 },
+  { a: 60, turn: 2.9, react: 0.9, v: 1350, sens: 1.1, mR: 2600, mT: 0.45 },
+  { a: 76, turn: 3.6, react: 0.6, v: 1600, sens: 0.9, mR: 3200, mT: 0.3 },
+  { a: 92, turn: 4.3, react: 0.38, v: 1800, sens: 0.72, mR: 5000, mT: 0.18 },
+  { a: 112, turn: 5.2, react: 0.18, v: 2000, sens: 0.55, mR: 4000, mT: 0.1 },
+];
+/** stars as text: ★★★☆☆ */
+export function starsText(n) { return '★'.repeat(n || 1) + '☆'.repeat(5 - (n || 1)); }
+/** a grade for a new drone: most are middling, a few are aces */
+function pickStars() { const u = Math.random(); return u < 0.18 ? 1 : u < 0.46 ? 2 : u < 0.72 ? 3 : u < 0.9 ? 4 : 5; }
 
 function grav(p, out) { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); }
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -70,8 +89,12 @@ export class Drones {
         alive: false, hp: 1, state: 'patrol', t: 0, burst: 0, shotT: 0, cool: rand(1, 3), respawnT: 0,
         slot: { r: rand(650, 1150), ph: rand(0, Math.PI * 2), w: rand(0.12, 0.22) * (Math.random() < 0.5 ? -1 : 1), tilt: rand(-0.7, 0.7) },
         run: null, smokeT: 0, seenT: 0, evadeT: 0, ammo: AMMO_N, reloadT: 0, search: 0, wp: null, wpT: 0,
+        stars: 3, G: GRADES[3], msl: null, mslSeen: 0, jink: new THREE.Vector3(), jinkT: 0,
         // its gun's fire control (a cruder sensor set than H8's)
         fc: new FireControl({ am: AMMO.d20, gun: GUNS.drone20, seed: seedOf('drone', i), sensor: { ang: 0.45e-3, range: 4, vel: 0.25 }, accT: 0.8 }),
+        // against missiles its fire control runs a quicker track (it reads a missile's manoeuvre
+        // almost as it happens)
+        fcM: new FireControl({ am: AMMO.d20, gun: GUNS.drone20, seed: seedOf('droneM', i), sensor: { ang: 0.3e-3, range: 3, vel: 0.2 }, accT: 0.1 }),
       });
     }
     // far away: their drive glow as points (visible out to a few hundred km)
@@ -132,8 +155,22 @@ export class Drones {
     d.vel.crossVectors(h, d.pos).normalize().multiplyScalar(Math.sqrt(MU_EARTH / r));
     d.alive = true; d.hp = 1; d.state = 'patrol'; d.t = 0; d.burst = 0; d.cool = rand(1, 3); d.run = null; d.evadeT = 0;
     d.ammo = AMMO_N; d.reloadT = 0; d.search = rand(800e3, 1400e3); d.wp = null; d.wpT = 0;
+    this.grade(d, pickStars());
     d.q.setFromUnitVectors(Z, d.vel.clone().normalize());
     this.showLod(d, null);
+  }
+
+  /** a drone's grade, with its gun's fire control to match */
+  grade(d, stars) {
+    d.stars = Math.max(1, Math.min(5, stars | 0));
+    d.G = GRADES[d.stars];
+    const S = d.fc.sensor, k = d.G.sens;
+    S.ang = 0.45e-3 * k; S.range = 4 * k; S.vel = 0.25 * k;
+    // (the better it is, the quicker its track follows a manoeuvre)
+    d.fc.accT = 0.15 + 0.35 * k;
+    const SM = d.fcM.sensor;
+    SM.ang = 0.35e-3 * k; SM.range = 3 * k; SM.vel = 0.2 * k;
+    d.fcM.accT = d.G.mT;
   }
 
   start() {
@@ -149,6 +186,15 @@ export class Drones {
     const g = this.g;
     const T = this.target();
     let contact = false, attacking = 0, near = 0, far = true;
+    // the missiles in flight, each at its drone (the nearest one counts)
+    for (const d of this.list) d.msl = null;
+    for (const r of this.combat.rounds) {
+      if (r.kind !== 'missile' || r.done || !r.target || r.target.kind !== 'drone') continue;
+      const d = r.target;
+      if (!d.alive) continue;
+      const dist = r.pos.distanceTo(d.pos);
+      if (!d.msl || dist < d.msl.dist) d.msl = { r, dist };
+    }
     for (const d of this.list) {
       if (!d.alive) {
         d.respawnT -= sdt;
@@ -212,14 +258,14 @@ export class Drones {
       }
       const pDes = T.pos.clone().addScaledVector(fwd, d.wp.f).addScaledVector(side, d.wp.s).addScaledVector(up, d.wp.u);
       const to = pDes.sub(d.pos), dw = to.length();
-      const want = Math.min(V_SEARCH, Math.sqrt(2 * 12 * dw));
+      const want = Math.min(V_SEARCH, d.G.v, Math.sqrt(2 * 12 * dw));
       const vDes = to.divideScalar(Math.max(1, dw)).multiplyScalar(want);
       acc.copy(vDes.sub(vRel)).multiplyScalar(0.5).add(ff);
       if (dw < 3000) d.wpT = Math.min(d.wpT, 20);
     } else if (d.state === 'hunt') {
       // close in along the line of sight, braking in time
       const los = rel.clone().divideScalar(Math.max(1, dist));
-      const want = Math.min(V_HUNT, Math.sqrt(2 * 18 * Math.max(0, dist - 3500)));
+      const want = Math.min(V_HUNT, d.G.v, Math.sqrt(2 * 0.3 * d.G.a * Math.max(0, dist - 3500)));
       const vDes = los.multiplyScalar(want);
       acc.copy(vDes.sub(vRel)).multiplyScalar(0.6).add(ff);
     } else if (d.state === 'evade') {
@@ -229,7 +275,7 @@ export class Drones {
       // attack: hold a slot circling the target, every so often a gun run straight at it
       const S = d.slot;
       S.ph += S.w * dt;
-      if (!d.run && d.cool <= 0 && Math.random() < dt * 0.25) d.run = { t: 0, side: Math.random() < 0.5 ? -1 : 1 };
+      if (!d.run && d.cool <= 0 && Math.random() < dt * (0.15 + 0.05 * d.stars)) d.run = { t: 0, side: Math.random() < 0.5 ? -1 : 1 };
       const up = T.pos.clone().normalize();
       const fwd = T.vel.clone().projectOnPlane(up).normalize();
       const side = new THREE.Vector3().crossVectors(up, fwd);
@@ -250,45 +296,84 @@ export class Drones {
       const e = pDes.sub(d.pos), ev = vDes.sub(d.vel);
       acc.copy(e.multiplyScalar(0.36)).addScaledVector(ev, 1.1).add(ff);
       // never ram: a hard push away inside 120 m
-      if (dist < 120 + T.R) acc.addScaledVector(rel.clone().normalize(), -A_MAX);
+      if (dist < 120 + T.R) acc.addScaledVector(rel.clone().normalize(), -d.G.a);
       aimAt = T;
     }
-    if (acc.length() > A_MAX * (d.hp < 0.4 ? 0.6 : 1)) acc.setLength(A_MAX * (d.hp < 0.4 ? 0.6 : 1));
+    // ---- a missile coming: once it has noticed it, the drone jinks across the missile's line
+    // (a new way every second or so, sooner the better it is) and, close in, away from it — on top
+    // of whatever it was doing
+    const M = d.msl;
+    d.mslSeen = M ? d.mslSeen + dt : 0;
+    const evading = !!M && d.mslSeen > d.G.react;
+    if (evading) {
+      const lm = _vl.copy(M.r.pos).sub(d.pos).divideScalar(Math.max(1, M.dist));
+      d.jinkT -= dt;
+      if (d.jinkT <= 0 || Math.abs(d.jink.dot(lm)) > 0.3) {
+        d.jinkT = rand(0.6, 1.4) * (1.25 - 0.12 * d.stars);
+        d.jink.randomDirection().addScaledVector(lm, -d.jink.dot(lm)).normalize();
+      }
+      // (close in it backs away from the missile, its nose and gun still on it: it runs and
+      // fights at once; further off it keeps on with its attack, jinking)
+      // (the better it is, the earlier it starts backing off: it uses its speed to stretch the
+      // time its gun has on the missile)
+      const flee = M.dist < 6000 + 3500 * d.stars ? 1 : 0.35;
+      // (once its gun can reach the missile it stops jinking: a steady run gives its fire control
+      // a steady target to lay on)
+      const jk = M.dist < d.G.mR ? 0.08 : 0.7;
+      acc.multiplyScalar(1 - 0.65 * flee).addScaledVector(d.jink, d.G.a * jk).addScaledVector(lm, -d.G.a * 0.75 * flee);
+    }
+    const aLim = d.G.a * (d.hp < 0.4 ? 0.6 : 1);
+    if (acc.length() > aLim) acc.setLength(aLim);
     d.thrust.copy(acc);
     // ---- fly (second-order step with gravity)
     const gg = grav(d.pos, new THREE.Vector3()).add(acc);
     d.pos.addScaledVector(d.vel, dt).addScaledVector(gg, 0.5 * dt * dt);
     d.vel.addScaledVector(gg, dt);
+    // no faster than its grade allows, against the local orbit (a circular one in the plane of
+    // the vessel it hunts)
+    {
+      const r = d.pos.length();
+      const vRef = _vh.crossVectors(T.pos, T.vel).normalize().cross(_vr.copy(d.pos).divideScalar(r)).multiplyScalar(Math.sqrt(MU_EARTH / r));
+      const vr = _vr.copy(d.vel).sub(vRef), sp = vr.length();
+      if (sp > d.G.v) d.vel.addScaledVector(vr, d.G.v / sp - 1);
+    }
+    // ---- what the gun is on: a missile in reach comes first, else the vessel it attacks
+    let G = null;
+    if (evading && M.dist < d.G.mR) G = { id: 'msl', pos: M.r.pos, vel: M.r.vel, acc: M.r.aAct || null, range: M.dist };
+    else if (aimAt) G = { id: T.kind, pos: T.pos, vel: T.vel, acc: T.acc, range: dist };
     // ---- point the nose: at its fire control's solution while it can shoot, else along its motion
     let want = null;
     d.fc.tick(dt);
-    if (aimAt && dist < GUN_RANGE + 400) {
-      d.fc.observe(T.kind, T.pos, T.vel, T.acc, dt);
-      const sol = d.fc.solve(T.kind, d.pos, d.vel);
+    d.fcM.tick(dt);
+    const FC = G && G.id === 'msl' ? d.fcM : d.fc;
+    if (G && G.range < (G.id === 'msl' ? d.G.mR : GUN_RANGE + 400)) {
+      FC.observe(G.id, G.pos, G.vel, G.acc, dt);
+      const sol = FC.solve(G.id, d.pos, d.vel);
       if (sol) want = sol.aimDir.clone();
     }
     if (!want) want = d.vel.clone().sub(T.vel).normalize();
     if (want.lengthSq() > 0.5) {
       const qWant = _q.setFromUnitVectors(Z, want);
       const ang = d.q.angleTo(qWant);
-      const maxTurn = 2.6 * dt;
+      const maxTurn = d.G.turn * dt;
       d.q.slerp(qWant, ang > maxTurn ? maxTurn / ang : 1);
     }
-    // ---- the gun: bursts when lined up and in range
+    // ---- the gun: bursts when lined up and in range (at a missile: as long as it is in reach)
     d.cool -= dt;
     d.shotT -= dt;
-    if (aimAt && dist < GUN_RANGE && want) {
+    const onMsl = G && G.id === 'msl';
+    if ((onMsl || (aimAt && dist < GUN_RANGE)) && want) {
       const nose = Z.clone().applyQuaternion(d.q);
       const err = nose.angleTo(want);
-      if (d.burst <= 0 && d.cool <= 0 && err < 0.05 && d.ammo > 0) { d.burst = 6 + Math.floor(Math.random() * 5); }
+      if (d.burst <= 0 && d.cool <= 0 && err < (onMsl ? 0.004 : 0.05) && d.ammo > 0) { d.burst = 6 + Math.floor(Math.random() * 5); }
       if (d.burst > 0 && d.shotT <= 0 && d.ammo > 0) {
         d.shotT = 1 / 9;
         d.burst--;
         d.ammo--;
         const muzzle = d.pos.clone().add(new THREE.Vector3(0, -0.28, -1.2).applyQuaternion(d.q));
         // (the gun is fixed in the nose: it fires where the nose points; the scatter is the gun's)
-        this.combat.fire({ kind: 'drone', round: d.fc.fire(muzzle, d.vel, nose, d.hp < 0.5 ? 1.6 : 1), pos: muzzle, vel: d.vel, dir: nose, owner: d });
-        if (d.burst <= 0) d.cool = rand(1.6, 3.2);
+        this.combat.fire({ kind: 'drone', round: FC.fire(muzzle, d.vel, nose, d.hp < 0.5 ? 1.6 : 1), pos: muzzle, vel: d.vel, dir: nose, owner: d, atMsl: onMsl ? M.r : null });
+        if (d.burst <= 0) d.cool = rand(1.6, 3.2) * (1.35 - 0.13 * d.stars);
         // the drum is empty: away to rearm
         if (d.ammo <= 0) { d.reloadT = RELOAD * rand(0.8, 1.2); d.run = null; this.onDry(d); }
       }
@@ -402,7 +487,7 @@ export class Drones {
       const rel = d.pos.clone().sub(origin);
       const dist = rel.distanceTo(camWorld);
       const eff = dist * zoomK;
-      const thrustK = Math.min(1, d.thrust.length() / A_MAX);
+      const thrustK = Math.min(1, d.thrust.length() / d.G.a);
       this.ptPos.set([rel.x, rel.y, rel.z], i * 3);
       this.ptK[i] = 0.35 + 0.65 * thrustK;
       const L = d.lods;
@@ -422,7 +507,7 @@ export class Drones {
         d.jets.matrix.copy(mesh.matrix);
         d.jets.matrixWorld.copy(mesh.matrix);
         d.jets.updateMatrixWorld(true);
-        d.plume.update(dt, Math.min(1.2, Math.max(0, -tl.z) / A_MAX * 1.3 + thrustK * 0.25), 0, 0);
+        d.plume.update(dt, Math.min(1.2, Math.max(0, -tl.z) / d.G.a * 1.3 + thrustK * 0.25), 0, 0);
         d.plume.setDistance(dist);
       } else d.plume.mesh.visible = false;
       if (mesh) {
@@ -459,7 +544,7 @@ export class Drones {
   serialize() {
     return {
       started: this.started,
-      list: this.list.map((d) => ({ alive: d.alive, hp: d.hp, state: d.state, respawnT: d.respawnT, pos: d.pos.toArray(), vel: d.vel.toArray(), ammo: d.ammo, reloadT: d.reloadT, search: d.search })),
+      list: this.list.map((d) => ({ alive: d.alive, hp: d.hp, state: d.state, respawnT: d.respawnT, pos: d.pos.toArray(), vel: d.vel.toArray(), ammo: d.ammo, reloadT: d.reloadT, search: d.search, stars: d.stars })),
     };
   }
 
@@ -473,6 +558,7 @@ export class Drones {
       d.respawnT = (x.respawnT || 0) - gapSec;
       d.pos.fromArray(x.pos); d.vel.fromArray(x.vel);
       d.ammo = x.ammo ?? AMMO_N; d.reloadT = Math.max(0, (x.reloadT || 0) - gapSec); d.search = x.search || 600e3; d.wp = null;
+      this.grade(d, x.stars || pickStars());
       if (d.reloadT <= 0 && d.ammo <= 0) d.ammo = AMMO_N;
     });
     // back after a long time away: they have lost him and search from afar again

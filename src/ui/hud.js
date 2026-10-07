@@ -73,7 +73,7 @@ export class Hud {
       if (this.last.autoL !== autoL && this.el.autoL) { this.last.autoL = autoL; this.el.autoL.textContent = autoL; }
       const railDim = h8 && (W.railCharge < 1 || W.ammo.rail <= 0);
       if (this.last.railDim !== railDim) { this.last.railDim = railDim; this.el.rail.classList.toggle('dim', railDim); }
-      const mslDim = msl && W.ammo.missile <= 0;
+      const mslDim = msl && (W.ammo.missile <= 0 || !W.readyLaunchers().length);
       if (this.last.mslDim !== mslDim) { this.last.mslDim = mslDim; this.el.msl.classList.toggle('dim', mslDim); }
       if (msl && this.last.mslN !== W.ammo.missile && this.el.mslN) { this.last.mslN = W.ammo.missile; this.el.mslN.textContent = String(W.ammo.missile); }
     }

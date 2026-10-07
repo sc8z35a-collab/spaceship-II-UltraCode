@@ -35,6 +35,7 @@ import { Arsenal } from './arsenal.js';
 import { ZONE } from '../h8/hachiDefence.js';
 import { RINGS, DECK, ringFrame, ringCircle, buildRing, buildSled, buildLink, Carriage, dAng } from './gunRings.js';
 import { QUALITY } from '../core/quality.js';
+import { starsText } from './drones.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _v = new THREE.Vector3(), _m = new THREE.Matrix4();
@@ -66,6 +67,10 @@ function weaponMaterials() {
     sledLamp: S({ color: 0x000000, emissive: new THREE.Color(1.0, 0.6, 0.15), emissiveIntensity: 3 }),
     steel: S({ color: 0x9aa3ab, metalness: 0.9, roughness: 0.25 }),
     cable: S({ color: 0x1b1d20, metalness: 0.1, roughness: 0.7 }),
+    // the missile launchers: the tube's dark inside, the ready missile's nose
+    tubeIn: S({ color: 0x0b0c0e, metalness: 0.4, roughness: 0.8 }),
+    mslWhite: S({ color: 0xe4e7ea, metalness: 0.45, roughness: 0.38 }),
+    mslBand: S({ color: 0xe0a020, metalness: 0.3, roughness: 0.5 }),
   };
 }
 
@@ -200,22 +205,57 @@ function turret(M, kind) {
   return g;
 }
 
-/** missile box launcher: six cells with lids that blow off as they launch */
-function pod(M) {
+/**
+ * A missile launcher: an armoured housing round a single launch tube, clamshell doors over its
+ * mouth, the next missile's nose rising into the tube as the loader brings it up from the magazine,
+ * status lamps (green ready, amber loading, red empty). Local frame: +y out of the hull
+ */
+function launcher(M) {
   const b = new Builder();
-  b.box(0.62, 0.34, 0.9, 'gunMetal', [0, 0.17, 0], null, 0.04);
-  b.box(0.66, 0.06, 0.94, 'hazard', [0, 0.02, 0], null, 0.01);
+  b.box(0.62, 0.3, 0.74, 'gunMetal', [0, 0.15, 0], null, 0.05);
+  b.box(0.66, 0.05, 0.78, 'hazard', [0, 0.025, 0], null, 0.012);
+  for (const s of [-1, 1]) b.box(0.05, 0.36, 0.6, 'gunDark', [s * 0.34, 0.18, 0], null, 0.012);
+  b.cyl(0.2, 0.21, 0.06, 'gunDark', [0, 0.31, 0], null, 28);
+  b.cyl(0.155, 0.155, 0.3, 'tubeIn', [0, 0.18, 0], null, 24, true);
+  b.cyl(0.155, 0.155, 0.01, 'tubeIn', [0, 0.04, 0], null, 24);
+  // the loader's guide rails down the tube wall
+  for (const s of [-1, 1]) b.box(0.012, 0.28, 0.02, 'steel', [s * 0.14, 0.18, 0], null, 0.002);
   const g = b.build(M, { castShadow: false });
-  const lids = [];
-  for (let i = 0; i < 6; i++) {
-    const lid = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.025, 0.24), M.podLid);
-    lid.position.set(-0.2 + (i % 3) * 0.2, 0.35, -0.18 + Math.floor(i / 3) * 0.36);
-    g.add(lid);
-    lids.push(lid);
+  // the doors, hinged at the collar's sides
+  const doors = [];
+  for (const s of [-1, 1]) {
+    const hinge = new THREE.Group();
+    hinge.position.set(s * 0.2, 0.345, 0);
+    const db = new Builder();
+    db.box(0.2, 0.026, 0.4, 'podLid', [-s * 0.1, 0, 0], null, 0.008);
+    db.box(0.16, 0.006, 0.32, 'hazard', [-s * 0.1, 0.015, 0], null, 0.002);
+    db.cyl(0.018, 0.018, 0.42, 'steel', [0, 0, 0], [Math.PI / 2, 0, 0], 10);
+    hinge.add(db.build(M, { castShadow: false }));
+    g.add(hinge);
+    doors.push({ hinge, s });
   }
-  g.userData = { lids };
+  // the ready missile's nose in the tube
+  const nb = new Builder();
+  nb.cyl(0.1, 0.1, 0.3, 'mslWhite', [0, -0.15, 0], null, 18);
+  nb.lathe([[0.1, 0], [0.097, 0.07], [0.086, 0.15], [0.066, 0.22], [0.04, 0.27], [0.012, 0.3], [0, 0.302]], 'mslWhite', [0, 0, 0], null, 18);
+  nb.cyl(0.102, 0.102, 0.05, 'mslBand', [0, 0.06, 0], null, 18);
+  nb.sphere(0.03, 'tubeIn', [0, 0.29, 0], 10);
+  const nose = nb.build(M, { castShadow: false });
+  g.add(nose);
+  // its lamps
+  const lamp = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(0.2, 1.0, 0.35), emissiveIntensity: 3 });
+  for (const s of [-1, 1]) {
+    const l = new THREE.Mesh(new THREE.SphereGeometry(0.022, 10, 6), lamp);
+    l.position.set(s * 0.25, 0.305, 0.33);
+    g.add(l);
+  }
+  g.userData = { doors, nose, lamp };
   return g;
 }
+
+/** missile launch range (m) and the time a launcher takes to reload (s) */
+export const MSL_RANGE = 120e3;
+const MSL_RELOAD = 1.0;
 
 export class Weapons {
   constructor(game, combat) {
@@ -228,8 +268,6 @@ export class Weapons {
     this.auto = { hachi: true, asphalt: true };
     this.tgtIndex = { h8: 0, b29: 0 };
     this.railCharge = 1;
-    this.mslT = 0;
-    this.salvo = [];
     this.fireHeld = false;
     this.h8Mounts = [];
     this.b29Mount = null;
@@ -293,15 +331,18 @@ export class Weapons {
     mk('gunA', 'twin', 0, 0);
     mk('gunB', 'twin', 1, -half);
     mk('rail', 'rail', 1, half);
-    this.pods = [];
+    // the two missile launchers (aft, high on each side): each its own tube, reloaded from the
+    // magazine inside in a second
+    this.launchers = [];
     for (const s of [-1, 1]) {
-      const p = pod(this.M);
+      const p = launcher(this.M);
       const d = V(s * 0.82, 0.3, 0.48).normalize();
       const f = frameAt(d);
-      p.matrix.makeBasis(f.x, f.y, f.z).setPosition(d.clone().multiplyScalar(R - 0.04));
+      const at = d.clone().multiplyScalar(R - 0.04);
+      p.matrix.makeBasis(f.x, f.y, f.z).setPosition(at);
       p.matrixAutoUpdate = false;
       G.add(p);
-      this.pods.push({ group: p, dir: d, frame: f, side: s });
+      this.launchers.push({ group: p, dir: d, frame: f, at, side: s, loaded: true, load: 1, reload: 0, door: 0, doorT: 0, kick: 0, queue: null, closeT: 0 });
     }
     // H8 keeps the group's layers (near, or by distance)
     const meshes = [];
@@ -416,7 +457,7 @@ export class Weapons {
     const reach = which === 'h8' ? MAX_RANGE + 5000 : 12000;
     const dReach = which === 'h8' ? ZONE + 5000 : reach;
     if (g.drones) for (const d of g.drones.list) if (d.alive && d.pos.distanceTo(P.pos) < dReach) {
-      add({ id: 'dr:' + d.id, kind: 'drone', ref: d, pos: d.pos, vel: d.vel, acc: d.thrust, R: 1.0, agility: d.state === 'evade' ? 45 : d.state === 'attack' ? 14 : 6, name: d.id, threat: true });
+      add({ id: 'dr:' + d.id, kind: 'drone', ref: d, pos: d.pos, vel: d.vel, acc: d.thrust, R: 1.0, agility: (d.state === 'evade' || d.msl ? 45 : d.state === 'attack' ? 14 : 6) * (d.G ? d.G.a / 76 : 1), name: d.id + ' ' + starsText(d.stars), threat: true });
     }
     for (const a of g.asteroids.list) if (!a.dead && !a.hit && a.pos.distanceTo(P.pos) < (which === 'h8' ? 8000 : 4000)) add({ id: rockId(a), kind: 'rock', ref: a, pos: a.pos, vel: a.vel, acc: null, R: a.radius, agility: 0, name: '岩塊' });
     if (hud) {
@@ -523,16 +564,10 @@ export class Weapons {
         this.aimAndFire(rail, 'h8', T, dt, false, true);
         if (A && !manual && this.railCharge >= 1 && this.ammo.rail > 0 && h8.power.smes > H8.smesMJ * 0.15 && this.autoShoot(A, 'rail')) this.fireRail(false, A);
       }
-      // missiles: one at a time at the intercept target, beyond the guns' reach (and none at
-      // a drone that already has one coming)
-      this.autoMslT = Math.max(0, (this.autoMslT || 0) - dt);
-      if (A && this.ammo.missile > 0 && this.autoMslT <= 0 && A.dist > 5000 && A.dist < ZONE && !this.missileOn(A.ref)) {
-        this.autoMslT = 7;
-        this.launchMissile(A, false);
-      }
-      // queued salvo launches
-      this.mslT -= dt;
-      if (this.salvo.length && this.mslT <= 0) { this.mslT = 0.35; this.launchMissile(this.salvo.shift(), true); }
+      // missiles: HACHI's at the nearest threats beyond the guns' reach (none at a drone that
+      // already has one coming); the launchers' doors, loaders and lamps
+      if (this.auto.hachi) this.autoMissiles(dt);
+      this.runLaunchers(dt);
     }
     // B-29's defence gun (HACHI shares its track over the link: a better solution)
     if (this.b29Mount) {
@@ -847,87 +882,171 @@ export class Weapons {
     if (h8.seatKick) h8.seatKick(1.4);
   }
 
-  /** the target for one missile from this seat: H8's focus (else the nearest threat); from
-   * B-29's seat the nearest enemy H8's sensors have inside the zone */
-  missileTarget(w) {
-    if (w === 'h8') return this.primary('h8');
-    const T = this.targets('h8').filter((x) => x.kind === 'drone' && x.dist < ZONE);
-    const b = this.primary('b29');
-    if (b && b.kind === 'drone') { const same = T.find((x) => x.ref === b.ref); if (same) return same; }
-    return T.sort((a, b2) => a.dist - b2.dist)[0] || null;
+  /** what H8's display has in focus, at any distance: a target for a missile, or null */
+  focusTarget() {
+    const h8 = this.g.h8, hud = h8 && h8.hud;
+    const F = hud && hud.primary ? hud.primary() : null;
+    if (!F || !F.c || !F.c.pos) return null;
+    const c = F.c, P = this.pose('h8');
+    const R = c.kind === 'drone' ? 1 : hud.radiusOf ? hud.radiusOf(c) * 0.6 : 5;
+    return { id: c.id, kind: c.kind, ref: c.ref || null, pos: c.pos, vel: c.vel || P.vel, R, name: c.short || c.name, dist: c.pos.distanceTo(P.pos) };
   }
 
-  /** the missile button: one missile at the target */
+  /** launchers ready to fire */
+  readyLaunchers() { return (this.launchers || []).filter((L) => L.loaded && !L.queue); }
+
+  /**
+   * The missile button: the nearest enemies inside 50 km first (one per ready launcher: two at
+   * once at most), else what is in focus — out of the missiles' 120 km, Kaito is asked what to do
+   */
   fireMissile(w) {
     const g = this.g, h8 = g.h8;
     if (!h8 || h8.awake < 0.5) return;
     if (this.ammo.missile <= 0) { this.dry('h8'); return; }
-    const T = this.missileTarget(w);
-    if (!T) { h8.say('hachi_no_target', {}, { minGap: 4, force: false }); return; }
-    this.launchMissile(T, true);
-    h8.say('hachi_msl', { name: T.name }, { minGap: 1, force: true });
+    const ready = this.readyLaunchers();
+    if (!ready.length) { h8.say('hachi_msl_reload', {}, { minGap: 1, force: true }); return; }
+    const E = this.targets('h8').filter((x) => x.kind === 'drone' && x.dist < ZONE).sort((a, b) => a.dist - b.dist);
+    let T = E.slice(0, ready.length);
+    if (!T.length) {
+      const F = this.focusTarget();
+      if (!F) { h8.say('hachi_no_target', {}, { minGap: 4, force: false }); return; }
+      if (F.dist > MSL_RANGE) { this.askRange(F); return; }
+      T = [F];
+    }
+    T.forEach((x, i) => this.launchAt(ready[i], x, true));
+    h8.say('hachi_msl', { name: T.map((x) => x.name).join('・') }, { minGap: 1, force: true });
+    void w;
   }
 
-  /** one missile at each locked target (drones first), a beat apart */
-  salvoMissiles(manual) {
-    const g = this.g, h8 = g.h8;
-    if (!h8 || h8.awake < 0.5) return;
-    if (this.ammo.missile <= 0) { this.dry('h8'); return; }
-    const T = this.targets('h8').filter((x) => x.kind === 'drone' || x.locked);
-    if (!T.length) { h8.say('hachi_no_target', {}, { minGap: 4, force: false }); return; }
-    const n = Math.min(this.ammo.missile, T.length);
-    this.salvo.push(...T.slice(0, n));
-    h8.say('hachi_salvo', { n }, { force: true });
+  /** a launcher told to fire at T: its doors open, then the missile goes */
+  launchAt(L, T, manual) {
+    if (!L || !T) return;
+    L.queue = { T, manual };
+    L.doorT = 1;
   }
 
-  /** the cell a missile count fires from: { pod, cell } (they go alternately, front cells first) */
-  cellOf(count) { return { pod: this.pods[count % 2], cell: ((AMMO_MAX.missile - count) >> 1) % 6 }; }
+  /**
+   * The focus is beyond the missiles' reach: Kaito chooses — fire when it comes within range,
+   * fire now anyway (it will run out before it gets there unless the target closes), or not at all
+   */
+  askRange(F) {
+    let el = document.getElementById('msl-ask');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'msl-ask';
+      el.innerHTML = '<div class="ma-t"></div><div class="ma-b"><button data-k="wait">射程に入ったら発射</button><button data-k="now">このまま発射</button><button data-k="no">やめる</button></div>';
+      (document.getElementById('hud') || document.body).appendChild(el);
+      el.addEventListener('pointerdown', (e) => e.stopPropagation());
+      el.querySelectorAll('button').forEach((b) => b.addEventListener('click', (e) => {
+        e.stopPropagation();
+        const A = this._ask;
+        el.style.display = 'none';
+        this._ask = null;
+        if (!A) return;
+        const h8 = this.g.h8;
+        if (b.dataset.k === 'wait') { this.mslWait = { id: A.id, name: A.name }; h8 && h8.say('hachi_msl_wait', { name: A.name }, { force: true }); }
+        else if (b.dataset.k === 'now') {
+          const F = this.focusTarget();
+          const L = this.readyLaunchers()[0];
+          if (F && F.id === A.id && L) { this.launchAt(L, F, true); h8 && h8.say('hachi_msl', { name: F.name }, { force: true }); }
+        }
+      }));
+    }
+    this._ask = { id: F.id, name: F.name };
+    el.querySelector('.ma-t').textContent = `${F.name} は射程外（${(F.dist / 1000).toFixed(0)} km ／ ミサイル射程 120 km）`;
+    el.style.display = 'block';
+  }
 
-  launchMissile(T, manual) {
+  /** HACHI's own missiles in an intercept: the nearest threats inside 50 km that have none
+   * coming yet, from whichever launcher is ready, a few seconds apart */
+  autoMissiles(dt) {
+    this.autoMslT = Math.max(0, (this.autoMslT || 0) - dt);
+    if (this.autoMslT > 0 || this.ammo.missile <= 0) return;
+    const ready = this.readyLaunchers();
+    if (!ready.length) return;
+    const E = this.targets('h8').filter((x) => x.kind === 'drone' && x.dist > 4000 && x.dist < ZONE && !this.missileOn(x.ref) && !this.launchers.some((L) => L.queue && L.queue.T.ref === x.ref)).sort((a, b) => a.dist - b.dist);
+    if (!E.length) return;
+    this.launchAt(ready[0], E[0], false);
+    this.autoMslT = 4;
+  }
+
+  /** the launchers through a step: doors, the launch itself, the loader, the lamps */
+  runLaunchers(dt) {
     const g = this.g, h8 = g.h8;
-    if (this.ammo.missile <= 0 || !T || (T.ref && T.ref.alive === false)) return;
-    const { pod, cell } = this.cellOf(this.ammo.missile);
+    if (!this.launchers) return;
+    // waiting for the focus to come within range
+    if (this.mslWait) {
+      const F = this.focusTarget();
+      if (!F || F.id !== this.mslWait.id) this.mslWait = null;
+      else if (F.dist <= MSL_RANGE && this.readyLaunchers().length && this.ammo.missile > 0) {
+        this.launchAt(this.readyLaunchers()[0], F, true);
+        if (h8) h8.say('hachi_msl', { name: F.name }, { force: true });
+        this.mslWait = null;
+      }
+    }
+    let loaded = this.launchers.filter((L) => L.loaded).length;
+    for (const L of this.launchers) {
+      // the doors: they snap open, and close behind the missile
+      L.door += Math.max(-dt * 5, Math.min(dt * 9, L.doorT - L.door));
+      if (L.queue && L.door > 0.92) {
+        const Q = L.queue;
+        L.queue = null;
+        if (this.ammo.missile > 0 && L.loaded && !(Q.T.ref && Q.T.ref.alive === false)) {
+          this.launchFrom(L, Q.T, Q.manual);
+          loaded--;
+        }
+        L.closeT = 0.35;
+      }
+      if (L.closeT > 0) { L.closeT -= dt; if (L.closeT <= 0) L.doorT = 0; }
+      // the loader: the next missile up from the magazine, a second after the last one left
+      if (!L.loaded) {
+        L.reload = Math.max(0, L.reload - dt);
+        const can = this.ammo.missile > loaded;
+        if (can) L.load = Math.min(1, Math.max(L.load, 1 - L.reload / 0.45));
+        if (L.reload <= 0 && can) { L.loaded = true; L.load = 1; loaded++; }
+      }
+      L.kick = Math.max(0, L.kick - dt * 4);
+    }
+  }
+
+  /** the missile leaves its tube: blown out by gas, its motor lights clear of H8 */
+  launchFrom(L, T, manual) {
+    const g = this.g, h8 = g.h8;
     this.ammo.missile--;
     this.arsenal.spent('missile');
+    L.loaded = false; L.load = 0; L.reload = MSL_RELOAD; L.kick = 1;
     const P = this.pose('h8');
-    const f = pod.frame;
-    const lid = pod.group.userData.lids[cell];
-    // out of its own cell, square to the launcher
-    const lp = lid ? lid.position : new THREE.Vector3(0, 0.35, 0);
-    const local = pod.dir.clone().multiplyScalar(H8.R - 0.04).addScaledVector(f.x, lp.x).addScaledVector(f.y, lp.y).addScaledVector(f.z, lp.z);
+    const f = L.frame;
     const out = f.y.clone().applyQuaternion(P.quat);
-    const pos = local.clone().addScaledVector(f.y, 0.75).applyQuaternion(P.quat).add(P.pos);
-    const tgt = T.ref && T.ref.pos ? T.ref : { pos: T.pos, vel: T.vel, R: T.R, kind: T.kind };
+    const mouth = L.at.clone().addScaledVector(f.y, 0.62);
+    const pos = mouth.clone().applyQuaternion(P.quat).add(P.pos);
+    const tgt = T.ref && T.ref.pos ? T.ref : { pos: T.pos.clone(), vel: (T.vel || P.vel).clone(), R: T.R, kind: T.kind };
     if (!tgt.kind) tgt.kind = T.kind;
-    this.combat.fire({ kind: 'missile', pos, vel: P.vel.clone().addScaledVector(out, 25), dir: out, owner: h8, target: tgt, byPlayer: true });
-    // the lid blows off and tumbles away
-    if (lid && lid.visible) {
-      lid.visible = false;
-      const piece = new THREE.Group();
-      const lm = new THREE.Mesh(lid.geometry, lid.material);
-      piece.add(lm);
-      piece.traverse((o) => { o.layers.set(LAYER_NEAR); o.layers.enable(LAYER_MID); });
-      const at = local.clone().applyQuaternion(P.quat).add(P.pos);
-      const v = P.vel.clone().addScaledVector(out, 7 + Math.random() * 4).add(new THREE.Vector3().randomDirection().multiplyScalar(1.5));
-      this.combat.addWreck(piece, at, v, 30, 0.3);
+    this.combat.fire({ kind: 'missile', pos, vel: P.vel.clone().addScaledVector(out, 30), dir: out, owner: h8, target: tgt, byPlayer: true, coast: 0.3 });
+    // the gas that throws it out, the launcher kicking down on its mounts, the hull shuddering
+    if (h8.fx) {
+      h8.fx.burst('gunsmoke', L.at.clone().addScaledVector(f.y, 0.4), f.y.clone(), 10, { speed: 9, spread: 0.55, size: 2.2 });
+      h8.fx.burst('spark', L.at.clone().addScaledVector(f.y, 0.36), f.y.clone(), 8, { speed: 6, spread: 0.9 });
     }
-    if (h8.fx) h8.fx.burst('smoke', local.clone().addScaledVector(f.y, 0.2), f.y.clone(), 6, { speed: 3, spread: 0.6 });
+    this.combat.flash(pos, [0.85, 0.9, 1.0], 1.6, 0.1, P.vel);
+    if (h8.seatKick) h8.seatKick(0.55);
+    if (h8.crew || h8.mode === 'docked') g.shake = Math.max(g.shake, 0.35);
     this.gunSound('h8', 'missile');
+    void manual;
   }
 
-  /** the fabricator finished something: new missiles go back into their cells (lids on) */
+  /** the fabricator finished something */
   onMade(made) {
     if (made.missile) {
-      this.syncLids();
       const h8 = this.g.h8;
       if (h8) h8.say('hachi_made_msl', { n: this.ammo.missile }, { minGap: 30, force: false });
     }
   }
 
-  /** the launchers' lids as the missile count says (the last cells fired are refilled first) */
+  /** the launchers as the magazine allows (after a load, a refill) */
   syncLids() {
-    const used = AMMO_MAX.missile - this.ammo.missile;
-    for (const p of this.pods || []) p.group.userData.lids.forEach((l, i) => { l.visible = i * 2 + (p.side > 0 ? 1 : 0) >= used; });
+    let n = this.ammo.missile;
+    for (const L of this.launchers || []) { L.loaded = n > 0; L.load = L.loaded ? 1 : 0; L.reload = 0; L.queue = null; if (n > 0) n--; }
   }
 
   /** the gun heard (and felt) from inside the vessel that fires it */
@@ -999,6 +1118,24 @@ export class Weapons {
       m.group.updateMatrixWorld(true);
     };
     for (const m of this.h8Mounts) settle(m);
+    // the launchers: doors swinging, the loader bringing the next nose up, a kick at each launch,
+    // the lamps (green ready, amber loading, red empty, a white flash as one goes)
+    const tt = performance.now() / 1000;
+    for (const L of this.launchers || []) {
+      const ud = L.group.userData;
+      const e = L.door * L.door * (3 - 2 * L.door);
+      for (const D of ud.doors) { D.hinge.rotation.z = -D.s * e * 1.95; D.hinge.updateMatrix(); }
+      ud.nose.visible = L.load > 0.02;
+      ud.nose.position.y = -0.16 * (1 - L.load);
+      ud.nose.updateMatrix();
+      const k = L.kick * L.kick;
+      L.group.matrix.makeBasis(L.frame.x, L.frame.y, L.frame.z).setPosition(_v.copy(L.at).addScaledVector(L.frame.y, -0.05 * k));
+      const lm = ud.lamp;
+      if (L.kick > 0.6) { lm.emissive.setRGB(1, 1, 1); lm.emissiveIntensity = 8; }
+      else if (L.loaded) { lm.emissive.setRGB(0.2, 1.0, 0.35); lm.emissiveIntensity = 3; }
+      else if (this.ammo.missile > 0) { lm.emissive.setRGB(1.0, 0.62, 0.1); lm.emissiveIntensity = (tt * 6) % 1 < 0.5 ? 4 : 0.4; }
+      else { lm.emissive.setRGB(1.0, 0.12, 0.08); lm.emissiveIntensity = 2.5; }
+    }
     if (this.b29Mount) settle(this.b29Mount);
     if (this.M.railGlow) this.M.railGlow.emissiveIntensity = this.railCharge >= 1 ? 2.5 + Math.sin(performance.now() / 160) : this.railCharge * 1.2;
     this.drawHud(origin, camWorld);
@@ -1042,7 +1179,7 @@ export class Weapons {
       ctx.moveTo(s[0], s[1] - r); ctx.lineTo(s[0] + r, s[1]); ctx.lineTo(s[0], s[1] + r); ctx.lineTo(s[0] - r, s[1]); ctx.closePath();
       ctx.stroke();
       ctx.fillStyle = on ? 'rgba(255,110,90,0.95)' : 'rgba(255,150,120,0.75)';
-      ctx.fillText(`${d.id}  ${dist < 9500 ? Math.round(dist) + ' m' : (dist / 1000).toFixed(1) + ' km'}`, s[0], s[1] + r + 13);
+      ctx.fillText(`${d.id} ${starsText(d.stars)}  ${dist < 9500 ? Math.round(dist) + ' m' : (dist / 1000).toFixed(1) + ' km'}`, s[0], s[1] + r + 13);
       if (on) {
         // the lead point: where to put the rounds
         const ld = leadDir(P.pos, P.vel, d.pos, d.vel, w === 'h8' ? ROUNDS.cannon.speed : ROUNDS.pd.speed, new THREE.Vector3(), d.thrust);

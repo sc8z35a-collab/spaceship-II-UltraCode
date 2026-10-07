@@ -2456,7 +2456,7 @@ export class H8Vessel {
         if (!own && !shared) continue;
         const hostile = d.state === 'hunt' || d.state === 'attack' || d.state === 'evade';
         out.push({
-          id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id}`, short: d.id, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d, R: d.R,
+          id: 'dr:' + d.id, kind: 'drone', name: `無人機 ${d.id} ${'★'.repeat(d.stars || 1)}${'☆'.repeat(5 - (d.stars || 1))}`, short: `${d.id}★${d.stars || 1}`, pos: d.pos, vel: d.vel, threat: hostile, tca: hostile ? dist / 1000 : 1e9, ref: d, R: d.R,
           extra: (d.state === 'evade' ? `損傷 ${Math.round(d.hp * 100)}%・後退中` : d.state === 'attack' ? (d.run ? '攻撃航過中' : '周回・攻撃中') + (d.hp < 1 ? `  損傷${Math.round((1 - d.hp) * 100)}%` : '') : hostile ? '接近中' : '巡回中') + (shared ? '・B-29経由' : ''),
         });
       }

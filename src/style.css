@@ -154,3 +154,17 @@ html, body {
   -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%); mask: radial-gradient(circle, transparent 58%, #000 60%);
 }
 #hold-ring.on { opacity: 1; }
+
+/* the missile button's question when the focus is out of range */
+#msl-ask {
+  display: none; position: absolute; left: 50%; top: 22vh; transform: translateX(-50%); z-index: 30; pointer-events: auto;
+  padding: 1.6vh 2.2vh; border-radius: 1.4vh; background: rgba(28, 8, 6, 0.86); border: 1.5px solid rgba(255, 120, 90, 0.6);
+  font: 600 clamp(11px, 2.6vh, 15px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #ffe2da; text-align: center;
+  box-shadow: 0 0 3vh rgba(0, 0, 0, 0.5);
+}
+#msl-ask .ma-b { display: flex; gap: 1.4vh; margin-top: 1.4vh; justify-content: center; }
+#msl-ask button {
+  font: 600 clamp(11px, 2.4vh, 14px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #fff;
+  background: rgba(150, 40, 25, 0.75); border: 1px solid rgba(255, 150, 120, 0.6); border-radius: 999px; padding: 1vh 2vh;
+}
+#msl-ask button[data-k="no"] { background: rgba(40, 48, 64, 0.8); border-color: rgba(170, 190, 220, 0.45); }

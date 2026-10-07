@@ -269,7 +269,7 @@ export const H8_PAGES = {
     const bw = 160, by = H - 34;
     K.button(10, by, bw, 28, W.auto.hachi ? 'HACHI 自動迎撃' : '手動射撃', () => W.toggleAuto('h8'), { style: W.auto.hachi ? 'on' : 'normal', size: 10.5 });
     K.button(10 + bw + 6, by, bw, 28, 'レールガン', () => W.fireRail(true), { style: W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled', size: 10.5 });
-    K.button(10 + (bw + 6) * 2, by, bw, 28, 'ミサイル斉射', () => W.salvoMissiles(true), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 10.5 });
+    K.button(10 + (bw + 6) * 2, by, bw, 28, 'ミサイル', () => W.fireMissile('h8'), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 10.5 });
   },
 
   // ------------------------------------------------------------------ SHELTER

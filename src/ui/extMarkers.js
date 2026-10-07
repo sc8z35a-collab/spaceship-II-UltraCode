@@ -28,7 +28,7 @@ export class ExtMarkers {
     const soloH8 = !!(h && h.solo);
     out.push({ name: 'B-29', pos: g.flight.pos, color: '#ffc46a', R: 16, self: !soloH8 });
     if (h && h.mode !== 'docked' && h.mode !== 'lost') out.push({ name: h.mode === 'pod' ? 'H8 シェルター' : 'H8', pos: h.flight.pos, color: '#ffb347', R: h.mode === 'pod' ? 1.5 : 4, self: soloH8 });
-    if (g.drones) for (const d of g.drones.list) if (d.alive) out.push({ name: '無人機 ' + d.id, pos: d.pos, color: '#ff6a50', R: 1.3, hostile: true });
+    if (g.drones) for (const d of g.drones.list) if (d.alive) out.push({ name: `無人機 ${d.id} ${'★'.repeat(d.stars || 1)}`, pos: d.pos, color: '#ff6a50', R: 1.3, hostile: true });
     for (const s of g.stations.list) {
       const st = s.dmg ? s.dmg.status : 'ok';
       out.push({ name: s.name.replace('（修理基地）', '') + (st === 'destroyed' ? '（残骸）' : ''), pos: s.pos, color: st === 'ok' ? '#8fe0ff' : '#ff8a6a', R: (s.model && s.model.userData.radius) || 150, station: true });
