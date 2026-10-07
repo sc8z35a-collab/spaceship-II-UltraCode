@@ -1,7 +1,10 @@
-// H8's zoom: any part of the all-round view can be magnified like a camera's superzoom — the
-// cameras' optical zoom up to x70.5 (the lens drive takes a couple of seconds end to end; the
-// picture stays sharp), then a digital zoom up to another x10 (x705 in all: the picture is a crop of
-// fewer and fewer sensor pixels, coarse blocks and grain). It is worked like a camera: pinch or the
+// H8's zoom: the outside cameras' superzoom, its picture shown on the all-round display — the
+// cockpit round it, the display's own glass and the tabs on it are not magnified (the eye is not
+// zooming: the cameras are). Optical up to x100 (the lens drive takes a couple of seconds end to
+// end; the picture stays sharp), then a digital zoom up to another x10 (x1000 in all: a crop of
+// fewer and fewer sensor pixels, rebuilt by the cameras' image processor — clean edges instead of
+// blocks, softer the further in). The cameras sit on a stabilised gimbal that follows the head
+// smoothly, the slower the further in they are zoomed. It is worked like a camera: pinch or the
 // zoom buttons, the zoom ring at the bottom of the view (drag it like a lens ring), the shutter
 // (photos), and auto-follow — which keeps the chosen target (any tracked thing; the focus unless
 // Kaito picks another in the camera tab) in the middle of the view and sizes it to fill a good
@@ -10,11 +13,11 @@
 import * as THREE from 'three';
 import { spring1 } from '../core/spring.js';
 
-export const OPT_MAX = 70.5;
+export const OPT_MAX = 100;
 export const DIG_MAX = 10;
 export const Z_MAX = OPT_MAX * DIG_MAX;
 const WIDE_MM = 24;            // the wide end, as a 35 mm camera's focal length
-const NOTCH = [1, 1.5, 2, 3, 5, 7.5, 10, 15, 20, 30, 45, 70.5, 100, 150, 250, 400, 705];
+const NOTCH = [1, 1.5, 2, 3, 5, 7.5, 10, 15, 20, 30, 50, 70, 100, 150, 250, 400, 650, 1000];
 const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _m = new THREE.Matrix4();
 const _Y = new THREE.Vector3(0, 1, 0), _O = new THREE.Vector3();
 const MONO = '"SF Mono","Menlo","Consolas",monospace';
@@ -248,7 +251,8 @@ export class H8Zoom {
     ctx.stroke();
     // the level: the horizon's tilt in the view
     const up = g.flight.pos.clone().normalize();
-    const camUp = _v.set(0, 1, 0).applyQuaternion(g.camQuat), camR = _v2.set(1, 0, 0).applyQuaternion(g.camQuat);
+    const vq = g.viewQuat || g.camQuat;
+    const camUp = _v.set(0, 1, 0).applyQuaternion(vq), camR = _v2.set(1, 0, 0).applyQuaternion(vq);
     const roll = Math.atan2(up.dot(camR), up.dot(camUp));
     const lx = W / 2, ly = m + 26;
     ctx.strokeStyle = Math.abs(roll) < 0.02 ? 'rgba(120,255,170,0.9)' : 'rgba(225,240,255,0.7)';
@@ -264,7 +268,7 @@ export class H8Zoom {
     const zw = ctx.measureText(zs).width;
     ctx.font = `600 11px ${FONT}`;
     ctx.fillStyle = dig ? 'rgba(255,196,110,0.95)' : 'rgba(130,232,255,0.95)';
-    ctx.fillText(dig ? 'デジタル' : '光学', m + 14 + zw, m + 18);
+    ctx.fillText(dig ? 'AIデジタル' : '光学', m + 14 + zw, m + 18);
     ctx.fillStyle = col;
     ctx.font = `500 11px ${MONO}`;
     ctx.fillText(`${Math.round(this.focal()).toLocaleString()} mm`, m + 14 + zw, m + 31);
@@ -299,7 +303,7 @@ export class H8Zoom {
     ctx.strokeStyle = 'rgba(255,196,110,0.55)'; ctx.beginPath(); ctx.moveTo(ox + 2, by); ctx.lineTo(bx1, by); ctx.stroke();
     ctx.lineWidth = 1;
     ctx.font = `600 10px ${MONO}`; ctx.textAlign = 'center'; ctx.fillStyle = 'rgba(225,240,255,0.7)';
-    for (const [zz, lab] of [[1, 'W'], [10, '10'], [OPT_MAX, '70.5'], [Z_MAX, 'T']]) {
+    for (const [zz, lab] of [[1, 'W'], [10, '10'], [OPT_MAX, '100'], [Z_MAX, 'T']]) {
       const x = bx0 + (bx1 - bx0) * Math.log(zz) / Math.log(Z_MAX);
       ctx.beginPath(); ctx.moveTo(x, by - 6); ctx.lineTo(x, by + 6); ctx.strokeStyle = 'rgba(225,240,255,0.6)'; ctx.stroke();
       ctx.fillText(lab, x, by - 10);

@@ -2,10 +2,12 @@
 // each tab lies on the inside of the sphere — curved with it, bent down onto the floor glass where
 // it reaches it — and never turns toward Kaito. The display lays each one out for the pilot's eye
 // point (where the eye is in the seat): from the seat a tab looks flat and square; from anywhere
-// else, like what it is — a picture on curved glass. One tab per subject:
-//   警報 (the alert strip, low ahead), 機体, 推進・電力, 航法, 兵装, カメラ, B-29, HACHI, 装備.
-// Each has a slim header (its name and the figures that matter at a glance) and a body with the
-// rest and its buttons. Tap a header to fold the tab down to that strip (or open it again); drag a
+// else, like what it is — a picture on curved glass. Two tabs, each with its pages:
+//   操縦 — 航法, 推進・電力, 兵装, カメラ (its header also carries the alerts);
+//   機体 — 機体, B-29, HACHI, 装備.
+// Each has a slim header (its name, the page and the figures that matter at a glance) and a body
+// with a row of page buttons over the page. Tap a header to fold the tab down to that strip (or
+// open it again); drag a
 // header to move the tab anywhere on the glass; pinch a tab with two fingers (or turn the mouse
 // wheel over it) to make it bigger or smaller. They stay as they are left (kept in the browser).
 //
@@ -22,7 +24,7 @@ import { QUALITY } from '../core/quality.js';
 
 const DEG = Math.PI / 180;
 const HEAD = 5.4;                // header height (degrees at scale 1)
-const STORE = 'b29.h8tabs.v3';
+const STORE = 'b29.h8tabs.v4';
 const AMBER = '#ffb347';
 const K_MIN = 0.45, K_MAX = 1.8; // how far a tab can be shrunk / enlarged
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -32,16 +34,11 @@ const RT = Math.PI * 2;
 /** the tabs and where they start, as seen from the seat (az: 0 = H8's bow, + = starboard; el: up;
  * w, h: size in degrees — twice what the first tabs had) */
 const DEFS = [
-  { id: 'alert', title: '警報', az: 0, el: 19, w: 54, h: 0, open: false, fixedClosed: true },
-  { id: 'hull', title: '機体', az: -55, el: 10, w: 44, h: 29, open: true, color: AMBER },
-  { id: 'drive', title: '推進・電力', az: 55, el: 10, w: 44, h: 29, open: true, color: AMBER },
-  { id: 'nav', title: '航法', az: -55, el: 50, w: 44, h: 31, open: false },
-  { id: 'wpn', title: '兵装', az: 55, el: 50, w: 44, h: 31, open: false, color: '#ff8a6a' },
-  { id: 'cam', title: 'カメラ', az: -112, el: 10, w: 44, h: 31, open: false },
-  { id: 'b29', title: 'B-29', az: 112, el: 10, w: 46, h: 31, open: false },
-  { id: 'hachi', title: 'HACHI', az: -112, el: 50, w: 44, h: 30, open: false, color: AMBER },
-  { id: 'gear', title: '装備', az: 112, el: 50, w: 42, h: 27, open: false },
+  { id: 'ops', title: '操縦', az: -42, el: 12, w: 50, h: 39, open: true, color: AMBER, pages: [['nav', '航法'], ['drive', '推進・電力'], ['wpn', '兵装'], ['cam', 'カメラ']] },
+  { id: 'ship', title: '機体', az: 42, el: 12, w: 50, h: 39, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['gear', '装備']] },
 ];
+/** the page row over a tab's body (units of the tab's 512-wide canvas) */
+const ROW = 44;
 
 /** the eye point the tabs are laid out for: the pilot's eye in the seat (H8-local) */
 const E0 = SEAT.G.clone().add(SEAT.eye);
@@ -95,8 +92,10 @@ class Tab {
     this.sys = sys;
     this.fade = 0;
     this.t = Math.random();
-    this.sub = 0;               // a tab's own page (B-29's pages, list pages)
-    this.page = 0;
+    this.sub = 0;               // a page's own sub-page (B-29's pages)
+    this.page = 0;              // a list's page
+    this.pages = def.pages || null;
+    this.pg = 0;                // the page on show
     this.order = ++sys.z;
     this.c = V(0, 0, -1); this.ex = V(1, 0, 0); this.ey = V(0, 1, 0);
     this.dirty = true;
@@ -235,7 +234,7 @@ export class H8Tabs {
   }
 
   // ------------------------------------------------------------------ layout (kept)
-  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open, k: +t.k.toFixed(3) }])); }
+  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open, k: +t.k.toFixed(3), pg: t.pg }])); }
 
   applyLayout(L) {
     if (!L) return;
@@ -246,6 +245,7 @@ export class H8Tabs {
       if (Number.isFinite(s.el)) t.el = Math.max(-78, Math.min(80, s.el)) * DEG;
       if (Number.isFinite(s.k)) t.k = Math.max(K_MIN, Math.min(K_MAX, s.k));
       if (typeof s.open === 'boolean' && !t.fixedClosed) t.open = s.open;
+      if (t.pages && Number.isInteger(s.pg)) t.pg = Math.max(0, Math.min(t.pages.length - 1, s.pg));
       t.dirty = true;
     }
   }
@@ -325,8 +325,9 @@ export class H8Tabs {
     if (power >= 0.2) {
       // a coloured rule at the left: what kind of tab this is
       K.rect(6, 8, 5, Hh - 16, { fill: info.warn ? COL.red : t.color, stroke: null, r: 2 });
-      K.text(t.title, 18, Hh / 2 + 1, { size: 19, color: info.warn ? '#ffb3a6' : t.color, weight: 700, base: 'middle' });
-      const x0 = 18 + Math.max(50, measure(K, t.title, 19, 700) + 14);
+      const title = t.pages ? `${t.title} · ${t.pages[t.pg][1]}` : t.title;
+      K.text(title, 18, Hh / 2 + 1, { size: 19, color: info.warn ? '#ffb3a6' : t.color, weight: 700, base: 'middle' });
+      const x0 = 18 + Math.max(50, measure(K, title, 19, 700) + 14);
       K.text(fit(K, info.text || '', 472 - x0, 15), x0, Hh / 2 + 1, { size: 15, color: info.warn ? '#ffd0c8' : COL.text, base: 'middle', mono: !!info.mono });
       if (!t.fixedClosed) K.text(t.open ? '▾' : '▸', 502, Hh / 2 + 1, { size: 19, color: COL.dim, align: 'right', base: 'middle' });
     }
@@ -337,17 +338,51 @@ export class H8Tabs {
     const S = t.body, K = S.kit, H = 512 * S.H / S.W;
     this.frame(K, S, false);
     if (power >= 0.2) {
-      const fn = this['body_' + t.id];
-      if (fn) { try { fn.call(this, K, H, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); } }
+      if (t.pages) {
+        // the row of pages; the page itself below it (its buttons moved down with it)
+        const n = t.pages.length, bw = 492 / n;
+        t.pages.forEach(([, label], i) => K.button(10 + i * bw + 2, 7, bw - 4, ROW - 12, label, () => this.setPage(t, i), { style: i === t.pg ? 'on' : 'normal', size: 15 }));
+        K.rect(10, ROW - 1, 492, 1.2, { fill: 'rgba(130,215,255,0.25)', stroke: null, r: 0 });
+        const fn = this['body_' + t.pages[t.pg][0]];
+        const nb = K.buttons.length;
+        K.g.save();
+        K.g.translate(0, ROW * K.s);
+        this._off = ROW;
+        try { if (fn) fn.call(this, K, H - ROW, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); }
+        K.g.restore();
+        this._off = 0;
+        for (let i = nb; i < K.buttons.length; i++) K.buttons[i].y += ROW;
+      } else {
+        const fn = this['body_' + t.id];
+        if (fn) { try { fn.call(this, K, H, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); } }
+      }
     }
     S.tex.needsUpdate = true;
   }
 
+  /** another page of a tab */
+  setPage(t, i) {
+    if (t.pg === i) return;
+    t.pg = i; t.page = 0; t.sub = 0; t.pm = null;
+    t.t = 999;
+    this.saveLayout();
+  }
+
   /** the strip of figures in each header */
   headInfo(t) {
+    if (!t.pages) return this.pageInfo(t.id);
+    if (t.id === 'ops') {
+      const a = this.v.alertText();
+      if (a) return { text: a, warn: true };
+    }
+    return this.pageInfo(t.pages[t.pg][0]);
+  }
+
+  /** a page's figures for the header */
+  pageInfo(id) {
     const v = this.v, g = v.g;
     const f = v.flight, docked = v.mode === 'docked';
-    switch (t.id) {
+    switch (id) {
       case 'alert': {
         const a = v.alertText();
         if (a) return { text: a, warn: true };
@@ -629,7 +664,7 @@ export class H8Tabs {
       const ph = 512 * pm.H / pm.W;
       try { mon._tabs = null; const fn = mon['draw_' + page]; if (fn) fn.call(mon, pk, pm, ph); } catch (e) { /* a page that needs B-29's own screen */ }
       pk.end(0, performance.now(), false);
-      K.g.drawImage(pm.canvas, 0, 36 * K.s, K.W, K.H - 36 * K.s);
+      K.g.drawImage(pm.canvas, 0, 36 * K.s, K.W, (H - 36) * K.s);
       const w = 512 / pages.length;
       pages.forEach(([id, label], i) => {
         const on = i === t.sub % pages.length;
@@ -637,7 +672,8 @@ export class H8Tabs {
       });
       // taps below the row go to the page
       K.buttons.push({ x: 0, y: 36, w: 512, h: H - 36, onTap: null, page: true });
-      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 36) * pk.s);
+      const off = this._off || 0;
+      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 36 - off) * pk.s);
       return;
     }
     const L = v.link, fb = g.flight, ap = g.autopilot;

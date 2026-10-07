@@ -1154,7 +1154,7 @@ export class Weapons {
     ctx.clearRect(0, 0, W, H);
     const cam = g.engine.camera;
     // this frame's view (the camera's own matrices are only refreshed when it renders)
-    const view = new THREE.Matrix4().compose(g.camWorld, g.camQuat, new THREE.Vector3(1, 1, 1)).invert();
+    const view = new THREE.Matrix4().compose(g.camWorld, g.viewQuat || g.camQuat, new THREE.Vector3(1, 1, 1)).invert();
     const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, view);
     const proj = (p) => {
       const v = new THREE.Vector4(p.x - origin.x, p.y - origin.y, p.z - origin.z, 1).applyMatrix4(vp);

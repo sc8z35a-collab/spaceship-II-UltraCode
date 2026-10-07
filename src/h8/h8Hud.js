@@ -199,9 +199,10 @@ export class H8Hud {
     ctx.clearRect(0, 0, W, H);
     // ---- this frame's view: the magnified one (the outside) and the plain one (the tabs)
     const cam = g.engine.camera, origin = g.origin;
-    _view.compose(g.camWorld, g.camQuat, ONE).invert();
+    // (the outside through the cameras' gimbal; the tabs on the glass with the head)
+    _view.compose(g.camWorld, g.viewQuat || g.camQuat, ONE).invert();
     _vp.multiplyMatrices(cam.projectionMatrix, _view);
-    _vpUi.multiplyMatrices(g.engine.uiProjection(_proj), _view);
+    _vpUi.multiplyMatrices(g.engine.uiProjection(_proj), _m.compose(g.camWorld, g.camQuat, ONE).invert());
     const tanH = Math.tan(cam.fov * Math.PI / 360);
     const rootInv = _m.copy(v.root.matrixWorld).invert();
     const eyeL = _v2.copy(g.camWorld).applyMatrix4(rootInv).clone();
@@ -250,7 +251,7 @@ export class H8Hud {
     } else { this.dwell.id = null; this.dwell.t = 0; }
     const dk = this.dwell.id ? Math.min(1, this.dwell.t / DWELL) : 0;
     this.dwellK += (dk - this.dwellK) * Math.min(1, dt * (dk > this.dwellK ? 30 : 10));
-    _fwd.set(0, 0, -1).applyQuaternion(g.camQuat).multiplyScalar(1e4).add(g.camWorld).add(origin);
+    _fwd.set(0, 0, -1).applyQuaternion(g.viewQuat || g.camQuat).multiplyScalar(1e4).add(g.camWorld).add(origin);
     if (hidden(_fwd) !== 'dead') {
       this.drawFocusFrame(ctx, fx0, fy0, fx1, fy1, this.dwellK, this.pulse, best && this.dwell.id ? best : null);
     }
@@ -540,7 +541,7 @@ export class H8Hud {
   setAim(l, px, py) {
     const g = this.g, cam = g.engine.camera, c = l.c;
     const ndc = new THREE.Vector3(px / this.W * 2 - 1, -(py / this.H) * 2 + 1, 0.5);
-    const dir = ndc.applyMatrix4(_m.copy(cam.projectionMatrix).invert()).normalize().applyQuaternion(g.camQuat);
+    const dir = ndc.applyMatrix4(_m.copy(cam.projectionMatrix).invert()).normalize().applyQuaternion(g.viewQuat || g.camQuat);
     const eye = g.camWorld.clone().add(g.origin);
     const q = this.quatOf(c, _q), qi = _q2.copy(q).invert();
     const o = eye.sub(c.pos).applyQuaternion(qi), d = dir.applyQuaternion(qi);

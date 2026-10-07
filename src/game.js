@@ -54,6 +54,8 @@ const FAR_SURFACE = { h: 0, water: false };
 
 const _hjQ = new THREE.Quaternion(), _hjE = new THREE.Euler(), _hjM = new THREE.Matrix4();
 
+const _qHead = new THREE.Quaternion();
+
 export class Game {
   constructor(engine, earth, params) {
     this.engine = engine;
@@ -62,6 +64,9 @@ export class Game {
     this.time = START_TIME;
     this.camWorld = new THREE.Vector3();
     this.camQuat = new THREE.Quaternion();
+    // the outside's view: the head's (camQuat) — or, through H8's zoom, the cameras' stabilised
+    // gimbal following it (what the magnified picture and the marks over it are drawn with)
+    this.viewQuat = new THREE.Quaternion();
     this.running = false;
     this.mode = 'walk';         // walk | pilot | seated | camera | dead
     this.extCam = 0;
@@ -622,15 +627,26 @@ export class Game {
       // jolt moves the magnified picture only as far as it moves the head, and a followed target
       // is held by the stabiliser)
       let k = this.focus ? 1 - (this.focus.amt || 0) : 1;
-      if (this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat) { const Z = this.h8.zoom; k *= Z.follow ? 0 : 1 / Math.max(1, Z.z); }
+      // (through H8's zoom the jolt shakes the cockpit; the cameras' picture is stabilised)
       shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02 * k, Math.sin(t * 39 + 1) * sh * 0.02 * k, Math.sin(t * 31 + 2) * sh * 0.03 * k));
       this.shake *= Math.exp(-dt * 2.2);
     }
     this.camWorld.copy(eyeLocal).applyQuaternion(frameQ).add(frameP);
     this.camQuat.copy(frameQ).multiply(viewQ).multiply(shakeQ);
+    // H8's zoom: the magnified picture is the outside cameras', on their stabilised gimbal — it
+    // follows the head smoothly, the slower the further in it is zoomed (auto-follow holds it on
+    // the target exactly), and no jolt shakes it; the cockpit is seen with the head as it is
+    const Zm = this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat && this.mode !== 'camera' && !this.debugCam ? this.h8.zoom : null;
+    const zoomed = !!(Zm && Zm.z > 1.02);
+    if (zoomed) {
+      const head = _qHead.copy(frameQ).multiply(viewQ);
+      if (this._gimbal && !Zm.follow) this.viewQuat.slerp(head, 1 - Math.exp(-16 / (1 + 1.1 * Math.log10(Zm.z)) * dt));
+      else this.viewQuat.copy(head);
+    } else this.viewQuat.copy(this.camQuat);
+    this._gimbal = zoomed;
     this.updateCabinVisibility();
     const cam = this.engine.camera;
-    cam.matrix.compose(this.camWorld, this.camQuat, new THREE.Vector3(1, 1, 1));
+    cam.matrix.compose(this.camWorld, this.viewQuat, new THREE.Vector3(1, 1, 1));
     // world
     const origin = this.origin;
     this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));

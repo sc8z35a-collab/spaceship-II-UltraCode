@@ -33,7 +33,7 @@ import { HachiPilot } from './h8Pilot.js';
 import { PORT, DorsalHatch, receptacleSocket } from './b29Port.js';
 import { H8_PAGES } from './h8Monitors.js';
 import { Flight } from '../ship/flight.js';
-import { LAYER_NEAR, LAYER_MID, LAYER_FAR, assignLayers } from '../core/layers.js';
+import { LAYER_NEAR, LAYER_MID, LAYER_FAR, LAYER_CABIN, assignLayers } from '../core/layers.js';
 import { LAYER_PROXY } from '../player/interact.js';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH } from '../core/astro.js';
 import { STATUS_JP } from '../world/worldDamage.js';
@@ -1211,6 +1211,7 @@ export class H8Vessel {
     this.tabs.place(dt, false);
     g.engine.uiOn = false;
     if (this.zoom.z !== 1) { this.zoom.z = 1; this.zoom.zT = 1; g.engine.setZoom(1); this.display.setZoom(1); g.engine.grade.set('uPixel', 1); }
+    if (this._cabin) { this.setCabinLayer(false); g.engine.setCabinView(null); }
     this.hud.frame(dt, [], null, false, false);
     this.zoom.drawHud(false);
     if (this.mode === 'lost') { this.shelter.group.visible = false; this.shelter.pod.visible = false; return; }
@@ -1881,6 +1882,15 @@ export class H8Vessel {
     this.say(water ? 'hachi_splash' : 'hachi_touchdown', {}, { minGap: 5, force: false });
   }
 
+  /** while zoomed the cockpit (its fittings, the display's glass, the shelter) is drawn in a pass
+   * of its own at the eye's view, not magnified with the cameras' picture */
+  setCabinLayer(on) {
+    if (!!this._cabin === on) return;
+    this._cabin = on;
+    const set = (o) => o.traverse((x) => { if (x.isMesh || x.isPoints || x.isLine || x.isSprite) x.layers.mask = 1 << (on ? LAYER_CABIN : LAYER_NEAR); });
+    for (const grp of [this.int.group, this.display.mesh, this.shelter && this.shelter.group]) if (grp) set(grp);
+  }
+
   /** how worn the cockpit display is by everything H8 has taken (0 .. 1) */
   displayWear() {
     const A = this.armour;
@@ -2242,11 +2252,15 @@ export class H8Vessel {
     const disp = inCockpit && this.display.power > 0.01;
     if (disp) this.updateDisplay(dt, rw, camWorld);
     else { this.tabs.place(dt, false); this.zoom.update(dt, null, null, false); this.zoom.z = 1; if (this.seat) this.seat.stab = 0; }
-    // the zoom narrows the view itself (and coarsens it past the optical range)
+    // the zoom is the outside cameras': the picture on the display is magnified (its digital part
+    // a crop rebuilt by the cameras' image processor), the cockpit round it stays as the eye sees it
     const z = inCockpit ? this.zoom.z : 1;
     g.engine.setZoom(z);
     this.display.setZoom(z);
-    g.engine.grade.set('uPixel', z > OPT_MAX * 1.005 ? Math.min(DIG_MAX, z / OPT_MAX) : 1);
+    g.engine.grade.set('uPixel', 1);
+    const cab = inCockpit && z > 1.0005;
+    this.setCabinLayer(cab);
+    g.engine.setCabinView(cab ? { pos: g.camWorld, quat: g.camQuat } : null, z > OPT_MAX * 1.005 ? 1 + (Math.min(DIG_MAX, z / OPT_MAX) - 1) * 0.65 : 1);
     g.engine.uiOn = this.tabs.visible;
     // the marks over the outside: with this frame's magnification. From the seat only (standing
     // in the cockpit a tap is for the seat); looking out through the external cameras from the
@@ -2313,7 +2327,7 @@ export class H8Vessel {
     ctx.setTransform(pr, 0, 0, pr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const cam = g.engine.camera;
-    const view = new THREE.Matrix4().compose(g.camWorld, g.camQuat, _v.set(1, 1, 1)).invert();
+    const view = new THREE.Matrix4().compose(g.camWorld, g.viewQuat || g.camQuat, _v.set(1, 1, 1)).invert();
     const vp = new THREE.Matrix4().multiplyMatrices(cam.projectionMatrix, view);
     const rootW = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
     const eyeL = pl.eyeLocal.clone().sub(DOCK);

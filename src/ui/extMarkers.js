@@ -47,7 +47,7 @@ export class ExtMarkers {
     ctx.setTransform(pr, 0, 0, pr, 0, 0);
     ctx.clearRect(0, 0, W, H);
     const cam = g.engine.camera, origin = g.origin;
-    _vp.multiplyMatrices(cam.projectionMatrix, _m.compose(g.camWorld, g.camQuat, _one).invert());
+    _vp.multiplyMatrices(cam.projectionMatrix, _m.compose(g.camWorld, g.viewQuat || g.camQuat, _one).invert());
     const ref = g.playerVessel ? g.playerVessel().pos : g.flight.pos;
     const fovY = cam.fov * Math.PI / 180;
     ctx.textAlign = 'center';

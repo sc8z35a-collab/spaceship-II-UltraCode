@@ -212,7 +212,9 @@ float aline(float x, float w){ float fw = max(fwidth(x), 1e-6); return 1.0 - smo
 void main(){
   // the line of sight through this point: what is seen here lies that way
   vec3 d = normalize(vP - uEye);
-  float zoomFade = 1.0 - smoothstep(1.4, 3.0, uZoom);
+  // (the glass is not magnified with the cameras' picture: its seams stay, a little fainter over a
+  // magnified picture)
+  float zoomFade = 1.0 - 0.5 * smoothstep(1.4, 3.0, uZoom);
   // the panel grid: on the sphere by direction from its centre, on the floor square tiles
 #ifdef FLOOR
   vec2 g = vP.xz / 0.24;

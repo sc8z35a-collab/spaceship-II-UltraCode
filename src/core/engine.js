@@ -1,9 +1,10 @@
 // Renderer, multi-frustum scene pass, auto exposure and the final grade/post stack.
 import * as THREE from 'three';
 import { EffectComposer, EffectPass, Pass, BloomEffect, SMAAEffect, SMAAPreset, Effect, EffectAttribute, BlendFunction } from 'postprocessing';
-import { LAYER_FAR, LAYER_MID, LAYER_NEAR, RANGES } from './layers.js';
+import { LAYER_FAR, LAYER_MID, LAYER_NEAR, LAYER_CABIN, RANGES } from './layers.js';
 import { QUALITY, loadQuality } from './quality.js';
 
+const _ONE = new THREE.Vector3(1, 1, 1);
 // shared uniform: ownership range [min,max) of the pass currently rendering (for blended shells)
 export const passRange = { value: new THREE.Vector2(0, 1e12) };
 const OWN = { far: [120000, 1e13], mid: [300, 120000], near: [0, 300] };
@@ -28,6 +29,54 @@ class MultiFrustumPass extends Pass {
     // the sun's shadow map is centred on the ship and hardly changes from one frame to the next:
     // low quality redraws it every few frames only
     this.shadowEvery = 1;
+    // H8's zoom: the cockpit drawn last at the eye's own view ({ matrixWorld, fov }), over the
+    // magnified picture; and the picture's digital zoom (a crop of fewer sensor pixels, rebuilt by
+    // the camera's image processor) worked on the outside alone, before the cockpit goes over it
+    this.cabin = null;
+    this.digital = 1;
+    const cc = new THREE.PerspectiveCamera();
+    cc.matrixAutoUpdate = false; cc.matrixWorldAutoUpdate = false;
+    cc.layers.set(LAYER_CABIN);
+    this.cams.cabin = cc;
+    this.fsCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    const quad = (mat) => { const sc = new THREE.Scene(); const m = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), mat); m.frustumCulled = false; sc.add(m); return sc; };
+    this.aiMat = new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null }, uRes: { value: new THREE.Vector2(1, 1) }, uPix: { value: 1 } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: /* glsl */`
+        uniform sampler2D tSrc; uniform vec2 uRes; uniform float uPix; varying vec2 vUv;
+        vec2 lr;
+        // one of the sensor's pixels (a grid uPix times coarser than the screen)
+        vec3 S(vec2 g){ return texture2D(tSrc, (g + 0.5) / lr).rgb; }
+        vec4 cr(float t){ float t2 = t * t, t3 = t2 * t; return vec4(-0.5 * t3 + t2 - 0.5 * t, 1.5 * t3 - 2.5 * t2 + 1.0, -1.5 * t3 + 2.0 * t2 + 0.5 * t, 0.5 * t3 - 0.5 * t2); }
+        void main(){
+          lr = uRes / uPix;
+          vec2 p = vUv * lr - 0.5, i = floor(p), f = p - i;
+          vec4 wx = cr(f.x), wy = cr(f.y);
+          vec3 c = vec3(0.0);
+          for (int y = 0; y < 4; y++){
+            vec3 row = vec3(0.0);
+            for (int x = 0; x < 4; x++) row += S(i + vec2(float(x - 1), float(y - 1))) * wx[x];
+            c += row * wy[y];
+          }
+          // the processor rebuilds the edges (detail against the local mean), never past what the
+          // neighbouring pixels allow: crisp, no blocks, no halos
+          vec3 a = S(i), b = S(i + vec2(1.0, 0.0)), d = S(i + vec2(0.0, 1.0)), e = S(i + vec2(1.0, 1.0));
+          vec3 mn = min(min(a, b), min(d, e)), mx = max(max(a, b), max(d, e));
+          c = clamp(c + (c - (a + b + d + e) * 0.25) * 0.55, mn, mx);
+          gl_FragColor = vec4(max(c, 0.0), 1.0);
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+    this.aiScene = quad(this.aiMat);
+    this.copyMat = new THREE.ShaderMaterial({
+      uniforms: { tSrc: { value: null } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+      fragmentShader: 'uniform sampler2D tSrc; varying vec2 vUv; void main(){ gl_FragColor = vec4(texture2D(tSrc, vUv).rgb, 1.0); }',
+      depthTest: false, depthWrite: false,
+    });
+    this.copyScene = quad(this.copyMat);
+    this.tmp = null;
   }
 
   syncCam(c, range) {
@@ -58,6 +107,34 @@ class MultiFrustumPass extends Pass {
       renderer.render(this.scene, c);
       if (clip) { target.scissorTest = false; renderer.setRenderTarget(target); }
       if (k !== 'near') renderer.clearDepth();
+    }
+    // the digital zoom, on the cameras' picture alone
+    if (this.digital > 1.01 && target) {
+      const w = target.width, h = target.height;
+      if (!this.tmp || this.tmp.width !== w || this.tmp.height !== h) {
+        if (this.tmp) this.tmp.dispose();
+        this.tmp = new THREE.WebGLRenderTarget(w, h, { type: target.texture.type, format: target.texture.format, depthBuffer: false, minFilter: THREE.LinearFilter, magFilter: THREE.LinearFilter });
+      }
+      this.aiMat.uniforms.tSrc.value = target.texture;
+      this.aiMat.uniforms.uRes.value.set(w, h);
+      this.aiMat.uniforms.uPix.value = this.digital;
+      renderer.setRenderTarget(this.tmp);
+      renderer.render(this.aiScene, this.fsCam);
+      this.copyMat.uniforms.tSrc.value = this.tmp.texture;
+      renderer.setRenderTarget(target);
+      renderer.render(this.copyScene, this.fsCam);
+    }
+    // the cockpit, at the eye's own view
+    if (this.cabin) {
+      renderer.clearDepth();
+      const c = this.cams.cabin, m = this.camera;
+      c.matrixWorld.copy(this.cabin.matrixWorld);
+      c.matrixWorldInverse.copy(c.matrixWorld).invert();
+      c.fov = this.cabin.fov; c.aspect = m.aspect; c.near = RANGES.near[0]; c.far = 60; c.view = null;
+      c.updateProjectionMatrix();
+      passRange.value.set(OWN.near[0], OWN.near[1]);
+      sm.needsUpdate = false;
+      renderer.render(this.scene, c);
     }
     this.frames++;
   }
@@ -384,6 +461,21 @@ export class Engine {
     const a = this.camera.aspect;
     const vf = 2 * Math.atan(Math.tan(((this.hfov || 92) * Math.PI) / 360) / a) * 180 / Math.PI;
     return Math.min(100, Math.max(25, vf));
+  }
+
+  /**
+   * H8's zoom from its seat: the outside is magnified (the cameras' picture), the cockpit is drawn
+   * at the eye's own view (eye: { pos, quat } or null), the digital part of the zoom is worked
+   * by the camera's image processor on the picture alone
+   */
+  setCabinView(eye, digital = 1) {
+    const P = this.mfPass;
+    if (!P) return;
+    if (!eye) { P.cabin = null; P.digital = 1; return; }
+    const C = P.cabin || (P.cabin = { matrixWorld: new THREE.Matrix4(), fov: 60 });
+    C.matrixWorld.compose(eye.pos, eye.quat, _ONE);
+    C.fov = this.baseVFov();
+    P.digital = digital;
   }
 
   /** magnify the view (H8's zoom): the field of view narrows by z */
