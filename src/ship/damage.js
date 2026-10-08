@@ -111,8 +111,14 @@ export class Damage {
       const belly = pLocal.y < -1.15 && nOut.y < -0.55;
       strike = this.strikes.hit(pLocal, nOut, inward, E, { kind: belly ? 1 : 0 });
       if (!this.catchingUp) strikeDebris(this.debrisCtx(belly ? 'b29Belly' : 'b29'), strike, pLocal.clone().addScaledVector(nOut, 0.01), nOut, inward, E);
-      // holed right through: the skin round the hole torn into jagged petals, bent back out
-      if (strike.to >= this.strikes.stages && strike.from < this.strikes.stages) this.strikePetals(strike.site);
+      // holed right through: the skin round the hole torn into jagged petals, bent back out, and
+      // whatever was mounted on it there torn off with it
+      if (strike.to >= this.strikes.stages && strike.from < this.strikes.stages) {
+        this.strikePetals(strike.site);
+        // (anything standing on the torn skin: within the skin's tear and a little more, for its own
+        // footprint)
+        this.stripMounts(strike.site.p, strike.site.n, strike.site.Rt * 0.75 + 0.18, inward);
+      }
     } else {
       this.addDent(pLocal, push, r, depth, { sharp: E < 2e6 ? 0.4 : 0.15, heat: Math.min(1, 0.3 + E / 4e6) });
       this.addScorch(pLocal, r * 0.8);
@@ -198,6 +204,75 @@ export class Damage {
   }
 
   dentCount(p, rad) { return this.dents.filter((d) => d.pos.distanceTo(p) < rad).length; }
+
+  /**
+   * Things mounted on the skin (boxes, canisters, sensors...) where the skin under them has been
+   * torn away (within r of p, or on the panel `key`): they go with it — folded out of the hull's
+   * merged meshes (kept to put back at the repair dock) and, unless quiet, thrown off tumbling
+   */
+  stripMounts(p, n, r, travel = null, quiet = false, key = null) {
+    const list = this.g.shipVis && this.g.shipVis.mounts;
+    if (!list || !list.length) return;
+    list.forEach((m, id) => {
+      if (m.gone || m.n.dot(n) < 0.4) return;
+      if (key ? this.panelAt(m.p, m.n).key !== key : m.p.distanceTo(p) > r) return;
+      m.gone = true;
+      const got = [];
+      for (const R of m.ranges) {
+        const A = R.mesh.geometry.attributes.position, a = A.array;
+        if (!R.saved) R.saved = a.slice(R.start * 3, (R.start + R.count) * 3);
+        got.push(R);
+        const x = a[R.start * 3], y = a[R.start * 3 + 1], z = a[R.start * 3 + 2];
+        for (let i = R.start; i < R.start + R.count; i++) { a[i * 3] = x; a[i * 3 + 1] = y; a[i * 3 + 2] = z; }
+        A.needsUpdate = true;
+      }
+      if (!quiet && !this.catchingUp) this.flingMount(m, got, travel);
+    });
+  }
+
+  /** a mounted thing torn off: its own pieces (from what the merged meshes held), tumbling away */
+  flingMount(m, ranges, travel) {
+    const g = this.g, f = g.flight;
+    if (!g.combat || !f) return;
+    const grp = new THREE.Group();
+    const mats = this._wreckMats || (this._wreckMats = new Map());
+    for (const R of ranges) {
+      const src = R.mesh.geometry;
+      const geo = new THREE.BufferGeometry();
+      for (const [name, attr] of Object.entries(src.attributes)) {
+        const w = attr.itemSize;
+        const arr = name === 'position' ? R.saved.slice() : attr.array.slice(R.start * w, (R.start + R.count) * w);
+        geo.setAttribute(name, new THREE.BufferAttribute(arr, w));
+      }
+      geo.translate(-m.p.x, -m.p.y, -m.p.z);
+      const sm = R.mesh.material;
+      let mat = mats.get(sm);
+      if (!mat) { mat = new THREE.MeshStandardMaterial({ color: sm.color ? sm.color.clone() : 0x888888, roughness: sm.roughness ?? 0.5, metalness: sm.metalness ?? 0.3 }); mats.set(sm, mat); }
+      grp.add(new THREE.Mesh(geo, mat));
+    }
+    const out = m.n.clone().multiplyScalar(1.5 + Math.random() * 4);
+    if (travel) out.addScaledVector(travel, -0.8);
+    out.add(new THREE.Vector3().randomDirection().multiplyScalar(0.7));
+    g.combat.addWreck(grp, m.p.clone().applyQuaternion(f.quat).add(f.pos), f.vel.clone().add(out.applyQuaternion(f.quat)), 40, 0.8);
+    const w = g.combat.wrecks[g.combat.wrecks.length - 1];
+    if (w) { w.q.copy(f.quat); w.spin = 0.6 + Math.random() * 2.5; }
+  }
+
+  /** the repair dock: everything mounted on the skin put back */
+  restoreMounts() {
+    const list = this.g.shipVis && this.g.shipVis.mounts;
+    if (!list) return;
+    for (const m of list) {
+      if (!m.gone) continue;
+      m.gone = false;
+      for (const R of m.ranges) {
+        if (!R.saved) continue;
+        const A = R.mesh.geometry.attributes.position;
+        A.array.set(R.saved, R.start * 3);
+        A.needsUpdate = true;
+      }
+    }
+  }
 
   /** a spot struck right through: the skin round the hole in jagged petals (paint on their outer
    * face, soot, the torn bright edge), most of them bent back out by the blasts, a few in */
@@ -405,6 +480,7 @@ export class Damage {
     if (!pe) return;
     const flap = pe.flap;
     pe.style = 0; pe.heat = 1;
+    this.stripMounts(pe.centre, pe.n, 0, travel, false, pe.key);
     if (flap) {
       this.group.remove(flap.mesh);
       this.fling(pe, flap.mesh.geometry, travel, 0);
@@ -419,6 +495,8 @@ export class Damage {
 
   /** the panel half torn off: bent out on the edge still fastened */
   addFlap(pe, angle, hinge = Math.floor(Math.random() * 4)) {
+    // (what was mounted on the panel is wrenched off as it bends)
+    this.stripMounts(pe.centre, pe.n, 0, null, !!this.catchingUp, pe.key);
     const geo = this.flapGeometry(pe, hinge, angle, true);
     const mesh = new THREE.Mesh(geo, this.flapMat(true));
     mesh.matrixAutoUpdate = false; mesh.updateMatrix();
@@ -834,6 +912,7 @@ export class Damage {
     this.shotWear = 0;
     this.pocks.clear();
     this.strikes.clear();
+    this.restoreMounts();
     this.broken = false;
     this.group.clear();
     if (this.g.b29Display) this.g.b29Display.repair();
@@ -1138,6 +1217,7 @@ export class Damage {
       scorch: this.scorch.map((s) => ({ p: s.pos.toArray(), r: s.r })),
       health: this.health, coolant: this.coolant ?? 1, fatigue: this.fatigue || 0,
       shotWear: this.shotWear || 0, pocks: this.pocks.serialize(), strikes: this.strikes.serialize(),
+      mountsGone: (this.g.shipVis.mounts || []).map((m, i) => (m.gone ? i : -1)).filter((i) => i >= 0),
       pipes: this.g.layout.pipes.filter((s) => s.leak > 0 || s.patched).map((s) => ({ id: s.id, leak: s.leak, patched: s.patched })),
       equipIssues: this.issues.filter((i) => i.kind === 'equip').map((i) => ({ k: i.ref.k, sev: i.sev, state: i.state })),
     };
@@ -1164,6 +1244,9 @@ export class Damage {
     for (const st of this.strikes.sites) if (st.petals) this.group.remove(st.petals);
     this.strikes.restore(d.strikes);
     for (const st of this.strikes.sites) if (st.stage >= this.strikes.stages) this.strikePetals(st);
+    // (what was torn off the skin stays gone)
+    const ML = this.g.shipVis.mounts || [];
+    for (const i of d.mountsGone || []) { const m = ML[i]; if (m && !m.gone) this.stripMounts(m.p, m.n, 0.01, null, true); }
     for (const b of d.breaches || []) {
       const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone, b.seed);
       if (b.patched) { br.patched = true; this._updateBreachLeak(br); this._breachMeshes(br); if (br.vent) { this.g.fx.removeEmitter(br.vent); br.vent = null; } const is = this.issues.find((i) => i.ref === br); if (is) is.state = 'patched'; }

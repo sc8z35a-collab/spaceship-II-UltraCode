@@ -29,6 +29,7 @@ export class ShipVisual {
     this.extLights = ext.lights;
     this.rails = ext.rails;
     this.ladder = ext.ladder;
+    this.mounts = ext.mounts || [];
     this.root.add(this.exterior);
     const shell = buildInteriorShell(M);
     this.interiorBuilder = shell.builder;

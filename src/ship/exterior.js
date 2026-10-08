@@ -375,7 +375,10 @@ export function buildExterior(M) {
   b.colCyl(1.3, 3.4, [0, 0.4, zE + 1.7], [Math.PI / 2, 0, 0]);
   // (LOW II: in sections along the ship, so from inside only what lies ahead of the eye is drawn)
   const group = b.build(M, QUALITY.level === 'low2' ? { chunks: [-6.5, -1.0, 4.0, 10.0] } : {});
-  return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders };
+  // the things mounted on the skin: their vertices in the merged meshes
+  const mounts = b.mountList || [];
+  group.traverse((o) => { if (o.isMesh && o.userData.mounts) for (const [id, start, count] of o.userData.mounts) if (mounts[id]) mounts[id].ranges.push({ mesh: o, start, count }); });
+  return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders, mounts };
 }
 
 /**
@@ -412,13 +415,17 @@ function hullGreebles(b) {
     const e = new THREE.Euler().setFromRotationMatrix(m, 'YXZ');
     return { p, n, e };
   };
+  // (each one tagged: torn off with the skin under it, damage.js finds its vertices)
+  const mounts = b.mountList || (b.mountList = []);
   const keys = ['hullDark', 'hullDark', 'metal', 'mli', 'hull', 'metalDark'];
   let placed = 0, tries = 0;
   b.fine(() => { while (placed < 230 && tries < 4000) {
     tries++;
     const z = -9.8 + R() * 19.4, t = R() * Math.PI * 2 - Math.PI / 2;
     if (!clear(z, t, 0.22)) continue;
-    const { p, e } = frame(z, t);
+    const { p, n, e } = frame(z, t);
+    b.mount = mounts.length;
+    mounts.push({ p: p.clone(), n: n.clone(), ranges: [] });
     b.push(p.toArray(), [e.x, e.y, e.z]);
     const k = R();
     if (k < 0.34) {                                                   // equipment box with a lid line
@@ -456,6 +463,7 @@ function hullGreebles(b) {
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.01, 0.01, 0.008, 'steel', [sx * (w / 2 - 0.025), 0.012, sz * (d / 2 - 0.025)], null, 6);
     }
     b.pop();
+    b.mount = null;
     placed++;
   } });
   // conduit runs along the flanks (broken around openings), clamped every 0.55 m (on low only the
