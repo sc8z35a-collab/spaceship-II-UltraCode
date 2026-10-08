@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { QUALITY } from '../core/quality.js';
 import { Builder, roundedRectShape, rng, fixNormals } from './geom.js';
-import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, CANOPY, inCanopy, onMullion, canopyZ } from './hullShape.js';
+import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, inCanopy } from './hullShape.js';
 import { createGlassMaterial } from './glass.js';
 import { buildPortExterior, PORT } from '../h8/b29Port.js';
 
@@ -120,7 +120,7 @@ export function buildExterior(M) {
   // (low quality: a coarser skin, still smooth at every distance it is seen from)
   const lowQ = QUALITY.level !== 'high', low2 = QUALITY.level === 'low2';
   const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, low2 ? 110 : lowQ ? 150 : 260, low2 ? 72 : lowQ ? 100 : 160, 0, false);
-  b.add(skin, 'hull');
+  b.add(skin, 'hullSkin');
   // aft closing ring/neck
   b.cyl(1.72, 1.72, 0.5, 'hullDark', [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0], 48);
   b.add(new THREE.RingGeometry(0.2, 1.75, 48), 'hullDark', [0, 0.4, HULL.zTail1 + 0.45], [0, 0, 0]);
@@ -130,7 +130,8 @@ export function buildExterior(M) {
     if (o.kind === 'hatch') continue;
     buildFrame(b, o, 'metalDark', 'hullDark');
   }
-  buildCanopyFrame(b);
+  // (no canopy any more: the nose is closed, its cameras feed the cockpit's big screen)
+  noseCameras(b);
   // hatch frame (airlock)
   const hatch = OPENINGS.find((o) => o.kind === 'hatch');
   buildFrame(b, hatch, 'metalDark', 'hullOrange');
@@ -482,6 +483,58 @@ function hullGreebles(b) {
 }
 
 /** glass panes for all windows (outer and inner pane) */
+/**
+ * Where the canopy was: a band of dark armoured glass over the nose (opaque: the cockpit sees out
+ * through its cameras), with the camera lenses set into it — the big one in the middle, a pair to
+ * each side, one low under the chin
+ */
+function noseCameras(b) {
+  // the band: the old canopy's outline, just proud of the skin
+  const rings = 70, segs = 110, z0 = HULL.zTip + 0.001, z1 = -10.6;
+  const P = [];
+  for (let i = 0; i <= rings; i++) {
+    const z = z0 + (z1 - z0) * (i / rings), row = [];
+    for (let j = 0; j <= segs; j++) row.push(sectionPoint(z, (j / segs) * Math.PI * 2 - Math.PI / 2, -0.012));
+    P.push(row);
+  }
+  const pos = [];
+  for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
+    const A = P[i][j], B = P[i][j + 1], C = P[i + 1][j], D = P[i + 1][j + 1];
+    for (const tri of [[A, C, D], [A, D, B]]) {
+      if (!tri.every((p) => inCanopy(p))) continue;
+      for (const p of tri) pos.push(p.x, p.y, p.z);
+    }
+  }
+  const band = new THREE.BufferGeometry();
+  band.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  band.computeVertexNormals();
+  b.add(band, 'sensorGlass');
+  // the lenses: a dark eye in a bright rim, a status lamp beside it
+  const m = new THREE.Matrix4();
+  const lens = (z, t, r) => {
+    const p = sectionPoint(z, t, -0.016), n = sectionNormal(z, t, 0);
+    if (!inCanopy(p) && z > -13.0) return;
+    const f = new THREE.Vector3(0, 0, -1).addScaledVector(n, n.z).normalize();
+    const X = new THREE.Vector3().crossVectors(n, f).normalize();
+    m.makeBasis(X, n, f.clone().negate()).setPosition(p);
+    const add = (geo, key) => { geo.applyMatrix4(m); b.add(geo, key); };
+    const rim = new THREE.CylinderGeometry(r * 1.25, r * 1.32, 0.03, 28);
+    add(rim, 'metalDark');
+    const ring = new THREE.TorusGeometry(r * 1.12, r * 0.08, 6, 28); ring.rotateX(Math.PI / 2); ring.translate(0, 0.016, 0);
+    add(ring, 'metal');
+    const glass = new THREE.SphereGeometry(r, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2); glass.scale(1, 0.35, 1); glass.translate(0, 0.012, 0);
+    add(glass, 'lens');
+    const led = new THREE.SphereGeometry(0.009, 8, 6); led.translate(r * 1.6, 0.01, 0);
+    add(led, 'ledGreen');
+  };
+  lens(-12.55, Math.PI / 2, 0.075);
+  for (const s of [-1, 1]) {
+    lens(-12.2, Math.PI / 2 - s * 0.55, 0.05);
+    lens(-12.85, Math.PI / 2 - s * 0.95, 0.045);
+  }
+  lens(-13.15, -Math.PI / 2 + 0.25, 0.04);
+}
+
 export function buildGlass(env) {
   const gOuter = [], gInner = [];
   for (const o of OPENINGS) {
@@ -515,138 +568,7 @@ export function buildGlass(env) {
       list.push(g);
     }
   }
-  gOuter.push(buildCanopyGlass(0.035));
-  gInner.push(buildCanopyGlass(HULL.inset - 0.025));
   const norm = (list) => list.map((g) => { let h = g.index ? g.toNonIndexed() : g; if (h.attributes.uv) h.deleteAttribute('uv'); fixNormals(h); return h; });
   return { outer: norm(gOuter), inner: norm(gInner) };
 }
 
-// ---------------- cockpit canopy ----------------
-function canopyGrid(inset, rings = 90, segs = 120) {
-  const z0 = HULL.zTip + 0.001, z1 = -10.6;
-  const P = [];
-  for (let i = 0; i <= rings; i++) {
-    const z = z0 + (z1 - z0) * (i / rings);
-    const row = [];
-    for (let j = 0; j <= segs; j++) {
-      const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
-      row.push(sectionPoint(z, t, inset));
-    }
-    P.push(row);
-  }
-  return P;
-}
-
-/** boundary loop of the canopy (plane / hull intersection), parametrised by section angle t */
-export function canopyBoundary(inset, n = 180) {
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const t = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const z = canopyZ(t, inset);
-    if (z === null) continue;
-    pts.push(sectionPoint(z, t, inset));
-  }
-  return pts;
-}
-
-function mullionCurves(inset) {
-  const curves = [];
-  const zs = [];
-  for (let z = HULL.zTip + 0.01; z < -10.6; z += 0.03) zs.push(z);
-  for (const x0 of CANOPY.mullX) {
-    const pts = [];
-    for (const z of zs) {
-      // find t on the upper half where x == x0
-      let lo = x0 > 0 ? 0 : Math.PI / 2, hi = x0 > 0 ? Math.PI / 2 : Math.PI;
-      const fx = (t) => sectionPoint(z, t, inset).x - x0;
-      if (Math.sign(fx(lo)) === Math.sign(fx(hi))) continue;
-      for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (Math.sign(fx(m)) === Math.sign(fx(lo))) lo = m; else hi = m; }
-      const p = sectionPoint(z, (lo + hi) / 2, inset);
-      if (inCanopy(p)) pts.push(p);
-    }
-    if (pts.length > 2) curves.push(pts);
-  }
-  for (const y0 of CANOPY.mullY) {
-    const right = [], left = [];
-    for (const z of zs) {
-      for (const side of [1, -1]) {
-        let lo = side > 0 ? 0 : Math.PI / 2, hi = side > 0 ? Math.PI / 2 : Math.PI;
-        const fy = (t) => sectionPoint(z, t, inset).y - y0;
-        if (Math.sign(fy(lo)) === Math.sign(fy(hi))) continue;
-        for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (Math.sign(fy(m)) === Math.sign(fy(lo))) lo = m; else hi = m; }
-        const p = sectionPoint(z, (lo + hi) / 2, inset);
-        if (inCanopy(p)) (side > 0 ? right : left).push(p);
-      }
-    }
-    const pts = [...right.reverse(), ...left];
-    if (pts.length > 2) curves.push(pts);
-  }
-  return curves;
-}
-
-function ribbon(A, B) {
-  const pos = [];
-  for (let i = 0; i < A.length - 1 && i < B.length - 1; i++) {
-    const a = A[i], b = A[i + 1], c = B[i], d = B[i + 1];
-    pos.push(a.x, a.y, a.z, c.x, c.y, c.z, b.x, b.y, b.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
-}
-
-function buildCanopyFrame(b) {
-  const outer = canopyBoundary(0);
-  const inner = canopyBoundary(HULL.inset);
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(outer, true), 240, 0.065, 8, true), 'hullDark');
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(inner, true), 240, 0.055, 8, true), 'frame');
-  // tunnel between the two rims (same parametrisation -> clean ribbon)
-  b.add(ribbon([...outer, outer[0]], [...inner, inner[0]]), 'metalDark');
-  const mo = mullionCurves(0), mi = mullionCurves(HULL.inset);
-  for (let k = 0; k < mo.length; k++) {
-    b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mo[k]), mo[k].length * 2, 0.04, 6), 'hullDark');
-    if (mi[k]) {
-      b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mi[k]), mi[k].length * 2, 0.035, 6), 'frame');
-      const ca = new THREE.CatmullRomCurve3(mo[k]).getSpacedPoints(60), cb = new THREE.CatmullRomCurve3(mi[k]).getSpacedPoints(60);
-      b.add(ribbon(ca, cb), 'metalDark');
-    }
-  }
-}
-
-export function buildCanopyGlass(inset) {
-  const rings = 120, segs = 160;
-  const z0 = HULL.zTip + 0.001, z1 = -10.6;
-  const P = [], N = [];
-  for (let i = 0; i <= rings; i++) {
-    const z = z0 + (z1 - z0) * (i / rings);
-    const rowP = [], rowN = [];
-    for (let j = 0; j <= segs; j++) {
-      const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
-      rowP.push(sectionPoint(z, t, inset));
-      rowN.push(sectionNormal(Math.max(z, HULL.zTip + 0.05), t, inset));
-    }
-    P.push(rowP); N.push(rowN);
-  }
-  const pos = [], nrm = [], wuv = [], wid = [];
-  const cen = new THREE.Vector3(0, 1.6, -12.3);
-  for (let i = 0; i < rings; i++) {
-    for (let j = 0; j < segs; j++) {
-      const A = [i, j], B = [i, j + 1], C = [i + 1, j], D = [i + 1, j + 1];
-      for (const tri of [[A, C, D], [A, D, B]]) {
-        if (!tri.every(([a, c]) => inCanopy(P[a][c]))) continue;
-        for (const [a, c] of tri) {
-          const p = P[a][c], n = N[a][c];
-          pos.push(p.x, p.y, p.z); nrm.push(n.x, n.y, n.z);
-          wuv.push(p.x * 0.6, (p.y - cen.y) * 0.6 + (p.z - cen.z) * 0.3); wid.push(15);
-        }
-      }
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-  g.setAttribute('wuv', new THREE.Float32BufferAttribute(wuv, 2));
-  g.setAttribute('winId', new THREE.Float32BufferAttribute(wid, 1));
-  return g;
-}

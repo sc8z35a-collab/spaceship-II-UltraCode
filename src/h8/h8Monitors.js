@@ -117,7 +117,7 @@ export const H8_PAGES = {
     if (docked) K.button(410, H - 30, 92, 24, h.neckTarget > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => h.portTapped(), { size: 10 });
     const cams = h.hull.cams.map((c, i) => (c < 0.5 ? CAMERAS[i].name.split(' ')[0] : null)).filter(Boolean);
     const holed = h.hull.dents.some((d) => d.hole);
-    K.text(`被弾 ${h.hits} 回   へこみ ${h.hull.dents.length} か所${holed ? '（貫通あり）' : ''}${cams.length ? '   映像なし: ' + cams.join(' ') : ''}`, 12, H - 12, { size: 9.5, color: cams.length || holed ? COL.red : COL.dim });
+    K.text(`被弾 ${h.hits} 回   へこみ ${h.hull.dents.length} か所${h.hull.tiles.length ? `   装甲板脱落 ${h.hull.tiles.length} 枚` : ''}${holed ? '（貫通あり）' : ''}${cams.length ? '   映像なし: ' + cams.join(' ') : ''}`, 12, H - 12, { size: 9.5, color: cams.length || holed ? COL.red : COL.dim });
   },
 
   // ------------------------------------------------------------------ NAV

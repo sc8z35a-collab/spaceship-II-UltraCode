@@ -86,10 +86,15 @@ export class ShipSystems {
     }
     // ULTRA guarded switch + alarm silence button
     if (L.spots.ultra) {
+      // (on the pods beside the armrests: the face out along N, the switch's top toward Up)
+      const face = (o, n, up) => {
+        const Z = n.clone().normalize(), Y = up.clone().addScaledVector(Z, -up.dot(Z)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
+        o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+      };
       const u = new THREE.Group();
       u.position.copy(L.spots.ultra);
-      const rot = L.spots.deskRot(0.06);
-      u.rotation.set(rot[0], rot[1], rot[2], 'YXZ');
+      face(u, L.spots.ultraN, L.spots.ultraUp);
+      u.scale.setScalar(0.8);
       const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.012), M.plasticK);
       const sw = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.05, 8), M.steel);
       sw.rotation.x = Math.PI / 2 - 0.5; sw.position.z = 0.025;
@@ -107,8 +112,8 @@ export class ShipSystems {
       g.interact.addSphere(L.spots.ultra, 0.07, () => this.toggleUltra(), { maxDist: 1.6 });
       const s = new THREE.Group();
       s.position.copy(L.spots.silence);
-      const rs = L.spots.deskRot(-0.06);
-      s.rotation.set(rs[0], rs[1], rs[2], 'YXZ');
+      face(s, L.spots.silenceN, L.spots.silenceUp);
+      s.scale.setScalar(0.8);
       const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.012, 20), M.plasticY);
       ring.rotation.x = Math.PI / 2;
       const mush = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, emissive: new THREE.Color(1, 0.05, 0.02), emissiveIntensity: 0, roughness: 0.3 }));

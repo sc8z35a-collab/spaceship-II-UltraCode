@@ -211,8 +211,8 @@ export class AudioEngine {
     this.beep(2400, 0.015, gain * 0.3, { pos });
   }
 
-  _burst(pos, { dur = 0.2, freq = 1000, q = 1, gain = 0.3, type = 'white', filter = 'bandpass', attack = 0.002, sweep = 0, direct = false } = {}) {
-    const ctx = this.ctx, t = ctx.currentTime;
+  _burst(pos, { dur = 0.2, freq = 1000, q = 1, gain = 0.3, type = 'white', filter = 'bandpass', attack = 0.002, sweep = 0, direct = false, when = 0 } = {}) {
+    const ctx = this.ctx, t = ctx.currentTime + when;
     const s = ctx.createBufferSource(); s.buffer = this[type];
     s.loopStart = 0; const off = Math.random() * 2;
     const f = ctx.createBiquadFilter(); f.type = filter; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
@@ -279,6 +279,14 @@ export class AudioEngine {
       servo: { f0: 330, f1: 560, d: 0.35, g: 0.04, q: 4.5, whoosh: 0, thump: 0.12, tick: 0.045, seal: 0, bolts: 0 },
       heavy: { f0: 48, f1: 82, d: 1.6, g: 0.075, q: 2.2, whoosh: 0.02, thump: 0.6, tick: 0.05, seal: 0.05, bolts: 2 },
       latch: { f0: 0, f1: 0, d: 0.05, g: 0, q: 1, whoosh: 0, thump: 0.3, tick: 0.07, seal: 0.05, bolts: 2 },
+      // docking clamps: a short heavy drive, four bolts, a hard seat
+      clamp: { f0: 105, f1: 175, d: 0.5, g: 0.055, q: 3, whoosh: 0, thump: 0.55, tick: 0.075, seal: 0.09, bolts: 4 },
+      // a motorised valve turning
+      valve: { f0: 240, f1: 410, d: 0.55, g: 0.035, q: 5, whoosh: 0, thump: 0.08, tick: 0.04, seal: 0.04, bolts: 0 },
+      // booms and radiator wings folding: a long slow drive
+      fold: { f0: 92, f1: 138, d: 2.2, g: 0.042, q: 3.4, whoosh: 0, thump: 0.28, tick: 0.05, seal: 0, bolts: 1 },
+      // a gun carriage or turret slewing: a quick high whine
+      slew: { f0: 430, f1: 720, d: 0.28, g: 0.026, q: 6, whoosh: 0, thump: 0.06, tick: 0.03, seal: 0, bolts: 0 },
     }[kind] || null;
     if (!K) return;
     const out = this._out(pos, direct);

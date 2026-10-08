@@ -370,7 +370,7 @@ export class WorldDamage {
       const pl = g.player;
       const inside = dk.lobby && dk.lobby.contains(pl.pos) && pl.state !== 'dead';
       dk.forceRelease();
-      g.damage.impact(new THREE.Vector3(3.0, 0.5, -1.0), new THREE.Vector3(-1, 0, 0), 2.5e6, { noBreakup: true });
+      g.damage.impact(new THREE.Vector3(3.0, 0.5, -1.0), new THREE.Vector3(-1, 0, 0), 2.5e6, { noBreakup: true, snap: true });
       if (inside) {
         // the lobby is torn away around Kaito: thrown out into vacuum among the wreckage, bruised —
         // a suit keeps him alive (fly back to B-29), without one there is under a minute left

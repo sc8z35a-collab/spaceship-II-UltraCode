@@ -7,15 +7,29 @@ import { noiseTex } from '../core/noiseTex.js';
 import { detailTextures, DETAIL_TILE } from './detailTex.js';
 import { OUTLINE_GLSL } from './tornMetal.js';
 
-export const MAX_DENTS = 24;
+export const MAX_DENTS = 48;
+export const MAX_PEEL = 24;
 export const MAX_OPEN = 16;
 export const MAX_BREACH = 10;
+
+// Dents and torn-off skin panels live in a small float texture rather than uniform arrays (far
+// more of them than a small GPU's uniform space would take). One column per dent / panel:
+//   row 0  dent centre xyz, radius          row 3  panel rect in its projection: u0 u1 v0 v1
+//   row 1  dent push dir xyz, depth         row 4  axis (0 x 1 y 2 z), side (+-1), plane, style
+//   row 2  heat, seed, sharpness, -         row 5  heat, seed, recess depth, cluster radius
+export const DENT_ROWS = 6;
+export const dentData = new Float32Array(MAX_DENTS * DENT_ROWS * 4);
+const dentTex = new THREE.DataTexture(dentData, MAX_DENTS, DENT_ROWS, THREE.RGBAFormat, THREE.FloatType);
+dentTex.minFilter = dentTex.magFilter = THREE.NearestFilter;
+dentTex.generateMipmaps = false;
+dentTex.needsUpdate = true;
 
 // uniforms shared by every ship material (updated by the damage system)
 export const shipUniforms = {
   uWorldToShip: { value: new THREE.Matrix4() },
-  uDents: { value: Array.from({ length: MAX_DENTS }, () => new THREE.Vector4(0, 0, 0, 0)) },   // xyz centre, w radius
-  uDentDir: { value: Array.from({ length: MAX_DENTS }, () => new THREE.Vector4(0, 0, 0, 0)) }, // xyz push dir, w depth
+  tDents: { value: dentTex },
+  uDentN: { value: 0 },
+  uPeelN: { value: 0 },
   uOpen: { value: Array.from({ length: MAX_OPEN }, () => new THREE.Matrix4()) },
   uOpenCount: { value: 0 },
   uBreach: { value: Array.from({ length: MAX_BREACH }, () => new THREE.Vector4(0, 0, 0, 0)) }, // xyz, w radius
@@ -29,25 +43,42 @@ export const shipUniforms = {
   uCanopy: { value: new THREE.Vector4(0, 0, 0, -1e9) },
 };
 
+// a dent's depth profile at s = distance / radius: a smooth bowl for a broad blow (sharp 0) with
+// crumpled ripples toward the rim; a crater with a raised lip round it for a punch (sharp 1)
+const DENT_PROFILE = /* glsl */`
+float dentProfile(float s, float sharp, float seed){
+  if (s >= 1.4) return 0.0;
+  float f = 1.0 - smoothstep(0.0, 1.0, s);
+  f = f * f * (3.0 - 2.0 * f);
+  float broad = f * (1.0 + 0.18 * sin(s * 18.0 + seed) * f);
+  float q = max(0.0, 1.0 - s * s);
+  float lx = (s - 1.08) / 0.16;
+  float punch = q * q - 0.24 * exp(-lx * lx);
+  return mix(broad, punch, sharp);
+}
+vec4 dentTexel(int i, int row){ return texelFetch(tDents, ivec2(i, row), 0); }
+`;
+
 const COMMON_VERT_PARS = /* glsl */`
 uniform mat4 uWorldToShip;
-uniform vec4 uDents[${MAX_DENTS}];
-uniform vec4 uDentDir[${MAX_DENTS}];
+uniform highp sampler2D tDents;
+uniform int uDentN;
 varying vec3 vShipPos;
 varying vec3 vShipNrm;
 #ifdef DENTABLE
+${DENT_PROFILE}
 vec3 dentOffset(vec3 p, out float dsum){
   vec3 off = vec3(0.0); dsum = 0.0;
   for (int i = 0; i < ${MAX_DENTS}; i++){
-    vec4 D = uDents[i];
-    if (D.w <= 0.0) continue;
-    float d = length(p - D.xyz);
-    float f = 1.0 - smoothstep(0.0, D.w, d);
-    f = f * f * (3.0 - 2.0 * f);
-    // crumple: small ripples near the rim
-    float rip = 1.0 + 0.18 * sin(d / max(D.w, 0.01) * 18.0) * f;
-    off += uDentDir[i].xyz * uDentDir[i].w * f * rip;
-    dsum += f * uDentDir[i].w;
+    if (i >= uDentN) break;
+    vec4 D = dentTexel(i, 0);
+    vec3 dp = p - D.xyz;
+    float reach = D.w * 1.4;
+    if (D.w <= 0.0 || dot(dp, dp) > reach * reach) continue;
+    vec4 E = dentTexel(i, 1), X = dentTexel(i, 2);
+    float h = dentProfile(length(dp) / D.w, X.z, X.y);
+    off += E.xyz * E.w * h;
+    dsum += max(h, 0.0) * E.w;
   }
   return off;
 }
@@ -211,6 +242,184 @@ float scorchAt(vec3 p){
   }
   return s * (0.7 + 0.3 * sn(p * 0.6));
 }
+#ifdef DENTABLE
+uniform highp sampler2D tDents;
+uniform int uDentN;
+${DENT_PROFILE}
+// the dents at this pixel: the relief the vertices are too far apart to carry (the small ones
+// whole, the creases of the crumpled metal in every one) and the glow of a fresh hit
+void dentFrag(vec3 p, out float bump, out float heat, out float depth){
+  bump = 0.0; heat = 0.0; depth = 0.0;
+  for (int i = 0; i < ${MAX_DENTS}; i++){
+    if (i >= uDentN) break;
+    vec4 D = dentTexel(i, 0);
+    vec3 dp = p - D.xyz;
+    float reach = D.w * 1.4;
+    if (D.w <= 0.0 || dot(dp, dp) > reach * reach) continue;
+    vec4 E = dentTexel(i, 1), X = dentTexel(i, 2);
+    float s = length(dp) / D.w;
+    float h = dentProfile(s, X.z, X.y);
+    float fine = 1.0 - smoothstep(0.1, 0.32, D.w);
+    float crease = sn(p * 9.0 + X.y) * 0.5 + sn(p * 23.0 + X.y * 1.7) * 0.25;
+    bump -= h * E.w * fine + E.w * max(0.0, 1.0 - s) * crease * 0.16;
+    depth += max(h, 0.0) * E.w;
+    heat = max(heat, X.x * (1.0 - smoothstep(0.0, 0.55, s)));
+  }
+}
+#endif
+#ifdef PEEL
+uniform int uPeelN;
+uniform mat4 uWorldToShip;
+// Skin panels torn off the hull. Where one was, the bay under it shows as a real recess: the view
+// ray is followed down into it to its floor (stringers and frames over the gold insulation
+// blanket, a bare flange round the edge with the rivets sheared off), or it meets the side of the
+// hole on the way (the cut edge of the skin). style 0: the panel ripped off along its seams;
+// 1: a jagged hole torn in it; 2: heat-shield tiles knocked off the belly (white silica showing
+// in the broken neighbours, the felt pad they sat on)
+float peelSd(int style, vec2 q, vec2 hs, float seed, vec2 uv){
+  if (style == 0) return max(abs(q.x) - hs.x, abs(q.y) - hs.y);
+  vec2 e = q / (hs * 0.92);
+  float a = atan(e.y, e.x);
+  float rad = 0.68 + 0.18 * sin(a * 3.0 + seed) + 0.09 * sin(a * 7.0 + seed * 2.3) + 0.05 * sin(a * 23.0 + seed * 5.1) + 0.06 * sn(vec3(uv * 5.0, seed));
+  return (length(e) - rad) * min(hs.x, hs.y);
+}
+float tileGone(vec2 xz, vec2 c, float R, float seed){
+  float zi = floor(xz.y / 0.16);
+  float xj = floor(xz.x / 0.16 + zi * 0.5);
+  vec2 tc = vec2((xj + 0.5 - zi * 0.5) * 0.16, (zi + 0.5) * 0.16);
+  return step(length(tc - c), R * (0.5 + 0.5 * hash12(vec2(zi, xj) + seed)));
+}
+// the bay's floor at l (m from the panel's corner; size: the panel)
+void bayFloor(vec2 l, vec2 size, float seed, out vec3 col, out float rough, out float metal, out float h){
+  // gold insulation blanket, crinkled, quilted
+  float cr = sn(vec3(l * 30.0, seed)) * 0.6 + sn(vec3(l * 75.0, seed + 3.0)) * 0.4;
+  vec2 qf = abs(fract(l / 0.15 + 0.5) - 0.5) * 0.15;
+  float stitch = smoothstep(0.003, 0.0, min(qf.x, qf.y)) * step(0.5, fract((l.x + l.y) * 60.0));
+  col = vec3(0.6, 0.41, 0.13) * (0.72 + 0.5 * cr) * (1.0 - 0.6 * stitch);
+  rough = 0.3 + 0.15 * cr; metal = 0.75; h = cr * 0.002;
+  // torn open toward the middle: the silver inner layers
+  float torn = smoothstep(0.6, 0.7, nz(vec3(l * 3.0, seed * 0.1)).r) * (1.0 - smoothstep(0.15, 0.5, length(l - size * 0.5)));
+  col = mix(col, vec3(0.62, 0.64, 0.66) * (0.8 + 0.3 * cr), torn);
+  // a cable bundle along it
+  float cb = 1.0 - smoothstep(0.012, 0.016, abs(l.y - 0.41));
+  float band = step(0.82, fract(l.x * 5.0 + seed));
+  col = mix(col, mix(vec3(0.03), vec3(0.5, 0.06, 0.04), band), cb); rough = mix(rough, 0.55, cb); metal = mix(metal, 0.05, cb); h += cb * 0.012;
+  // stringers along the panel, frames across it (primer green-grey, worn bright on the edges)
+  float ds = abs(fract((l.y - 0.1) / 0.2 + 0.5) - 0.5) * 0.2;
+  float st = 1.0 - smoothstep(0.009, 0.012, ds);
+  float df = abs(fract(l.x / 0.6 + 0.5) - 0.5) * 0.6;
+  float fr = 1.0 - smoothstep(0.016, 0.02, df);
+  float sf = max(st, fr);
+  vec3 primer = vec3(0.34, 0.38, 0.31) * (0.85 + 0.25 * sn(vec3(l * 11.0, seed)));
+  col = mix(col, mix(primer, vec3(0.55), smoothstep(0.007, 0.011, ds) * st), sf);
+  rough = mix(rough, 0.62, sf); metal = mix(metal, 0.3, sf); h = mix(h, 0.016 + 0.01 * fr, sf);
+  // the flange round the edge the panel was fastened to: bare, with the sheared rivets
+  vec2 de = min(l, size - l);
+  float edge = min(de.x, de.y);
+  float fl = 1.0 - smoothstep(0.028, 0.032, edge);
+  float along = de.x < de.y ? l.y : l.x;
+  float rv = 1.0 - smoothstep(0.0035, 0.005, length(vec2((fract(along / 0.04) - 0.5) * 0.04, edge - 0.016)));
+  col = mix(col, vec3(0.58, 0.59, 0.61) * (0.9 + 0.2 * sn(vec3(l * 40.0, seed))), fl);
+  col = mix(col, vec3(0.78, 0.78, 0.8), rv * fl);
+  rough = mix(rough, 0.34, fl); metal = mix(metal, 0.85, fl); h = mix(h, 0.026 + rv * 0.003, fl);
+}
+void peelFrag(vec3 p, vec3 nrm, inout float bumpH, out float on, out vec3 col, out float rough, out float metal, out float ao, out vec3 em, out float rimK, out vec3 rimCol){
+  on = 0.0; col = vec3(0.0); rough = 0.5; metal = 0.0; ao = 1.0; em = vec3(0.0); rimK = 0.0; rimCol = vec3(0.0);
+  for (int j = 0; j < ${MAX_PEEL}; j++){
+    if (j >= uPeelN) break;
+    vec4 Ax = dentTexel(j, 4);
+    int ax = int(Ax.x + 0.5);
+    float pa = ax == 0 ? p.x : (ax == 1 ? p.y : p.z);
+    float na = ax == 0 ? nrm.x : (ax == 1 ? nrm.y : nrm.z);
+    if (na * Ax.y < 0.3 || abs(pa - Ax.z) > 0.75) continue;
+    vec4 Rr = dentTexel(j, 3), St = dentTexel(j, 5);
+    vec2 uv = ax == 0 ? p.zy : (ax == 1 ? p.xz : p.xy);
+    int style = int(Ax.w + 0.5);
+    vec2 c = vec2(Rr.x + Rr.y, Rr.z + Rr.w) * 0.5, hs = vec2(Rr.y - Rr.x, Rr.w - Rr.z) * 0.5;
+    if (any(greaterThan(abs(uv - c), hs + 0.05))) continue;
+    float seed = St.y, D = St.z;
+    vec3 camS = (uWorldToShip * vec4(cameraPosition, 1.0)).xyz;
+    vec3 vd = normalize(p - camS);
+    vec3 nA = vec3(ax == 0 ? Ax.y : 0.0, ax == 1 ? Ax.y : 0.0, ax == 2 ? Ax.y : 0.0);
+    float cosA = max(0.08, -dot(vd, nA));
+    vec2 vuv = (ax == 0 ? vd.zy : (ax == 1 ? vd.xz : vd.xy)) / cosA;
+    if (style == 2) {
+      vec2 tc = vec2(c.x, c.y);
+      if (tileGone(uv, tc, St.w, seed) < 0.5) {
+        // a tile left at the edge of the gap: chipped, the white silica showing in the chips
+        float near = tileGone(uv + vec2(0.05, 0.0), tc, St.w, seed) + tileGone(uv - vec2(0.05, 0.0), tc, St.w, seed) + tileGone(uv + vec2(0.0, 0.05), tc, St.w, seed) + tileGone(uv - vec2(0.0, 0.05), tc, St.w, seed);
+        float chip = step(0.5, near) * smoothstep(0.55, 0.62, nz(vec3(uv * 9.0, seed)).r);
+        rimK = max(rimK, chip); rimCol = vec3(0.86, 0.85, 0.82);
+        continue;
+      }
+      on = 1.0;
+      float dw = -1.0;
+      for (int k = 1; k <= 6; k++){
+        float t = float(k) / 6.0;
+        if (tileGone(uv + vuv * D * t, tc, St.w, seed) < 0.5) { dw = D * t; break; }
+      }
+      if (dw < 0.0) {
+        // the felt pad the tile sat on (torn off in places down to the primed skin), glue traces
+        vec2 lf = uv + vuv * D;
+        float glue = smoothstep(0.55, 0.65, nz(vec3(lf * 6.0, seed)).g);
+        float bare = step(0.72, hash12(floor(lf / 0.16) + seed * 3.0));
+        col = mix(vec3(0.8, 0.78, 0.72), vec3(0.47, 0.41, 0.31), glue);
+        col = mix(col, vec3(0.42, 0.47, 0.36), bare);
+        rough = 0.95 - bare * 0.35; metal = bare * 0.4; ao = 0.6;
+        bumpH = -D + glue * 0.002;
+      } else {
+        // the side of the next tile: a skin of black coating over the white silica
+        col = dw < 0.004 ? vec3(0.05) : vec3(0.84, 0.84, 0.8) * (0.85 + 0.15 * sn(vec3(uv * 30.0, dw * 40.0)));
+        rough = 0.95; metal = 0.0; ao = 0.45 + 0.5 * (1.0 - dw / D);
+        bumpH = -dw;
+      }
+      em = vec3(1.0, 0.4, 0.1) * St.x * 2.0;
+      return;
+    }
+    float sd = peelSd(style, uv - c, hs, seed, uv);
+    if (sd > 0.035) continue;
+    if (sd > 0.0) {
+      // the skin that stays round it: a torn edge bent in, bare at the very edge, sooty beyond;
+      // a clean rip along the seams leaves a strip of torn sealant
+      float e = 1.0 - sd / 0.035;
+      if (style == 1) {
+        bumpH -= 0.012 * e * e;
+        rimK = max(rimK, e * 0.9);
+        rimCol = sd < 0.005 ? vec3(0.66, 0.66, 0.68) : vec3(0.05, 0.045, 0.04);
+      } else {
+        rimK = max(rimK, (1.0 - smoothstep(0.0, 0.01, sd)) * 0.75);
+        rimCol = vec3(0.24, 0.24, 0.23);
+      }
+      em = max(em, vec3(1.0, 0.42, 0.1) * St.x * e * e * 2.5);
+      continue;
+    }
+    on = 1.0;
+    // follow the ray down: does it reach the floor, or the side of the hole first?
+    float dw = -1.0;
+    for (int k = 1; k <= 6; k++){
+      float t = float(k) / 6.0;
+      vec2 u2 = uv + vuv * D * t;
+      if (peelSd(style, u2 - c, hs, seed, u2) > 0.0) { dw = D * (t - 0.5 / 6.0); break; }
+    }
+    if (dw < 0.0) {
+      vec2 uf = uv + vuv * D;
+      float hF;
+      bayFloor(uf - vec2(Rr.x, Rr.z), hs * 2.0, seed, col, rough, metal, hF);
+      ao = mix(0.32, 1.0, smoothstep(0.0, 0.08, -peelSd(style, uf - c, hs, seed, uf)));
+      bumpH = -D + hF;
+    } else {
+      // the cut edge of the skin, then the dark of the bay's side under it
+      float lip = 1.0 - smoothstep(0.002, 0.005, dw);
+      col = mix(vec3(0.07, 0.075, 0.08), vec3(0.64, 0.65, 0.67), lip);
+      rough = mix(0.6, 0.3, lip); metal = mix(0.3, 0.9, lip);
+      ao = 0.25 + 0.6 * (1.0 - dw / D);
+      bumpH = -dw;
+      em = vec3(1.0, 0.42, 0.1) * St.x * lip * 3.0;
+    }
+    return;
+  }
+}
+#endif
 `;
 
 // shadow-map pass for surfaces with windows / canopy / breaches: the light gets through the holes
@@ -253,6 +462,35 @@ bool holeAt(vec3 p){
 }
 `;
 
+/** something lying on the ship's skin (bullet pits, decals) sinks with the dents under it */
+export function followDents(mat) {
+  const prev = mat.onBeforeCompile;
+  const prevKey = mat.customProgramCacheKey;
+  mat.onBeforeCompile = (sh, r) => {
+    if (prev) prev(sh, r);
+    sh.uniforms.uWorldToShip = shipUniforms.uWorldToShip;
+    sh.uniforms.tDents = shipUniforms.tDents;
+    sh.uniforms.uDentN = shipUniforms.uDentN;
+    sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + COMMON_VERT_PARS)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        {
+          mat4 _m = modelMatrix;
+          #ifdef USE_INSTANCING
+          _m = _m * instanceMatrix;
+          #endif
+          mat4 _toShip = uWorldToShip * _m;
+          float _ds;
+          vec3 _off = dentOffset((_toShip * vec4(transformed, 1.0)).xyz, _ds);
+          transformed += (inverse(_toShip) * vec4(_off, 0.0)).xyz;
+        }`);
+  };
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|shipDents';
+  mat.needsUpdate = true;
+  return mat;
+}
+
 function openingDepthMaterial() {
   const m = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   m.onBeforeCompile = (sh) => {
@@ -273,7 +511,8 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false, peel: false }, opts);
+  if (o.peel) o.dentable = true;
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
   mat.customProgramCacheKey = () => JSON.stringify(o) + mat.type + QUALITY.level;
@@ -283,6 +522,8 @@ export function patchShipMaterial(mat, opts = {}) {
     const detail = L2 ? null : o.detail, panels = L2 ? 0 : o.panels;
     Object.assign(sh.uniforms, shipUniforms);
     if (o.dentable) sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
+    // (LOW II: no torn-off panels drawn; the dents and holes stay)
+    if (o.peel && !L2) sh.defines = Object.assign(sh.defines || {}, { PEEL: '' });
     // low quality: surface detail from one projection instead of three
     if (QUALITY.level !== 'high') sh.defines = Object.assign(sh.defines || {}, { LOWQ: '' });
     if (L2) sh.defines = Object.assign(sh.defines || {}, { LOW2: '' });
@@ -329,6 +570,9 @@ export function patchShipMaterial(mat, opts = {}) {
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
         float _bumpH = 0.0;
         float _detailRough = 0.0;
+        float _dHeat = 0.0;
+        float _peelOn = 0.0, _peelRough = 0.5, _peelMetal = 0.0, _peelAO = 1.0, _rimK = 0.0;
+        vec3 _peelCol = vec3(0.0), _peelEm = vec3(0.0), _rimCol = vec3(0.0);
         ${o.openings ? `
         if (openingMask(vShipPos) > 0.5) discard;
         if (canopyMask(vShipPos) > 0.5) discard;
@@ -417,18 +661,35 @@ export function patchShipMaterial(mat, opts = {}) {
             float _frN = smoothstep(0.35, 0.75, nz(vShipPos * 2.7).r + _bfr * 0.5);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.86, 0.9, 0.95), clamp(_bfr * _frN * 1.4, 0.0, 0.95));
           }
+          // the dents at this pixel: fine relief, the glow of a fresh one
+          float _dDepth = vDent;
+          #ifdef DENTABLE
+          {
+            float _dB, _dD;
+            dentFrag(vShipPos, _dB, _dHeat, _dD);
+            _bumpH += _dB;
+            _dDepth = max(vDent, _dD);
+          }
+          #endif
           // stretched / scraped metal inside dents, the paint crazed and flaking off the deepest
-          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(vDent * 4.0, 0.0, 0.7));
-          float _dz = smoothstep(0.012, 0.07, vDent);
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * 0.72 + vec3(0.04), clamp(_dDepth * 4.0, 0.0, 0.7));
+          float _dz = smoothstep(0.012, 0.07, _dDepth);
           if (_dz > 0.0) {
             float _craze = smoothstep(0.05, 0.0, abs(sn(vShipPos * 5.5 + 3.1))) + smoothstep(0.035, 0.0, abs(sn(vShipPos * 13.0 + 7.7))) * 0.7;
-            float _flake = smoothstep(0.58, 0.66, nz(vShipPos * 3.3 + 0.4).r) * smoothstep(0.03, 0.12, vDent);
+            float _flake = smoothstep(0.58, 0.66, nz(vShipPos * 3.3 + 0.4).r) * smoothstep(0.03, 0.12, _dDepth);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03), clamp(_craze, 0.0, 1.0) * _dz * 0.8);
             diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.42, 0.3, 0.25), _flake * 0.85);   // primer under flaked paint
           }
+          // a fresh strike: the metal blackened round the glowing middle
+          diffuseColor.rgb *= 1.0 - 0.6 * smoothstep(0.0, 0.4, _dHeat);
+          #ifdef PEEL
+          peelFrag(vShipPos, normalize(vShipNrm), _bumpH, _peelOn, _peelCol, _peelRough, _peelMetal, _peelAO, _peelEm, _rimK, _rimCol);
+          diffuseColor.rgb = mix(diffuseColor.rgb, _rimCol, _rimK);
+          if (_peelOn > 0.5) diffuseColor.rgb = _peelCol;
+          #endif
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
-        ${panels > 0 || detail || o.belly ? `
+        ${panels > 0 || detail || o.belly || o.dentable ? `
         {
           // relief: recessed panel seams + faint waviness (derivative bump, view space). It fades
           // where a pixel spans several millimetres of wall (far away, low resolution): there the
@@ -457,8 +718,17 @@ export function patchShipMaterial(mat, opts = {}) {
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
           #endif
+          if (_peelOn > 0.5) roughnessFactor = _peelRough;
         }`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        if (_peelOn > 0.5) metalnessFactor = _peelMetal;`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        #ifdef PEEL
+        reflectedLight.indirectDiffuse *= _peelAO;
+        reflectedLight.indirectSpecular *= _peelAO;
+        reflectedLight.directDiffuse *= mix(1.0, _peelAO, 0.7);
+        reflectedLight.directSpecular *= _peelAO;
+        #endif
         ${o.ao ? `
         {
           float _ao = shipAO(vShipPos, normalize(vShipNrm));
@@ -475,7 +745,9 @@ export function patchShipMaterial(mat, opts = {}) {
           vec3 hc = mix(vec3(0.9, 0.12, 0.02), vec3(1.0, 0.75, 0.35), clamp(h * 0.9, 0.0, 1.0));
           totalEmissiveRadiance += hc * h * h * 18.0;
         }` : ''}
-        totalEmissiveRadiance += vec3(1.0, 0.45, 0.12) * _rim * _rim * 0.0;`);
+        totalEmissiveRadiance += vec3(1.0, 0.45, 0.12) * _rim * _rim * 0.0;
+        // a fresh strike glows: white-hot in the middle, orange to dull red outward, cooling
+        totalEmissiveRadiance += _peelEm + mix(vec3(0.9, 0.16, 0.02), vec3(1.0, 0.78, 0.5), _dHeat * _dHeat) * _dHeat * _dHeat * 4.0;`);
   };
   return mat;
 }
@@ -502,6 +774,8 @@ export function createMaterials() {
   const M = {};
   // ---- exterior ----
   M.hull = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true });
+  // the skin itself (not the fittings on it): its panels can be torn off
+  M.hullSkin = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true, peel: true });
   // the outer hatch leaf sits inside the hull's hatch opening, which the hull material cuts away:
   // it needs the same look without the opening cut (it rendered invisible when closed)
   M.hatchLeaf = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: false, openings: false, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006 });
@@ -514,6 +788,9 @@ export function createMaterials() {
   M.radiator = patchShipMaterial(std(0xe2e5e8, 0.32, 0.25, { emissive: new THREE.Color(0.9, 0.18, 0.05), emissiveIntensity: 0.0 }), { wear: 0.5, grime: 0.4, detail: 'rad', detailDepth: 0.004, ao: false });
   M.nozzle = patchShipMaterial(std(0x55504a, 0.4, 0.95, { emissive: new THREE.Color(1.0, 0.35, 0.1), emissiveIntensity: 0.0 }), { wear: 0.9, grime: 0.6, heat: true });
   M.solar = std(0x1a2a55, 0.25, 0.6);
+  // the nose's sensor band (where the canopy was): dark armoured glass, a hard clear coat
+  M.sensorGlass = new THREE.MeshPhysicalMaterial({ color: 0x06090d, roughness: 0.12, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.05 });
+  if (!M.lens) M.lens = new THREE.MeshPhysicalMaterial({ color: 0x0a1018, roughness: 0.04, metalness: 0.6, clearcoat: 1, iridescence: 0.6 });
   // ---- interior ----
   M.wall = patchShipMaterial(std(0xb4b9bc, 0.62, 0.12), { dentable: true, openings: true, wear: 0.55, grime: 0.4, detail: 'panel', detailDepth: 0.005, wainscot: true });
   // bulkheads and corridor walls: the same armoured lining (kept apart from 'panel', which the

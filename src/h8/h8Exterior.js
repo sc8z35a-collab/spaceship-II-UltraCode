@@ -52,6 +52,58 @@ function sphereDecal(b, key, dir, w, h, rot = 0, lift = 0.012) {
 /**
  * Bevelled armour tiles on latitude bands with staggered seams. Returns bolt placements.
  */
+const TILE = { bands: 16, latMax: 79 * Math.PI / 180, gap: 0.024, chamfer: 0.016, T: 0.07 };
+const tileDir = (lat, lon) => V(Math.cos(lat) * Math.sin(lon), Math.sin(lat), -Math.cos(lat) * Math.cos(lon));
+
+/** the armour tile under a direction from H8's centre (the grid armourTiles lays): null where
+ * there is none (past the poles, or under a fitting) */
+export function armourTileAt(dir) {
+  const R0 = H8.R, d = dir.clone().normalize(), TAU = Math.PI * 2;
+  const lat = Math.asin(Math.max(-1, Math.min(1, d.y))), lon = Math.atan2(d.x, -d.z);
+  const bh = 2 * TILE.latMax / TILE.bands;
+  const bi = Math.floor((lat + TILE.latMax) / bh);
+  if (bi < 0 || bi >= TILE.bands) return null;
+  const la0 = -TILE.latMax + bh * bi, la1 = la0 + bh, lam = (la0 + la1) / 2;
+  const n = Math.max(6, Math.round(2 * Math.PI * R0 * Math.cos(lam) / 1.05));
+  const dl = TAU / n, off = (bi % 2) * dl * 0.5;
+  const i = Math.floor((((lon - off) % TAU) + TAU) % TAU / dl);
+  const lo0 = off + i * dl, lo1 = lo0 + dl;
+  const cdir = tileDir(lam, (lo0 + lo1) / 2);
+  if (exclusions().some((e) => cdir.angleTo(e.dir) < e.ang + 0.03)) return null;
+  return { bi, i, n, la0, la1, lo0, lo1, lam, cdir, equator: la0 < 0.02 && la1 > -0.02 };
+}
+
+/** one armour tile as a solid piece (H8-local, where it sat): for a tile knocked off */
+export function armourTileGeometry(t) {
+  const R0 = H8.R, NU = 4, NV = 3;
+  const gLat = TILE.gap / R0, gLon = TILE.gap / (R0 * Math.cos(t.lam));
+  const cLat = TILE.chamfer / R0, cLon = TILE.chamfer / (R0 * Math.cos(t.lam));
+  const A0 = [t.la0 + gLat, t.la1 - gLat, t.lo0 + gLon, t.lo1 - gLon];
+  const A1 = [A0[0] + cLat, A0[1] - cLat, A0[2] + cLon, A0[3] - cLon];
+  const pos = [], idx = [];
+  const push = (p) => { pos.push(p.x, p.y, p.z); return pos.length / 3 - 1; };
+  for (let v = 0; v <= NV; v++) for (let u = 0; u <= NU; u++) push(tileDir(A1[0] + (A1[1] - A1[0]) * v / NV, A1[2] + (A1[3] - A1[2]) * u / NU).multiplyScalar(R0));
+  for (let v = 0; v < NV; v++) for (let u = 0; u < NU; u++) { const a = v * (NU + 1) + u, c = a + NU + 1; idx.push(a, c, a + 1, a + 1, c, c + 1); }
+  const ring = (A, r) => {
+    const out = [];
+    for (let u = 0; u <= NU; u++) out.push(tileDir(A[0], A[2] + (A[3] - A[2]) * u / NU).multiplyScalar(r));
+    for (let v = 1; v <= NV; v++) out.push(tileDir(A[0] + (A[1] - A[0]) * v / NV, A[3]).multiplyScalar(r));
+    for (let u = NU - 1; u >= 0; u--) out.push(tileDir(A[1], A[2] + (A[3] - A[2]) * u / NU).multiplyScalar(r));
+    for (let v = NV - 1; v >= 1; v--) out.push(tileDir(A[0] + (A[1] - A[0]) * v / NV, A[2]).multiplyScalar(r));
+    return out;
+  };
+  const top = ring(A1, R0).map(push), bot = ring(A0, R0 - TILE.T).map(push);
+  const L = top.length;
+  for (let k = 0; k < L; k++) { const a = top[k], c = top[(k + 1) % L], a2 = bot[k], c2 = bot[(k + 1) % L]; idx.push(a, c, a2, c, c2, a2); }
+  const mid = push(tileDir((A0[0] + A0[1]) / 2, (A0[2] + A0[3]) / 2).multiplyScalar(R0 - TILE.T));
+  for (let k = 0; k < L; k++) idx.push(mid, bot[(k + 1) % L], bot[k]);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 function armourTiles(b, R0) {
   const R = rng(8);
   const ex = exclusions();

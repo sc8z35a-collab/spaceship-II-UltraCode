@@ -5,33 +5,48 @@
 // crater floor, white-hot at first and cooling through orange to a dull red. A heavy hit punches
 // through the outer plate: the hole is torn open (its jagged petals curl into it) and the dark
 // layer underneath shows. When the inner armour goes too, the cabin air vents out of the hole as
-// a stream of ice crystals. Hits near a camera can blind it (its part of the 360-degree picture
-// goes dark). Everything is kept in the save and stays until the repair dock.
+// a stream of ice crystals. Every gun round leaves its own small crater right where it struck;
+// the plates a burst keeps hitting work loose and are knocked off whole (they tumble away, the
+// dark layer and the sides of the plates round the gap show). Hits near a camera can blind it
+// (its part of the 360-degree picture goes dark). Everything is kept in the save and stays until
+// the repair dock.
 import * as THREE from 'three';
 import { H8, CAMERAS } from './h8Spec.js';
 import { LAYER_NEAR } from '../core/layers.js';
 import { Pockmarks } from '../combat/pockmarks.js';
 import { CAM_DEAD } from './h8Display.js';
+import { armourTileAt, armourTileGeometry } from './h8Exterior.js';
 
-export const DENT_MAX = 12;
+export const DENT_MAX = 32;
+export const TILE_MAX = 32;
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// the dents and the knocked-off plates in a small float texture (one column each):
+//   row 0  dir.xyz, angular radius     row 2  soot, seed, -, -
+//   row 1  depth, lip, heat, hole      row 3  plate gone: band, index, plates in the band, heat
+const TW = Math.max(DENT_MAX, TILE_MAX);
+const dentData = new Float32Array(TW * 4 * 4);
+const dentTex = new THREE.DataTexture(dentData, TW, 4, THREE.RGBAFormat, THREE.FloatType);
+dentTex.minFilter = dentTex.magFilter = THREE.NearestFilter;
+dentTex.generateMipmaps = false;
+dentTex.needsUpdate = true;
 
 /** shared uniforms of every dented material */
 export const DENT_U = {
   uDentN: { value: 0 },
-  uDentA: { value: Array.from({ length: DENT_MAX }, () => new THREE.Vector4()) },   // dir.xyz, angular radius
-  uDentB: { value: Array.from({ length: DENT_MAX }, () => new THREE.Vector4()) },   // depth, lip, heat, hole (in crater radii)
-  uDentC: { value: Array.from({ length: DENT_MAX }, () => new THREE.Vector4()) },   // soot, seed, -, -
+  uTileN: { value: 0 },
+  tH8Dent: { value: dentTex },
   uH8Root: { value: new THREE.Matrix4() },
   uH8RootInv: { value: new THREE.Matrix4() },
 };
+const LATMAX = 79 * Math.PI / 180;
 
 // the outer layer that dents: from just under the plates to just over them (the camera pods,
 // thrusters and bolts too; not the radiators, the umbilical, or anything inside)
 const BAND = [H8.R - 0.5, H8.R + 0.6].map((x) => x.toFixed(3));
 
 const VERT_HEAD = /* glsl */`
-uniform int uDentN; uniform vec4 uDentA[${DENT_MAX}]; uniform vec4 uDentB[${DENT_MAX}];
+uniform int uDentN; uniform highp sampler2D tH8Dent;
 uniform mat4 uH8Root; uniform mat4 uH8RootInv;
 varying vec3 vH8P;`;
 
@@ -51,7 +66,7 @@ vec3 h8Disp = vec3(0.0);
     vec3 tilt = vec3(0.0);
     for (int i = 0; i < ${DENT_MAX}; i++) {
       if (i >= uDentN) break;
-      vec4 A = uDentA[i], B = uDentB[i];
+      vec4 A = texelFetch(tH8Dent, ivec2(i, 0), 0), B = texelFetch(tH8Dent, ivec2(i, 1), 0);
       float c = dot(u, A.xyz);
       float th = acos(clamp(c, -1.0, 1.0));
       float s = th / A.w;
@@ -77,19 +92,34 @@ vec3 h8Disp = vec3(0.0);
 }`;
 
 const FRAG_HEAD = /* glsl */`
-uniform int uDentN; uniform vec4 uDentA[${DENT_MAX}]; uniform vec4 uDentB[${DENT_MAX}]; uniform vec4 uDentC[${DENT_MAX}];
+uniform int uDentN; uniform int uTileN; uniform highp sampler2D tH8Dent;
 varying vec3 vH8P;`;
 
-const fragDent = (plate) => /* glsl */`
+const fragDent = (plate, tiles) => /* glsl */`
 float dSoot = 0.0, dBare = 0.0, dCrack = 0.0;
 vec3 dGlow = vec3(0.0);
+${tiles ? `{
+  // a plate knocked off: none of it is left (its bolts and markings go with it)
+  vec3 u = normalize(vH8P);
+  float lat = asin(clamp(u.y, -1.0, 1.0));
+  float lon = atan(u.x, -u.z);
+  float bi = floor((lat + ${LATMAX.toFixed(6)}) / ${(2 * LATMAX / 16).toFixed(6)});
+  for (int k = 0; k < ${TILE_MAX}; k++) {
+    if (k >= uTileN) break;
+    vec4 T = texelFetch(tH8Dent, ivec2(k, 3), 0);
+    if (abs(T.x - bi) > 0.5) continue;
+    float dl = 6.2831853 / T.z;
+    float ii = floor(mod(lon - mod(bi, 2.0) * dl * 0.5, 6.2831853) / dl);
+    if (abs(ii - T.y) < 0.5) discard;
+  }
+}` : ''}
 {
   float rr = length(vH8P);
   if (uDentN > 0 && rr > ${BAND[0]} && rr < ${BAND[1]}) {
     vec3 u = vH8P / rr;
     for (int i = 0; i < ${DENT_MAX}; i++) {
       if (i >= uDentN) break;
-      vec4 A = uDentA[i], B = uDentB[i], Cc = uDentC[i];
+      vec4 A = texelFetch(tH8Dent, ivec2(i, 0), 0), B = texelFetch(tH8Dent, ivec2(i, 1), 0), Cc = texelFetch(tH8Dent, ivec2(i, 2), 0);
       float c = dot(u, A.xyz);
       if (c < cos(min(3.0, A.w * 2.6))) continue;
       float s = acos(clamp(c, -1.0, 1.0)) / A.w;
@@ -121,8 +151,9 @@ vec3 dGlow = vec3(0.0);
   }
 }`;
 
-/** give a material the dents (plate: the outer plates, which can be torn through) */
-export function dentify(mat, plate = false) {
+/** give a material the dents (plate: the outer plates, which can be torn through; tiles: it is
+ * the plates themselves or lies on them, and goes when one is knocked off) */
+export function dentify(mat, plate = false, tiles = false) {
   const prev = mat.onBeforeCompile;
   const prevKey = mat.customProgramCacheKey && mat.hasOwnProperty('customProgramCacheKey') ? mat.customProgramCacheKey : null;
   mat.onBeforeCompile = (sh, r) => {
@@ -134,7 +165,7 @@ export function dentify(mat, plate = false) {
       .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += h8Disp;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', '#include <common>\n' + FRAG_HEAD)
-      .replace('#include <alphamap_fragment>', fragDent(plate) + '\n#include <alphamap_fragment>')
+      .replace('#include <alphamap_fragment>', fragDent(plate, tiles) + '\n#include <alphamap_fragment>')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
         roughnessFactor = mix(mix(roughnessFactor, 0.97, dSoot), 0.32, dBare * 0.6);`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
@@ -142,7 +173,7 @@ export function dentify(mat, plate = false) {
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         totalEmissiveRadiance += dGlow;`);
   };
-  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|h8dent' + (plate ? 'P' : '');
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|h8dent' + (plate ? 'P' : '') + (tiles ? 'T' : '');
   mat.needsUpdate = true;
   return mat;
 }
@@ -189,55 +220,60 @@ function petalGeometry(dir, rHole, depthAt, seed) {
 export class H8Hull {
   constructor(vessel) {
     this.v = vessel;
-    this.dents = [];          // { dir, a, depth, lip, heat, hole, soot, seed, E }
+    this.dents = [];          // { dir, a, a0, depth, lip, heat, hole, soot, seed, E }
+    this.tiles = [];          // plates knocked off: { bi, i, n, heat }
+    this.tileHits = new Map();
     this.cams = [1, 1, 1, 1];
     this.petals = [];
     this.vents = [];
     this.petalMat = new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.55, metalness: 0.75, side: THREE.DoubleSide });
     // bullet strikes: pits on the plates (they sink with the dents they lie in)
     this.pocks = new Pockmarks(vessel.ext.group, 300, [LAYER_NEAR]);
-    dentify(this.pocks.mesh.material);
+    dentify(this.pocks.mesh.material, false, true);
     vessel.extMeshes.push(this.pocks.mesh);
   }
 
   /** a blow: dir (H8-local unit, from the centre to the point hit), E (J). Returns the dent */
   hit(dir, E, opts = {}) {
     const d = dir.clone().normalize();
-    // a gun round: a pit on the plate — until the strikes crowd together and the plate there gives
-    if (opts.shot && E < 2e6) {
+    const v = this.v;
+    const shot = opts.shot && E < 2e6;
+    let rc, depth, Ed = E;
+    if (shot) {
+      // a gun round: a pit on the plate and the plate punched in round it, right where it struck —
+      // a small crater (the armour takes the rest: a quarter of it goes into the dent)
       const p = d.clone().multiplyScalar(H8.R + 0.03);
       this.pocks.add(p, d, 0.22 + 0.06 * Math.cbrt(E / 5e5));
-      const v = this.v;
-      if (v.fx) {
-        v.fx.burst('spark', p, d, Math.min(60, 14 + E / 3e4), { speed: 6, spread: 0.9 });
-        v.fx.burst('debris', p, d, 5, { speed: 2.5, spread: 1.0 });
-      }
-      if (this.pocks.countNear(p, 0.45) < 6) {
-        const blinded = this.camHit(d, E, 0.06);
-        this.sync();
-        return { dent: { hole: 0, holeSaid: true }, blinded };
-      }
+      Ed = E * 0.25;
+      const ks = Math.cbrt(Ed / 1000);
+      rc = Math.min(0.3, 0.035 + 0.012 * ks);
+      depth = Math.min(0.06, 0.003 + 0.0022 * ks);
+    } else {
+      const k = Math.cbrt(Math.max(1, E) / 1000);
+      rc = Math.min(0.95, 0.05 + 0.021 * k);
+      depth = Math.min(0.24, 0.006 + 0.0042 * k);
     }
-    const k = Math.cbrt(Math.max(1, E) / 1000);
-    const rc = Math.min(0.95, 0.05 + 0.021 * k);
-    const depth = Math.min(0.24, 0.006 + 0.0042 * k);
     const a = rc / H8.R;
+    const heat = Math.min(1, (shot ? 0.3 : 0.45) + Math.log10(Math.max(10, Ed)) / 14);
     let dent = this.dents.find((x) => x.dir.angleTo(d) < Math.max(x.a, a) * 0.7);
     if (dent) {
-      // the same spot again: deeper, wider, and torn through sooner
-      dent.depth = Math.min(0.3, dent.depth + depth * 0.7);
-      dent.a = Math.max(dent.a, a) * 1.05;
+      // the same spot again: deeper, a little wider (never past half again its size), and torn
+      // through sooner
+      dent.a0 = Math.max(dent.a0 || dent.a, a);
+      dent.depth = Math.min(Math.max(dent.depth, Math.min(0.3, dent.a0 * H8.R * 0.6)), dent.depth + depth * 0.7);
+      dent.a = Math.min(dent.a0 * 1.5, Math.max(dent.a, a * 1.04));
       dent.E += E;
-      dent.heat = Math.min(1, dent.heat + 0.5 + Math.log10(Math.max(10, E)) / 14);
-      dent.soot = Math.min(1, dent.soot + 0.25);
+      dent.heat = Math.min(1, dent.heat + heat * 0.8);
+      dent.soot = Math.min(1, dent.soot + (shot ? 0.08 : 0.25));
     } else {
       if (this.dents.length >= DENT_MAX) {
-        // the hull is covered in them: the smallest goes (it merges into the scarring)
+        // the hull is covered in them: the least goes (it merges into the scarring)
         let iMin = 0;
-        for (let i = 1; i < this.dents.length; i++) if (this.dents[i].depth < this.dents[iMin].depth) iMin = i;
+        for (let i = 1; i < this.dents.length; i++) if (this.dents[i].depth * this.dents[i].a < this.dents[iMin].depth * this.dents[iMin].a) iMin = i;
+        this.dropPetals(this.dents[iMin]);
         this.dents.splice(iMin, 1);
       }
-      dent = { dir: d, a, depth, lip: depth * 0.22, heat: Math.min(1, 0.45 + Math.log10(Math.max(10, E)) / 14), hole: 0, soot: Math.min(1, 0.25 + E / 3e7), seed: Math.random(), E };
+      dent = { dir: d, a, a0: a, depth, lip: depth * 0.22, heat, hole: 0, soot: Math.min(1, (shot ? 0.15 : 0.25) + E / 3e7), seed: Math.random(), E };
       this.dents.push(dent);
     }
     dent.lip = dent.depth * 0.22;
@@ -246,18 +282,71 @@ export class H8Hull {
       dent.hole = Math.min(0.6, 0.28 + Math.log10(dent.E / 2.5e7 + 1) * 0.3);
       this.addPetals(dent);
     }
+    // the plate it struck works loose (and those round a big blow)
+    this.plateBlow(d, E);
+    if (!shot && E > 1e7) {
+      const ax = new THREE.Vector3().crossVectors(d, Math.abs(d.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
+      for (let k = 0; k < 6; k++) {
+        const q = d.clone().applyAxisAngle(ax, (0.9 / H8.R) * (1 + Math.random() * 0.5)).applyAxisAngle(d, k / 6 * Math.PI * 2);
+        this.plateBlow(q, E * 0.3);
+      }
+    }
     // cameras near the blow
-    const blinded = this.camHit(d, E, dent.a);
+    const blinded = this.camHit(d, E, shot ? 0.06 : dent.a);
     this.sync();
     // sparks and spall off the face; a fresh crater smokes a little
-    const v = this.v;
     if (v.fx) {
       const p = d.clone().multiplyScalar(H8.R + 0.02);
-      v.fx.burst('spark', p, d, Math.min(160, 20 + E / 4e4), { speed: 5 + Math.min(20, k * 0.6), spread: 0.9 });
-      v.fx.burst('debris', p, d, Math.min(80, 6 + E / 2e5), { speed: 2 + Math.min(8, k * 0.25), spread: 1.0 });
-      if (E > 1e6) v.fx.burst('smoke', p, d, 12, { speed: 0.6, spread: 0.8 });
+      const k = Math.cbrt(Math.max(1, Ed) / 1000);
+      v.fx.burst('spark', p, d, Math.min(160, 14 + E / 4e4), { speed: 5 + Math.min(20, k * 0.6), spread: 0.9 });
+      v.fx.burst('debris', p, d, Math.min(80, 5 + E / 2e5), { speed: 2 + Math.min(8, k * 0.25), spread: 1.0 });
+      if (E > 1e6 && !shot) v.fx.burst('smoke', p, d, 12, { speed: 0.6, spread: 0.8 });
     }
-    return { dent, blinded };
+    return { dent: shot && !dent.hole ? { hole: 0, holeSaid: true } : dent, blinded };
+  }
+
+  /** a blow on the plate under d: enough of them and its bolts shear — it is knocked off */
+  plateBlow(d, E) {
+    const t = armourTileAt(d);
+    if (!t || this.tiles.length >= TILE_MAX) return;
+    if (this.tiles.some((x) => x.bi === t.bi && x.i === t.i)) return;
+    const key = t.bi * 1000 + t.i;
+    const acc = (this.tileHits.get(key) || 0) + E;
+    this.tileHits.set(key, acc);
+    if (this.tileHits.size > 200) this.tileHits.delete(this.tileHits.keys().next().value);
+    const hold = 4.5e6 * (0.75 + 0.5 * ((Math.sin(key * 12.9898) * 43758.5453) % 1 + 1) % 1);
+    if (acc > hold) this.popTile(t);
+  }
+
+  popTile(t, quiet = false) {
+    this.tiles.push({ bi: t.bi, i: t.i, n: t.n, heat: quiet ? 0 : 1 });
+    this.sync();
+    if (quiet) return;
+    const v = this.v, g = v.g;
+    const p = t.cdir.clone().multiplyScalar(H8.R);
+    if (v.fx) { v.fx.burst('spark', p, t.cdir, 50, { speed: 6, spread: 1.0 }); v.fx.burst('debris', p, t.cdir, 30, { speed: 3, spread: 1.0 }); }
+    // the plate tumbles off
+    const f = v.flight;
+    if (g && g.combat && f) {
+      const geo = armourTileGeometry(t);
+      geo.computeBoundingBox();
+      const c = geo.boundingBox.getCenter(new THREE.Vector3());
+      geo.translate(-c.x, -c.y, -c.z);
+      if (!this.tileMat) {
+        this.tileMat = new THREE.MeshStandardMaterial({ color: 0x8b8f91, roughness: 0.72, metalness: 0.08, side: THREE.DoubleSide });
+        this.tileMatO = new THREE.MeshStandardMaterial({ color: 0xc8641e, roughness: 0.6, metalness: 0.1, side: THREE.DoubleSide });
+      }
+      const mesh = new THREE.Mesh(geo, t.equator ? this.tileMatO : this.tileMat);
+      const vel = (v.mode === 'docked' ? g.flight.vel : f.vel).clone();
+      const out = t.cdir.clone().multiplyScalar(2 + Math.random() * 5).add(new THREE.Vector3().randomDirection().multiplyScalar(0.8));
+      g.combat.addWreck(mesh, c.clone().applyQuaternion(f.quat).add(f.pos), vel.add(out.applyQuaternion(f.quat)), 45, 1.2);
+      const w = g.combat.wrecks[g.combat.wrecks.length - 1];
+      if (w) { w.q.copy(f.quat); w.spin = 1 + Math.random() * 3; }
+    }
+    if (g && g.audio && g.audio.ready && (v.crew || v.mode === 'docked')) {
+      const ap = p.clone().multiplyScalar(0.9).add(H8.dockAt);
+      g.audio._burst(ap, { dur: 0.25, freq: 1300, q: 3, gain: 0.1, type: 'white', filter: 'bandpass', sweep: -0.4 });
+    }
   }
 
   /** a blow near a camera hurts it (0 = gone): returns the camera that just went blind, or -1 */
@@ -288,6 +377,16 @@ export class H8Hull {
     this.petals.push({ grp, dent });
   }
 
+  /** a dent given up to make room takes its torn petals with it */
+  dropPetals(dent) {
+    this.petals = this.petals.filter((p) => {
+      if (p.dent !== dent) return true;
+      this.v.ext.group.remove(p.grp);
+      p.grp.traverse((o) => { if (o.isMesh) { o.geometry.dispose(); const i = this.v.extMeshes.indexOf(o); if (i >= 0) this.v.extMeshes.splice(i, 1); } });
+      return false;
+    });
+  }
+
   /** the inner armour gave way at the worst crater: the cabin air streams out of it */
   vent(on, rate = 1) {
     const v = this.v;
@@ -307,24 +406,34 @@ export class H8Hull {
   update(dt) {
     let any = false;
     for (const d of this.dents) if (d.heat > 0.001) { d.heat *= Math.exp(-dt / 7); if (d.heat < 0.002) d.heat = 0; any = true; }
-    if (any) this.sync();
+    for (const t of this.tiles) if (t.heat > 0.001) { t.heat *= Math.exp(-dt / 6); if (t.heat < 0.002) t.heat = 0; any = true; }
+    if (any) this.sync(true);
   }
 
-  sync() {
-    const n = this.dents.length;
+  sync(quiet = false) {
+    const n = Math.min(DENT_MAX, this.dents.length), m = Math.min(TILE_MAX, this.tiles.length);
+    const A = dentData;
+    A.fill(0);
+    const put = (row, i, a, b, c, d) => { const o = (row * TW + i) * 4; A[o] = a; A[o + 1] = b; A[o + 2] = c; A[o + 3] = d; };
+    for (let i = 0; i < n; i++) {
+      const d = this.dents[i];
+      put(0, i, d.dir.x, d.dir.y, d.dir.z, d.a);
+      put(1, i, d.depth, d.lip, d.heat, d.hole);
+      put(2, i, d.soot, d.seed, 0, 0);
+    }
+    for (let k = 0; k < m; k++) { const t = this.tiles[k]; put(3, k, t.bi, t.i, t.n, t.heat); }
     DENT_U.uDentN.value = n;
-    this.dents.forEach((d, i) => {
-      DENT_U.uDentA.value[i].set(d.dir.x, d.dir.y, d.dir.z, d.a);
-      DENT_U.uDentB.value[i].set(d.depth, d.lip, d.heat, d.hole);
-      DENT_U.uDentC.value[i].set(d.soot, d.seed, 0, 0);
-    });
-    this.v.display && this.v.display.setCameras(this.cams, !!this.restoring);
+    DENT_U.uTileN.value = m;
+    dentTex.needsUpdate = true;
+    if (!quiet) this.v.display && this.v.display.setCameras(this.cams, !!this.restoring);
   }
 
   /** the repair dock makes it all good again */
   repairAll() {
     if (this.v.display) this.v.display.repairPanels();
     this.dents.length = 0;
+    this.tiles.length = 0;
+    this.tileHits.clear();
     this.pocks.clear();
     this.cams = [1, 1, 1, 1];
     for (const p of this.petals) {
@@ -340,16 +449,28 @@ export class H8Hull {
   get worst() { return this.dents.reduce((m, d) => Math.max(m, d.depth / 0.24), 0); }
 
   serialize() {
-    return { d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E].map((x) => +x.toFixed(5))), cams: this.cams.slice(), p: this.pocks.serialize(160) };
+    return {
+      d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E, d.a0 || d.a].map((x) => +x.toFixed(5))),
+      t: this.tiles.map((t) => [t.bi, t.i]),
+      cams: this.cams.slice(), p: this.pocks.serialize(160),
+    };
   }
 
   restore(s) {
     if (!s) return;
     this.repairAll();
     for (const r of s.d || []) {
-      const d = { dir: V(r[0], r[1], r[2]).normalize(), a: r[3], depth: r[4], lip: r[4] * 0.22, heat: 0, hole: r[5], soot: r[6], seed: r[7], E: r[8] };
+      const d = { dir: V(r[0], r[1], r[2]).normalize(), a: r[3], a0: r[9] || r[3], depth: r[4], lip: r[4] * 0.22, heat: 0, hole: r[5], soot: r[6], seed: r[7], E: r[8] };
       this.dents.push(d);
       if (d.hole) this.addPetals(d);
+    }
+    for (const [bi, i] of s.t || []) {
+      // (the plate's direction back from its place in the grid)
+      const la = -LATMAX + (2 * LATMAX / 16) * (bi + 0.5);
+      const n = Math.max(6, Math.round(2 * Math.PI * H8.R * Math.cos(la) / 1.05));
+      const lon = ((bi % 2) * 0.5 + i + 0.5) * (2 * Math.PI / n);
+      const t = armourTileAt(V(Math.cos(la) * Math.sin(lon), Math.sin(la), -Math.cos(la) * Math.cos(lon)));
+      if (t && this.tiles.length < TILE_MAX) this.tiles.push({ bi: t.bi, i: t.i, n: t.n, heat: 0 });
     }
     if (s.cams) this.cams = s.cams.slice(0, 4);
     this.pocks.restore(s.p);

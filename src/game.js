@@ -42,7 +42,9 @@ import { springVec, springQuat } from './core/spring.js';
 import { setFineVisible } from './ship/geom.js';
 import { shipUniforms } from './ship/materials.js';
 import { setSkyQuality } from './world/atmosphere.js';
-import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullShape.js';
+import { HULL, halfWidthAt, heightRangeAt, OPENINGS } from './ship/hullShape.js';
+import { B29Display } from './ship/b29Display.js';
+import { Suits } from './suit/suits.js';
 import { glassUniforms } from './ship/glass.js';
 import { StatusLine } from './ui/statusLine.js';
 import { ExtMarkers } from './ui/extMarkers.js';
@@ -159,6 +161,13 @@ export class Game {
     if (!this.params.has('noDrones')) this.drones = new Drones(this, this.combat);
     this.weapons = new Weapons(this, this.combat);
     this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
+    this.suits = new Suits(this);
+    if (this.machines.suitApi) this.suits.setRack('b29', this.machines.suitApi, this.machines.suitPivot, this.machines.suitIdle);
+    if (this.h8 && this.h8.shelter && this.h8.shelter.suitRack) this.h8.shelter.suitRack(this.suits);
+    // the cockpit's big screen: every material of B-29's learns to drop what lies behind it
+    this.b29Display = new B29Display(this);
+    this.b29Display.init();
     P(0.6);
     // graphics quality chosen earlier in this browser (the engine already started at its resolution)
     if (QUALITY.level !== 'high') this.applyQuality(QUALITY.level);
@@ -255,7 +264,7 @@ export class Game {
     let flightIn = null;
     // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
-    const focused = !!(F && !F.out);
+    const focused = !!(F && !F.out) || !!this.cine;
     if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
@@ -317,16 +326,19 @@ export class Game {
       env = this.systems.playerEnv();
       this.docking.envFor(env, pl);
     }
+    // out in a suit: its own thrusters and boosters fly him
+    env.suit = this.suits && pl.suit ? this.suits : null;
     let lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
+    if (this.suits) this.suits.update(sdt, Math.min(dt, 0.1));
     // ---- taps
     if (this.h8 && !dead) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
-      if (this.mode === 'camera' || dead) continue;
+      if (this.mode === 'camera' || dead || this.cine) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
       // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
       if (this.h8 && this.h8.hudTap(tap)) continue;
@@ -344,8 +356,8 @@ export class Game {
 
   /**
    * B-29's cabin (rooms, machines, loose things, doors: most of the ship's triangles) is drawn only
-   * when it can be seen: from inside the hull, or from in front of a window, the canopy or an open
-   * hatch / port not too far off. Otherwise the outer panes show a dim inside of their own.
+   * when it can be seen: from inside the hull, or from in front of a window or an open hatch / port
+   * not too far off. Otherwise the outer panes show a dim inside of their own.
    */
   updateCabinVisibility() {
     const S = this.shipVis;
@@ -361,7 +373,6 @@ export class Game {
     this._cabInside = vis;
     if (!vis) {
       const d = this._cabD || (this._cabD = new THREE.Vector3());
-      if (d.copy(c).sub(CANOPY.P0).dot(CANOPY.N) > -0.1 && d.lengthSq() < 26 * 26) vis = true;
       for (const o of OPENINGS) {
         if (vis) break;
         if (o.kind === 'hatch' && !(this.hatch && this.hatch.open > 0.01)) continue;
@@ -381,7 +392,7 @@ export class Game {
 
   /**
    * LOW II, the eye in B-29's cabin: what lies outside (the Earth, the sky, stations...) shows only
-   * through the windows, the canopy, a hatch or a breach, so the far and middle passes are drawn
+   * through the windows, the cockpit's screen, a hatch or a breach, so the far and middle passes are drawn
    * only inside the box on the picture those cover (with none in view, not at all). They used to be
    * shaded over the whole picture and then painted over by the cabin.
    */
@@ -422,8 +433,8 @@ export class Game {
     };
     const A = this._frA || (this._frA = { a: new THREE.Vector3(), b: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3() });
     for (const o of OPENINGS) box(o.center, A.a.copy(o.u).multiplyScalar(o.halfW + 0.06), A.b.copy(o.v).multiplyScalar(o.halfH + 0.06), A.n.copy(o.normal).multiplyScalar(0.62));
-    // the canopy
-    box(A.c.set(0, 0.35, -11.65), A.a.set(3.35, 0, 0), A.b.set(0, 2.98, 0), A.n.set(0, 0, 2.4));
+    // the cockpit's big screen (the outside shows through it)
+    box(A.c.set(0, 1.12, -10.95), A.a.set(1.2, 0, 0), A.b.set(0, 0.92, 0), A.n.set(0, 0, 0.62));
     // breaches in the hull
     const BR = shipUniforms.uBreach.value;
     for (let i = 0; i < BR.length; i++) {
@@ -617,6 +628,8 @@ export class Game {
         const P = this.focusPose(F, eyeLocal, viewQ, dt);
         if (P) { eyeLocal = P.pos; viewQ = P.q; }
       }
+      // a suit going on or coming off: the eye follows the climb in (or out)
+      if (this.cine) { const P = this.cine.pose(); if (P) { eyeLocal = P.pos; viewQ = P.q; } }
     }
     // shake
     const sh = this.shake;
@@ -645,6 +658,9 @@ export class Game {
     } else this.viewQuat.copy(this.camQuat);
     this._gimbal = zoomed;
     this.updateCabinVisibility();
+    if (this.b29Display) this.b29Display.update(dt);
+    // the suit seen from outside (another camera looking at him out on a walk)
+    if (this.suits) this.suits.updateAvatar(dt, this.mode === 'camera' || !!this.debugCam);
     const cam = this.engine.camera;
     cam.matrix.compose(this.camWorld, this.viewQuat, new THREE.Vector3(1, 1, 1));
     // world

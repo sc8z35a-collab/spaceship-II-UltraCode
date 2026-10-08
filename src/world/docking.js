@@ -207,7 +207,7 @@ export class Docking {
     const g = this.g;
     if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
     if (g.hatch.target > 0.5 || g.hatch.open > 0 || !g.hatch.sealed) {
-      if (g.hatch.target > 0.5) { g.hatch.target = 0; g.audio.doorMotor(g.hatch.o.center, false); }
+      if (g.hatch.target > 0.5) { g.hatch.target = 0; g.audio.mech(g.hatch.o.center, 'hatch', { open: false }); }
       this.pendingUndock = { after, t: 0 };
       g.asphalt.say('st_hatch_auto', {}, { force: true });
       return true;
@@ -215,6 +215,8 @@ export class Docking {
     this.pendingUndock = null;
     this.afterUndock = after;
     this.despawn();
+    // the clamps let go
+    g.audio.mech(V(3.0, 1.2, -1.05), 'clamp', { open: true });
     this.state = 'leaving';
     this.wp = [{ p: V(DOCK_AT.x - 8, DOCK_AT.y, DOCK_AT.z), v: 3, tol: 0.5 }, { p: V(DOCK_AT.x - 90, DOCK_AT.y, DOCK_AT.z), v: 30, tol: 3, last: true }];
     g.flight.autopilot = { vRel: new THREE.Vector3(), wDes: new THREE.Vector3(), aff: null, fast: true };
@@ -255,6 +257,9 @@ export class Docking {
     this.air = this.airs.get(s.id);
     this.air.ringContains = lobby.ring ? (p) => this.inRing && this.ringContainsRender(p) : null;
     if (lobby.ring) this.spawnRing(lobby.ring);
+    // the lobby's inner EVA door (out to the station's hatch in a suit)
+    lobby.origin = !!s.origin;
+    if (g.suits) g.suits.lobbyHatch(lobby, true);
   }
 
   // ------------------------------------------------------------------ the habitat ring
@@ -440,6 +445,7 @@ export class Docking {
     const g = this.g;
     if (this.klaxon) { this.klaxon = false; g.audio.stopLoop('stKlaxon'); }
     if (!this.lobby) return;
+    if (g.suits) g.suits.lobbyHatch(this.lobby, false);
     this.despawnRing();
     g.shipVis.root.remove(this.lobby.group);
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
@@ -553,7 +559,8 @@ export class Docking {
         this.wp = [];
         this.hold();
         this.spawn();
-        g.audio.impact(V(3.0, 1.2, -1.05), 0.12);
+        g.audio.impact(V(3.0, 1.2, -1.05), 0.08);
+        g.audio.mech(V(3.0, 1.2, -1.05), 'clamp', { open: false });
         g.shake = Math.max(g.shake, 0.25);
         g.asphalt.say(s.tether ? 'st_docked_g' : 'st_docked', { name: s.name }, { force: true });
       }
@@ -623,8 +630,9 @@ export class Docking {
           this.lastHit = 0.6;
           const E = 0.5 * SHIP_MASS * vn * vn;
           const pLocal = contactEci.clone().sub(f.pos).applyQuaternion(f.quat.clone().invert());
-          const dirLocal = nE.clone().negate().applyQuaternion(f.quat.clone().invert());
-          g.damage.impact(pLocal, dirLocal, E * 0.6);
+          // (the station's face comes in along its normal, toward B-29: the skin goes in that way)
+          const dirLocal = nE.clone().applyQuaternion(f.quat.clone().invert());
+          g.damage.impact(pLocal, dirLocal, E * 0.6, { snap: true });
           g.systems.onImpact(E, pLocal);
           g.shake = Math.max(g.shake, Math.min(3, 0.6 + vn * vn * 0.4));
           if (g.autopilot.state !== 'off') g.autopilot.disengage(true);

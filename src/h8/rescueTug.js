@@ -160,7 +160,7 @@ export class RescueTug {
       if ((dist < w.tol && relV < 0.12 && r.ang < 0.05) || (dist < 0.2 && this.t > 600)) {
         this.state = 'latched'; this.latchedAt = this.t; this.holdPod();
         this.v.asphalt('pod_station_capture', { name: this.s.name });
-        if (this.v.crew) { this.g.shake = Math.max(this.g.shake, 0.5); this.g.audio.impact && this.g.audio.impact(new THREE.Vector3(0, 8.2, 2.6), 0.25); }
+        if (this.v.crew) { this.g.shake = Math.max(this.g.shake, 0.5); this.g.audio.impact(new THREE.Vector3(0, 8.2, 2.6), 0.14); this.g.audio.mech(new THREE.Vector3(0, 8.2, 2.6), 'clamp', { open: false }); }
       }
       return;
     }

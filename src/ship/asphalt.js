@@ -200,6 +200,28 @@ const LINES = {
   asp_split: ['{b}は私が撃ちます。'],
   h8_leak_port: ['H8から空気が漏れています。ハッチを閉めて。'],
   photo_saved: ['写真を保存しました。'],
+  // the spacesuits
+  suit_breach: ['スーツの{part}が破損、空気が漏れています。すぐに戻ってください。'],
+  suit_visor_crack: ['バイザーにひびが入りました。'],
+  suit_batt_swap: ['バッテリーが切れました。予備に切り替えます。'],
+  suit_dead: ['スーツの電源が落ちました。生命維持だけで動いています。'],
+  suit_o2_reserve: ['主酸素タンクが空です。非常用ボンベに切り替えました。残り約30分。'],
+  suit_systems: ['スーツの{list}に異常が出ています。'],
+  suit_h8_here: ['H8の宇宙服は、H8のシェルターに戻してください。'],
+  suit_call_near: ['B-29はすぐそこです。'],
+  suit_call_b29: ['了解。B-29をそちらへ寄せます。距離{m}メートル。'],
+  suit_call_docked: ['B-29はステーションに係留中で動かせません。'],
+  suit_call_noh8: ['H8とは連絡がつきません。'],
+  suit_call_nost: ['救助を出せるステーションが近くにありません。'],
+  suit_call_station: ['{name}に救助を要請しました。タグの到着まで約{min}分です。'],
+  suit_call_here: ['B-29、到着しました。ハッチへどうぞ。'],
+  suit_tug_here: ['{name}の救助タグが到着しました。B-29まで曳航します。'],
+  suit_tug_done: ['エアロックの前です。お疲れさまでした。'],
+  st_eva_hatch: ['{name}のEVAハッチです。'],
+  st_eva_in: ['{name}へようこそ。B-29は係留しておきます。'],
+  st_eva_far: ['B-29が遠すぎて係留できません。'],
+  st_eva_out: ['EVAハッチから外に出ます。'],
+  st_busy: ['B-29は今、{name}への操作中です。少し待ってください。'],
 };
 
 // HACHI — H8's AI: terse, dry, very sure of itself
@@ -355,12 +377,21 @@ const HACHI = {
   hachi_triage: ['応急処置{n}件。まず{a}。'],
   hachi_relay_hit: ['B-29損傷。健全度{pct}%。'],
   hachi_relay_air: ['B-29の{zone}が{kpa}キロパスカル。'],
+  suit_breach: ['スーツの{part}が破れた。すぐ戻れ。'],
+  suit_visor_crack: ['バイザーにひびだ。防弾層は持ってる。'],
+  suit_batt_swap: ['バッテリーを予備に切り替える。'],
+  suit_dead: ['スーツが落ちた。生命維持だけだ。'],
+  suit_o2_reserve: ['主タンクが空だ。非常用に切り替えた。30分だ。'],
+  suit_systems: ['スーツの{list}がやられた。'],
+  hachi_suit_call: ['今行く。そこを動くな。'],
+  hachi_kaito_here: ['着いた。ハッチまで来い。'],
 };
 
 // What is said aloud in the default mode (最小限): danger Kaito must act on now, refusals (why
 // what he asked for will not happen) and the answers to his questions. The rest is log only.
 const VOICE = new Set([
   // danger
+  'suit_breach', 'suit_dead', 'suit_o2_reserve', 'suit_call_station', 'suit_tug_here', 'hachi_suit_call',
   'breach', 'breach_big', 'window_broken', 'pressure_low', 'o2_low', 'co2_high', 'danger3', 'reentry_hot', 'reentry_burn',
   'breakup', 'dying', 'crash', 'impact_big', 'asteroid', 'drones_contact', 'eva_o2', 'st_breach_here', 'st_gone', 'st_gone_suit',
   'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue', 'h8_lost_pod',

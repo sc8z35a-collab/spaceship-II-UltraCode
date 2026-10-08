@@ -206,6 +206,12 @@ export class Player {
       this.vel.lerp(desired, 1 - Math.exp(-dt * (has ? 2.2 : 0.9)));
       // apparent acceleration (ship manoeuvres) still pushes us
       this.vel.addScaledVector(gLocal, dt * 0.6);
+    } else if (this.state === 'eva' && env.suit) {
+      // the suit's own thrusters and boosters (suits.js): true inertia, its flight computer
+      const camU = new THREE.Vector3(0, 1, 0).applyQuaternion(vq);
+      this._nearRail = !!env.nearRail;
+      if (env.nearRail && !(input.moveX || input.moveY || input.up)) this.vel.multiplyScalar(Math.exp(-dt * 2.5));
+      this.thrusting = env.suit.fly(dt, this, input, camF, camR, camU, gLocal);
     } else if (this.state === 'eva') {
       // MMU-style jetpack: true inertia, thrust while input, gentle auto-stabilisation
       const thrust = 0.35;
@@ -246,6 +252,8 @@ export class Player {
       if (env.liftDelta) realV.addScaledVector(env.liftDelta, -1 / dt);
       const lost = this.vel.clone().sub(realV);
       if (lost.length() > 3.5 && this.state !== 'walk') this.bump = Math.min(1, (lost.length() - 3.5) / 6);
+      // a knock in a suit marks the suit (suits.js works out what it did)
+      if (env.suit && this.state !== 'walk' && this.state !== 'seated' && lost.lengthSq() > 0.36) env.suit.contact(this, lost, realV);
       // keep tangential motion, drop the blocked component
       if (!walking) this.vel.copy(realV.lerp(this.vel, 0.0));
       else if (this.grounded) { const vu = this.vel.dot(this.up); if (vu < 0) this.vel.addScaledVector(this.up, -vu); }

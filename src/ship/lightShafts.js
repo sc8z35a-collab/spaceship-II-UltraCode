@@ -1,4 +1,4 @@
-// Sunbeams through the windows and the canopy: an open tube swept from each opening's inner edge
+// Sunbeams through the windows: an open tube swept from each opening's inner edge
 // along the sunlight, drawn additively with drifting dust and soft edges. Only openings that face
 // the sun light up, and everything fades out in the Earth's shadow.
 import * as THREE from 'three';
@@ -35,15 +35,6 @@ export class LightShafts {
       const c = o.center.clone().addScaledVector(o.normal, -(HULL.inset + 0.015));
       const pts = roundRect(o.halfW * 2 * 0.96, o.halfH * 2 * 0.96, o.radius * 0.96, 0, 0, 6).map(([x, y]) => c.clone().addScaledVector(o.u, x).addScaledVector(o.v, y));
       addTube(pts, o.normal, roomBox(o.center));
-    }
-    // canopy: approximated by an ellipse behind the glazing
-    {
-      const n = new THREE.Vector3(0, 0.42, -1).normalize();
-      const c = new THREE.Vector3(0, 1.45, -12.2);
-      const u = new THREE.Vector3(1, 0, 0), v = new THREE.Vector3().crossVectors(n, u).normalize();
-      const pts = [];
-      for (let i = 0; i < 40; i++) { const a = i / 40 * Math.PI * 2; pts.push(c.clone().addScaledVector(u, Math.cos(a) * 1.45).addScaledVector(v, Math.sin(a) * 0.95)); }
-      addTube(pts, n, roomBox(c));
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));

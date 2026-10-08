@@ -33,7 +33,7 @@ import { leadDir, ROUNDS, rockId } from './combat.js';
 import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
 import { Arsenal } from './arsenal.js';
 import { ZONE } from '../h8/hachiDefence.js';
-import { RINGS, DECK, ringFrame, ringCircle, buildRing, buildSled, buildLink, Carriage, dAng } from './gunRings.js';
+import { RINGS, DECK, CARRIAGE, ringFrame, ringCircle, buildRing, buildSled, buildLink, Carriage, dAng } from './gunRings.js';
 import { QUALITY } from '../core/quality.js';
 import { starsText } from './drones.js';
 
@@ -407,6 +407,33 @@ export class Weapons {
     else if (wa(Rl)) w = az(wa(Rl)) - Rl.dth;
     C1.step(dt, w);
     for (const m of this.h8Mounts) if (m.ring != null) this.placeMount(m);
+    this.carriageSound();
+  }
+
+  /** the carriages' drives, heard aboard H8: a whine that climbs with the speed round the ring,
+   * a quick spin-up as one sets off, the brake biting as it stops on its bearing */
+  carriageSound() {
+    const g = this.g, A = g.audio, h8 = g.h8;
+    const aboard = h8 && (h8.crew || (h8.mode === 'docked' && h8.kaitoInside && h8.kaitoInside()));
+    this.carriages.forEach((C, i) => {
+      const id = 'ring' + i, k = Math.min(1, Math.abs(C.w) / CARRIAGE.vMax);
+      const moving = aboard && A.ready && k > 0.04;
+      if (moving) {
+        const c = ringCircle(C.ring);
+        const pos = new THREE.Vector3(Math.sin(C.th) * c.rad, c.y, -Math.cos(C.th) * c.rad).add(H8.dockAt);
+        if (!C.sounding) { C.sounding = true; A.mech(pos, 'slew', { open: true }); A.humLoop(id, { pos, freq: 70, gain: 0, harm: [1, 0.6, 0.45, 0.2] }); }
+        A.setLoopPos(id, pos);
+        A.setLoopFreq(id, 70 + 120 * k);
+        A.setLoopGain(id, 0.012 + 0.03 * k, 0.08);
+      } else if (C.sounding) {
+        C.sounding = false;
+        A.stopLoop(id);
+        if (aboard && A.ready) {
+          const c = ringCircle(C.ring);
+          A.mech(new THREE.Vector3(Math.sin(C.th) * c.rad, c.y, -Math.cos(C.th) * c.rad).add(H8.dockAt), 'latch', { open: false, gain: 0.5 });
+        }
+      }
+    });
   }
 
   buildB29() {
@@ -985,8 +1012,11 @@ export class Weapons {
       }
     }
     let loaded = this.launchers.filter((L) => L.loaded).length;
+    const A = g.audio, heard = h8 && A && A.ready && (h8.crew || (h8.mode === 'docked' && h8.kaitoInside && h8.kaitoInside()));
     for (const L of this.launchers) {
       // the doors: they snap open, and close behind the missile
+      if (heard && L.doorT !== L.doorWas && L.doorWas !== undefined) A.mech(L.at.clone().add(H8.dockAt), 'servo', { open: L.doorT > 0.5, dur: L.doorT > 0.5 ? 0.13 : 0.22, pitch: 0.8 });
+      L.doorWas = L.doorT;
       L.door += Math.max(-dt * 5, Math.min(dt * 9, L.doorT - L.door));
       if (L.queue && L.door > 0.92) {
         const Q = L.queue;
@@ -1002,8 +1032,10 @@ export class Weapons {
       if (!L.loaded) {
         L.reload = Math.max(0, L.reload - dt);
         const can = this.ammo.missile > loaded;
+        // (the loader's ram drives the round up into the tube and locks it)
+        if (can && heard && L.reload < 0.45 && !L.ramming) { L.ramming = true; A.mech(L.at.clone().add(H8.dockAt), 'heavy', { open: true, dur: 0.42, pitch: 1.5, gain: 0.7 }); }
         if (can) L.load = Math.min(1, Math.max(L.load, 1 - L.reload / 0.45));
-        if (L.reload <= 0 && can) { L.loaded = true; L.load = 1; loaded++; }
+        if (L.reload <= 0 && can) { L.loaded = true; L.load = 1; L.ramming = false; loaded++; }
       }
       L.kick = Math.max(0, L.kick - dt * 4);
     }

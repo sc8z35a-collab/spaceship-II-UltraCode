@@ -439,14 +439,25 @@ export class SpaceElevator {
     if (at) {
       const s = berthStage(at.dwellF, at.dwell);
       if (s.clamp > 0.6 && ev('clamp' + at.id + Math.floor(at.dwellF > 20 ? 1 : 0))) {
-        A.beep && A.beep(62, 0.35, 0.22, { direct: true, type: 'sine' });
-        A._burst && A._burst(null, { dur: 0.5, freq: 260, q: 0.6, gain: 0.18, type: 'brown', filter: 'lowpass', direct: true });
+        // the grip arms close on the climber: through the structure
+        A.mech && A.mech(null, 'clamp', { open: false, direct: true, pitch: 0.6, gain: 1.4 });
+        A._burst && A._burst(null, { dur: 0.5, freq: 260, q: 0.6, gain: 0.18, type: 'brown', filter: 'lowpass', direct: true, when: 0.5 });
+      }
+      // the boarding bridges run out to the climber and back
+      for (const [k, v] of [['bi', s.bridgeIn], ['bo', s.bridgeOut]]) {
+        const st = v > 0.02 && v < 0.98 ? 1 : 0;
+        const key = k + at.id;
+        B.br = B.br || {};
+        if (st && !B.br[key]) A.mech && A.mech(null, 'fold', { open: v < 0.5 ? true : false, direct: true, dur: 3, pitch: 0.8, gain: 0.8 });
+        B.br[key] = st;
       }
       if (s.traverse > 0.02 && s.traverse < 0.98) {
         if (!B.rumble && A.humLoop) { A.humLoop('elRumble' + B.h, { freq: 41, gain: 0.0, harm: [1, 0.6, 0.3, 0.15] }); B.rumble = true; }
+        A.setLoopFreq && A.setLoopFreq('elRumble' + B.h, 41);
         A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0.035, 0.6);
       } else if (s.depart > 0.4) {
         if (!B.rumble && A.humLoop) { A.humLoop('elRumble' + B.h, { freq: 33, gain: 0.0, harm: [1, 0.7, 0.4, 0.2] }); B.rumble = true; }
+        A.setLoopFreq && A.setLoopFreq('elRumble' + B.h, 33);
         A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0.05 * s.depart, 0.8);
       } else if (B.rumble) A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0, 1.2);
     } else if (B.rumble) A.setLoopGain && A.setLoopGain('elRumble' + B.h, 0, 1.5);

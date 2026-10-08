@@ -4,17 +4,25 @@
 // stays and gets worse until the repair dock. A structural integrity figure sums it all up: when
 // it runs out (or one impact is simply too big) the hull breaks apart.
 import * as THREE from 'three';
-import { shipUniforms, MAX_DENTS, MAX_BREACH } from './materials.js';
+import { shipUniforms, MAX_DENTS, MAX_PEEL, MAX_BREACH, dentData, followDents } from './materials.js';
 import { glassUniforms } from './glass.js';
-import { OPENINGS, HULL, sectionPoint, sectionNormal, tForPoint, inCanopy, DECK_Y } from './hullShape.js';
+import { OPENINGS, HULL, sectionPoint, sectionNormal, tForPoint, canopyF, halfWidthAt, heightRangeAt, DECK_Y } from './hullShape.js';
 import { PIPE_SYSTEMS } from './underfloor.js';
 import { setLayersDeep, LAYER_NEAR, LAYER_MID } from '../core/layers.js';
 import { petalGeometry, linerGeometry, cableCurves, patchPlate, holeFrame } from './tornMetal.js';
 import { CrackAtlas } from './glassCracks.js';
 import { crackPaths, crackGeometry, stressPoint } from './wallCracks.js';
 import { Pockmarks } from '../combat/pockmarks.js';
+import { rng } from './geom.js';
+import { addDisplayCut } from './b29Display.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+// The outer skin is riveted panels, 1.2 x 0.6 m, staggered row by row (the grid the hull's surface
+// detail draws), laid out in whichever ship plane the skin there faces most. The belly is
+// covered in 16 cm heat-shield tiles instead.
+const PANEL = { w: 1.2, h: 0.6 };
+const keyHash = (k) => { let h = 2166136261; for (let i = 0; i < k.length; i++) { h ^= k.charCodeAt(i); h = Math.imul(h, 16777619); } return ((h >>> 0) % 1000) / 1000; };
 
 // what Kaito can still fix himself (anything bigger is beyond a repair kit)
 export const FIXABLE = { breach: 0.012, crack: 0.3, pipe: 0.15, equip: 0.12, fracture: 0.15 };
@@ -39,7 +47,9 @@ export const EQUIPMENT = {
 export class Damage {
   constructor(game) {
     this.g = game;
-    this.dents = [];      // {pos, dir, r, depth}
+    this.dents = [];      // {pos, dir, r, r0, depth, sharp, heat, seed}
+    this.peels = [];      // skin panels torn (half) off, holes torn in them, tiles knocked off
+    this.panelHits = new Map();   // the blows each panel has taken (J): its fasteners give in the end
     this.breaches = [];   // {id, pos, n, r, zone, area, leak, patched, sev, meshes}
     this.cracks = OPENINGS.map(() => null); // per opening index: {u,v,sev,seed,patched}
     this.canopyCrack = null;
@@ -54,6 +64,7 @@ export class Damage {
     this.events = [];
     // bullet strikes on the outside (their wear counts against the structure)
     this.pocks = new Pockmarks(game.shipVis.root, 360, [LAYER_NEAR, LAYER_MID]);
+    followDents(this.pocks.mesh.material);     // (they sink with the dents they lie in)
     this.shotWear = 0;
   }
 
@@ -66,23 +77,33 @@ export class Damage {
     const g = this.g;
     const E = Math.max(1, energy);
     const big = E > 5e5;
+    // (a blow worked out from the collision spheres lands on the skin itself)
+    if (opts.snap) pLocal = this.snapToSkin(pLocal);
     // dent: radius & depth from energy
     const r = Math.min(1.6, 0.08 + 0.025 * Math.cbrt(E / 1000));
     const depth = Math.min(0.34, 0.015 + 0.007 * Math.cbrt(E / 1000));
     const inward = dirLocal.clone().normalize();
+    // the skin there, facing out: a dent goes in mostly square to it, a little the way the blow went
+    const nOut = this.skinNormal(pLocal, opts.normal, inward);
+    const push = nOut.clone().multiplyScalar(-0.75).addScaledVector(inward, 0.25).normalize();
     // the skin is weaker where it is already dented (or shot full of holes): hit after hit on one
     // spot goes through
     let old = 0;
     for (const d of this.dents) if (d.pos.distanceTo(pLocal) < Math.max(d.r, 0.3)) old = Math.max(old, d.depth);
     const weak = Math.min(0.8, this.dentCount(pLocal, 0.6) * 0.15 + 0.7 * Math.min(1, old / 0.45) + this.pocks.countNear(pLocal, 0.35) * 0.1);
     if (opts.shot && E < 1e6) {
-      // a gun round: a pit and a splash of soot where it struck (no dent); the wear adds up
-      this.pocks.add(pLocal, opts.normal || inward.clone().negate(), 0.2 + 0.07 * Math.cbrt(E / 1e5));
+      // a gun round: a pit and a splash of soot where it struck, the skin punched in round it (a
+      // small sharp crater with its lip thrown up, glowing for a moment); the wear adds up
+      this.pocks.add(pLocal, opts.normal || nOut, 0.2 + 0.07 * Math.cbrt(E / 1e5));
       this.shotWear += E / 1e8;
+      const k = Math.cbrt(E / 1000);
+      this.addDent(pLocal, push, 0.045 + 0.016 * k, 0.004 + 0.0032 * k, { sharp: 1, heat: Math.min(1, 0.45 + E / 5e5) });
     } else {
-      this.addDent(pLocal, inward, r, depth);
+      this.addDent(pLocal, push, r, depth, { sharp: E < 2e6 ? 0.4 : 0.15, heat: Math.min(1, 0.3 + E / 4e6) });
       this.addScorch(pLocal, r * 0.8);
     }
+    // the skin's panels (the belly's tiles) round it: loosened, torn half off, torn away
+    if (!opts.noPanels) this.panelBlow(pLocal, nOut, inward, E, r);
     // breach?
     const pen = E / (3e5 * (1 - weak));
     const zone = this.zoneForHullPoint(pLocal);
@@ -100,9 +121,8 @@ export class Damage {
         if (sev > 0.05) this.crackWindow(i, pLocal, sev);
       }
     });
-    if (inCanopy(pLocal) || pLocal.z < -11.5 && pLocal.y > 0.6) {
-      this.crackWindow(15, pLocal, Math.min(2, E / 2.5e5));
-    }
+    // the nose and its cameras: the cockpit's screen tears where it was hit
+    if (pLocal.z < -10.6 && g.b29Display) g.b29Display.hit(pLocal, E);
     // equipment & pipes near the impact (a gun round that stays in the skin only hurts what is
     // mounted outside; through the skin, it hurts what lies behind)
     const shotOnly = opts.shot && !breach;
@@ -204,15 +224,291 @@ export class Damage {
     return ls.zoneAt(inner);
   }
 
-  addDent(pos, dir, r, depth) {
-    // merge with an existing dent nearby
+  /** o: { sharp (0 a broad bowl .. 1 a punched crater), heat (the glow of a fresh strike) } */
+  addDent(pos, dir, r, depth, o = {}) {
+    const sharp = o.sharp ?? 0, heat = o.heat ?? 0;
+    // the same spot again: deeper and a little wider — but a dent never spreads past half again
+    // its first size (blow after blow on one spot goes through, it does not swallow the hull)
     const ex = this.dents.find((d) => d.pos.distanceTo(pos) < Math.max(d.r, r) * 0.6);
-    if (ex) { ex.depth = Math.min(0.45, ex.depth + depth * 0.6); ex.r = Math.max(ex.r, r); }
-    else {
-      if (this.dents.length >= MAX_DENTS) this.dents.shift();
-      this.dents.push({ pos: pos.clone(), dir: dir.clone().normalize(), r, depth });
+    if (ex) {
+      const r0 = ex.r0 || ex.r;
+      ex.depth = Math.min(0.45, Math.max(ex.depth, r0 * 0.7), ex.depth + depth * 0.6);
+      ex.r = Math.min(Math.max(r0 * 1.5, r), Math.max(ex.r, r * 1.04));
+      ex.sharp = ((ex.sharp || 0) * ex.r + sharp * r) / (ex.r + r);
+      ex.heat = Math.max(ex.heat || 0, heat);
+    } else {
+      if (this.dents.length >= MAX_DENTS) {
+        // the hull is covered in them: the least of them gives way to the new one
+        let iMin = 0, vMin = Infinity;
+        this.dents.forEach((d, i) => { const v = d.depth * d.r * d.r; if (v < vMin) { vMin = v; iMin = i; } });
+        this.dents.splice(iMin, 1);
+      }
+      this.dents.push({ pos: pos.clone(), dir: dir.clone().normalize(), r, r0: r, depth, sharp, heat, seed: Math.random() * 6.28 });
     }
-    this.syncUniforms();
+    this.syncDents();
+  }
+
+  /** the nearest point of the skin (by its cross-section at that station) */
+  snapToSkin(p) {
+    const z = Math.max(HULL.zTip + 0.3, Math.min(HULL.zTail1 - 0.05, p.z));
+    return sectionPoint(z, tForPoint(z, p.x, p.y, 0), 0);
+  }
+
+  /** the skin's outward normal at p (given: the surface normal a ray found there) */
+  skinNormal(p, given = null, inward = null) {
+    if (given) { const n = given.clone().normalize(); if (inward && n.dot(inward) > 0) n.negate(); return n; }
+    if (p.z > HULL.zTip + 0.3 && p.z < HULL.zTail1) return sectionNormal(p.z, tForPoint(p.z, p.x, p.y, 0), 0);
+    return inward ? inward.clone().negate() : V(0, 1, 0);
+  }
+
+  // ------------------------------------------------------------------ the skin's panels
+  /** the panel under p (outward normal n): its plane, its rectangle in that plane, its key */
+  panelAt(p, n) {
+    const ax = Math.abs(n.x) > Math.abs(n.y) && Math.abs(n.x) > Math.abs(n.z) ? 0 : Math.abs(n.y) > Math.abs(n.z) ? 1 : 2;
+    const side = Math.sign(ax === 0 ? n.x : ax === 1 ? n.y : n.z) || 1;
+    const u = ax === 0 ? p.z : p.x, v = ax === 0 ? p.y : ax === 1 ? p.z : p.y;
+    const row = Math.floor(v / PANEL.h);
+    const off = (((row % 2) + 2) % 2) * PANEL.w / 2;
+    const col = Math.floor((u - off) / PANEL.w);
+    return { ax, side, plane: ax === 0 ? p.x : ax === 1 ? p.y : p.z, u0: col * PANEL.w + off, u1: (col + 1) * PANEL.w + off, v0: row * PANEL.h, v1: (row + 1) * PANEL.h, key: `${ax}${side}:${col}:${row}` };
+  }
+
+  /** a point of the skin at (u, v) in a panel's plane */
+  skinPoint(pe, u, v, out = new THREE.Vector3()) {
+    if (pe.ax === 0) { const w = halfWidthAt(u, v, 0); return out.set(pe.side * (w > 0 ? w : Math.abs(pe.plane)), v, u); }
+    if (pe.ax === 1) { const yy = heightRangeAt(v, u, 0); const y = pe.side > 0 ? yy[1] : yy[0]; return out.set(u, Number.isFinite(y) ? y : pe.plane, v); }
+    return out.set(u, v, pe.plane);
+  }
+
+  /** may this panel come off? (not round the windows, hatches and the port, which are framed in
+   * heavy rings, nor on the canopy, the nose cone or the tail) */
+  panelFree(pe) {
+    if (pe.ax === 2) return false;
+    const c = this.skinPoint(pe, (pe.u0 + pe.u1) / 2, (pe.v0 + pe.v1) / 2);
+    if (c.z < -11.8 || c.z > 9.8 || canopyF(c) > -0.6) return false;
+    for (const o of OPENINGS) if (o.center.distanceTo(c) < Math.max(o.halfW, o.halfH) + 0.85) return false;
+    return true;
+  }
+
+  /**
+   * A blow on the skin: it adds to what the panel there has taken. Enough of it and the panel's
+   * fasteners give — it is torn half off, bent out on the edge still holding (and the bay under
+   * it shows), and the next blows rip it away to tumble off into space. One big blow tears a
+   * jagged hole straight through it; a bigger one throws the whole panel off and loosens the
+   * ones round it. On the belly the heat-shield tiles are knocked off instead.
+   */
+  panelBlow(p, n, travel, E, r, spread = true) {
+    if (p.z < -12.4 || p.z > 10.2) return;
+    if (p.y < -1.15 && n.y < -0.55) { this.knockTiles(p, n, travel, E); return; }
+    const pan = this.panelAt(p, n);
+    if (!this.panelFree(pan)) return;
+    const hits = (this.panelHits.get(pan.key) || 0) + E;
+    this.panelHits.set(pan.key, hits);
+    if (this.panelHits.size > 160) this.panelHits.delete(this.panelHits.keys().next().value);
+    const hold = 5.5e5 * (0.75 + 0.5 * keyHash(pan.key));      // what its fasteners take
+    let pe = this.peels.find((x) => x.key === pan.key);
+    if (pe && pe.style === 0 && !pe.flap) { pe.heat = Math.max(pe.heat, 0.4); this.syncDents(); }
+    else if (E > 2.5e6 || hits > hold * 2.4) {
+      // (a hole torn in it: now the whole panel goes, along its seams)
+      if (pe && pe.style === 1) { Object.assign(pe, { u0: pan.u0, u1: pan.u1, v0: pan.v0, v1: pan.v1 }); this.peelFrame(pe); }
+      this.panelGone(pe || this.newPeel(pan, 0), travel);
+    }
+    else if (!pe && E > 1.2e6) {
+      // a jagged hole torn through it, round where it struck
+      const hu = Math.min(0.55, 0.22 + 0.1 * Math.cbrt(E / 1e6)), hv = hu * 0.7;
+      const u = pan.ax === 0 ? p.z : p.x, v = pan.ax === 0 ? p.y : p.z;
+      pe = this.newPeel(Object.assign({}, pan, { u0: u - hu, u1: u + hu, v0: v - hv, v1: v + hv }), 1);
+      if (pe) this.fling(pe, null, travel, 0.35);
+    } else if (!pe && hits > hold) {
+      pe = this.newPeel(pan, 0);
+      if (pe) this.addFlap(pe, 0.5 + Math.random() * 0.9);
+    }
+    // a big blow loosens the panels round it too
+    if (spread && E > 3e6) {
+      const t1 = new THREE.Vector3().crossVectors(n, Math.abs(n.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
+      const t2 = new THREE.Vector3().crossVectors(n, t1);
+      for (let k = 0; k < 6; k++) {
+        const a = k / 6 * Math.PI * 2 + Math.random() * 0.5;
+        const q = this.snapToSkin(p.clone().addScaledVector(t1, Math.cos(a) * (r * 0.9 + 0.5)).addScaledVector(t2, Math.sin(a) * (r * 0.9 + 0.5)));
+        this.panelBlow(q, this.skinNormal(q), travel, E * 0.3, r, false);
+      }
+    }
+  }
+
+  newPeel(pan, style) {
+    if (this.peels.length >= MAX_PEEL) return null;
+    const pe = { key: pan.key, ax: pan.ax, side: pan.side, plane: pan.plane, u0: pan.u0, u1: pan.u1, v0: pan.v0, v1: pan.v1, style, seed: Math.random() * 50, heat: 1, depth: style === 2 ? 0.05 : 0.065, R: 0, flap: null };
+    this.peelFrame(pe);
+    this.peels.push(pe);
+    this.syncDents();
+    return pe;
+  }
+
+  /** a peel's middle on the skin and the skin's normal there */
+  peelFrame(pe) {
+    pe.centre = this.skinPoint(pe, (pe.u0 + pe.u1) / 2, (pe.v0 + pe.v1) / 2);
+    pe.n = this.skinNormal(pe.centre);
+  }
+
+  /** the panel is torn away: the bent flap (or the whole panel) tumbles off into space */
+  panelGone(pe, travel) {
+    if (!pe) return;
+    const flap = pe.flap;
+    pe.style = 0; pe.heat = 1;
+    if (flap) {
+      this.group.remove(flap.mesh);
+      this.fling(pe, flap.mesh.geometry, travel, 0);
+      pe.flap = null;
+    } else this.fling(pe, null, travel, 0.25);
+    this.syncDents();
+    const g = this.g;
+    if (g.audio.ready && !this.catchingUp) { g.audio._burst(pe.centre, { dur: 0.3, freq: 1500, q: 3, gain: 0.12, type: 'white', filter: 'bandpass', sweep: -0.4 }); g.audio.creak(pe.centre, 0.7); }
+    if (g.fx) { g.fx.burst('spark', pe.centre, pe.n, 40, { speed: 4, spread: 0.9 }); g.fx.burst('debris', pe.centre, pe.n, 25, { speed: 3, spread: 1.0 }); }
+    this.events.push({ type: 'panel', pos: pe.centre.clone(), gone: true });
+  }
+
+  /** the panel half torn off: bent out on the edge still fastened */
+  addFlap(pe, angle, hinge = Math.floor(Math.random() * 4)) {
+    const geo = this.flapGeometry(pe, hinge, angle, true);
+    const mesh = new THREE.Mesh(geo, this.flapMat(true));
+    mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+    setLayersDeep(mesh, LAYER_NEAR, LAYER_MID);
+    this.group.add(mesh);
+    pe.flap = { mesh, hinge, angle };
+    const g = this.g;
+    if (g.audio.ready && !this.catchingUp) { g.audio._burst(pe.centre, { dur: 0.45, freq: 900, q: 4, gain: 0.1, type: 'white', filter: 'bandpass', sweep: 0.5 }); g.audio.creak(pe.centre, 0.6); }
+    if (g.fx && !this.catchingUp) g.fx.burst('spark', pe.centre, pe.n, 20, { speed: 3, spread: 0.8 });
+    this.events.push({ type: 'panel', pos: pe.centre.clone(), gone: false });
+  }
+
+  /** a piece of skin thrown off (geo: its shape as it was on the hull, else a slightly bent panel) */
+  fling(pe, geo, travel, bend) {
+    const g = this.g, f = g.flight;
+    if (!g.combat || !f || this.catchingUp) { if (geo) geo.dispose(); return; }
+    if (!geo) {
+      const sub = bend > 0.3 ? Object.assign({}, pe, { u0: pe.u0 + (pe.u1 - pe.u0) * 0.2, u1: pe.u1 - (pe.u1 - pe.u0) * 0.2, v0: pe.v0 + (pe.v1 - pe.v0) * 0.2, v1: pe.v1 - (pe.v1 - pe.v0) * 0.2 }) : pe;
+      geo = this.flapGeometry(sub, Math.floor(Math.random() * 4), bend, bend > 0.3);
+    }
+    geo.computeBoundingBox();
+    const c = geo.boundingBox.getCenter(new THREE.Vector3());
+    geo.translate(-c.x, -c.y, -c.z);
+    const mesh = new THREE.Mesh(geo, this.flapMat());
+    const posE = c.clone().applyQuaternion(f.quat).add(f.pos);
+    const out = pe.n.clone().multiplyScalar(2 + Math.random() * 5);
+    if (travel) out.addScaledVector(travel, 1.5);
+    out.add(new THREE.Vector3().randomDirection().multiplyScalar(0.8));
+    g.combat.addWreck(mesh, posE, f.vel.clone().add(out.applyQuaternion(f.quat)), 45, 1);
+    const w = g.combat.wrecks[g.combat.wrecks.length - 1];
+    if (w) { w.q.copy(f.quat); w.spin = 1 + Math.random() * 4; }
+  }
+
+  /**
+   * The panel's shape bent out about one edge (hinge: 0 the v0 edge, 1 v1, 2 u0, 3 u1) by angle
+   * (rad): it leaves the skin there at an angle and curls on further; torn, its free edge ragged
+   */
+  flapGeometry(pe, hinge, angle, torn) {
+    const NU = 10, NV = 6;
+    const alongU = hinge < 2;
+    const W = alongU ? pe.u1 - pe.u0 : pe.v1 - pe.v0;     // along the hinge
+    const L = alongU ? pe.v1 - pe.v0 : pe.u1 - pe.u0;     // from the hinge to the free edge
+    const U3 = pe.ax === 0 ? V(0, 0, 1) : V(1, 0, 0), V3 = pe.ax === 0 ? V(0, 1, 0) : V(0, 0, 1);
+    const S3 = alongU ? U3 : V3;
+    const free = alongU ? V3.clone().multiplyScalar(hinge === 0 ? 1 : -1) : U3.clone().multiplyScalar(hinge === 2 ? 1 : -1);
+    const hingeAt = (s) => (alongU ? this.skinPoint(pe, pe.u0 + s, hinge === 0 ? pe.v0 : pe.v1) : this.skinPoint(pe, hinge === 2 ? pe.u0 : pe.u1, pe.v0 + s));
+    const R = rng(Math.floor(pe.seed * 1000) + hinge);
+    const th0 = angle * 0.55, kc = angle * 0.45 / L;
+    const pos = [], uv = [], idx = [];
+    for (let j = 0; j <= NV; j++) {
+      for (let i = 0; i <= NU; i++) {
+        const s = W * i / NU;
+        let h = L * j / NV;
+        if (torn && j === NV) h *= 0.82 + 0.18 * R();
+        if (torn && (i === 0 || i === NU) && j > 0) h *= 0.92 + 0.08 * R();
+        const H = hingeAt(s);
+        const nH = this.skinNormal(H);
+        const T = free.clone().addScaledVector(nH, -free.dot(nH)).normalize();
+        const t = kc > 1e-4 ? (Math.sin(th0 + kc * h) - Math.sin(th0)) / kc : h * Math.cos(th0);
+        const nn = kc > 1e-4 ? (Math.cos(th0) - Math.cos(th0 + kc * h)) / kc : h * Math.sin(th0);
+        const P = H.addScaledVector(T, t).addScaledVector(nH, nn + 0.004);
+        pos.push(P.x, P.y, P.z);
+        const a = s / W, b = h / L;
+        uv.push(alongU ? a : (hinge === 2 ? b : 1 - b), alongU ? (hinge === 0 ? b : 1 - b) : a);
+      }
+    }
+    // the painted face out
+    const nOut = this.skinNormal(hingeAt(W / 2));
+    const flip = new THREE.Vector3().crossVectors(S3, free).dot(nOut) < 0;
+    for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+      const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, d = c + 1;
+      if (flip) idx.push(a, c, b, b, c, d); else idx.push(a, b, c, b, d, c);
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+    geo.setIndex(idx);
+    geo.computeVertexNormals();
+    return geo;
+  }
+
+  /** the skin panels' own material: paint outside with the rivet holes torn through round the
+   * edge, scorched; bare primer on the back (onShip: the one for panels still on the hull, which
+   * the cockpit's screen sees through like the rest of the ship) */
+  flapMat(onShip = false) {
+    if (onShip) return this._flapMatShip || (this._flapMatShip = addDisplayCut(this.makeFlapMat()));
+    return this._flapMat || (this._flapMat = this.makeFlapMat());
+  }
+
+  makeFlapMat() {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 128;
+    const x = c.getContext('2d');
+    x.fillStyle = '#d6d8d4'; x.fillRect(0, 0, 256, 128);
+    for (let k = 0; k < 600; k++) { x.fillStyle = `rgba(${Math.random() < 0.5 ? '40,38,36' : '255,255,255'},${Math.random() * 0.06})`; x.fillRect(Math.random() * 256, Math.random() * 128, 2 + Math.random() * 10, 1 + Math.random() * 4); }
+    const gr = x.createRadialGradient(128, 64, 4, 128, 64, 90);
+    gr.addColorStop(0, 'rgba(12,10,8,0.7)'); gr.addColorStop(1, 'rgba(12,10,8,0)');
+    x.fillStyle = gr; x.fillRect(0, 0, 256, 128);
+    x.strokeStyle = 'rgba(40,40,42,0.8)'; x.lineWidth = 2; x.strokeRect(1, 1, 254, 126);
+    x.fillStyle = '#18191a';
+    for (let t = 8; t < 252; t += 7) for (const yy of [5, 123]) { x.beginPath(); x.arc(t, yy, 1.4, 0, Math.PI * 2); x.fill(); }
+    for (let t = 8; t < 124; t += 7) for (const xx of [5, 251]) { x.beginPath(); x.arc(xx, t, 1.4, 0, Math.PI * 2); x.fill(); }
+    const tex = new THREE.CanvasTexture(c);
+    tex.colorSpace = THREE.SRGBColorSpace;
+    tex.anisotropy = 4;
+    const m = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.55, metalness: 0.25, side: THREE.DoubleSide });
+    m.onBeforeCompile = (sh) => {
+      sh.fragmentShader = sh.fragmentShader.replace('#include <map_fragment>', `#include <map_fragment>
+        if (!gl_FrontFacing) diffuseColor.rgb = vec3(0.4, 0.45, 0.33) * (0.8 + 0.4 * texture2D(map, vMapUv * 3.0).g);`);
+    };
+    m.customProgramCacheKey = () => 'hullFlap';
+    return m;
+  }
+
+  /** heat-shield tiles knocked off the belly round p (a gap that grows with further blows) */
+  knockTiles(p, n, travel, E) {
+    const R = Math.min(0.55, 0.06 + 0.035 * Math.cbrt(E / 1e4));
+    let pe = this.peels.find((x) => x.style === 2 && Math.hypot(x.cx - p.x, x.cz - p.z) < x.R + R * 0.5);
+    if (pe) {
+      pe.R = Math.min(0.8, Math.max(pe.R, Math.hypot(pe.cx - p.x, pe.cz - p.z) + R * 0.6));
+      pe.heat = Math.max(pe.heat, 0.6);
+    } else {
+      pe = this.newPeel({ key: 'tile' + this.nextId++, ax: 1, side: -1, plane: p.y, u0: 0, u1: 0, v0: 0, v1: 0 }, 2);
+      if (!pe) return;
+      pe.cx = p.x; pe.cz = p.z; pe.R = R;
+    }
+    pe.u0 = pe.cx - pe.R; pe.u1 = pe.cx + pe.R; pe.v0 = pe.cz - pe.R; pe.v1 = pe.cz + pe.R;
+    this.peelFrame(pe);
+    this.syncDents();
+    // a few of them tumbling off: black glaze on top, white silica through
+    const g = this.g, f = g.flight;
+    if (!g.combat || !f || this.catchingUp) return;
+    if (!this._tileMats) this._tileMats = [0xd8d7d2, 0xd8d7d2, 0x121212, 0xd8d7d2, 0xd8d7d2, 0xd8d7d2].map((c) => new THREE.MeshStandardMaterial({ color: c, roughness: 0.92, metalness: 0 }));
+    const nPieces = 1 + Math.min(3, Math.floor(R / 0.12));
+    for (let k = 0; k < nPieces; k++) {
+      const mesh = new THREE.Mesh(new THREE.BoxGeometry(0.15, 0.05, 0.15), this._tileMats);
+      const at = p.clone().add(V((Math.random() - 0.5) * R, 0, (Math.random() - 0.5) * R));
+      const v = n.clone().multiplyScalar(2 + Math.random() * 4).addScaledVector(travel, 1.2).add(new THREE.Vector3().randomDirection());
+      g.combat.addWreck(mesh, at.applyQuaternion(f.quat).add(f.pos), f.vel.clone().add(v.applyQuaternion(f.quat)), 30, 0.5);
+    }
   }
 
   addScorch(pos, r) {
@@ -221,7 +517,7 @@ export class Damage {
     this.syncUniforms();
   }
 
-  addBreach(pos, n, radius, zone) {
+  addBreach(pos, n, radius, zone, seed = null) {
     if (this.breaches.length >= MAX_BREACH) {
       // grow the closest existing breach instead
       const c = this.breaches.reduce((a, b) => (a.pos.distanceTo(pos) < b.pos.distanceTo(pos) ? a : b));
@@ -229,7 +525,7 @@ export class Damage {
       this._updateBreachLeak(c);
       return c;
     }
-    const b = { id: this.nextId++, pos: pos.clone(), n: n.clone().normalize(), r: radius, zone, patched: false, sev: Math.min(1, radius / 0.08), seed: Math.random() * 100, meshes: [], frost: 0 };
+    const b = { id: this.nextId++, pos: pos.clone(), n: n.clone().normalize(), r: radius, zone, patched: false, sev: Math.min(1, radius / 0.08), seed: seed ?? Math.random() * 100, meshes: [], frost: 0 };
     // the hull's own normal there (the hole's frame) and the way the projectile went (the torn
     // petals fold that way); the inner wall tears a little wider than the skin
     const t = tForPoint(pos.z, pos.x, pos.y, 0);
@@ -264,6 +560,8 @@ export class Damage {
       sealant: S({ color: 0x9a9c98, metalness: 0.0, roughness: 0.9 }),
       crack: S({ vertexColors: true, transparent: true, depthWrite: false, side: THREE.DoubleSide, metalness: 0.0, roughness: 0.92, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
     };
+    // (seen through the cockpit's screen like the rest of the ship: gone behind it)
+    for (const m of Object.values(this.tm)) if (m.isMaterial) addDisplayCut(m);
     return this.tm;
   }
 
@@ -298,7 +596,7 @@ export class Damage {
     if (R > 0.03 && !b.patched) {
       for (const cb of cableCurves({ c: cIn, n: sn, R: R * K, seed: b.seed, count: R > 0.12 ? 4 : 2 })) {
         let mat = T.cables.get(cb.color);
-        if (!mat) { mat = new THREE.MeshStandardMaterial({ color: cb.color, roughness: 0.55, metalness: 0.05 }); T.cables.set(cb.color, mat); }
+        if (!mat) { mat = addDisplayCut(new THREE.MeshStandardMaterial({ color: cb.color, roughness: 0.55, metalness: 0.05 })); T.cables.set(cb.color, mat); }
         add(cb.geo, mat);
         const tipG = new THREE.CylinderGeometry(cb.rad * 0.55, cb.rad * 0.55, 0.035, 6);
         tipG.rotateX(Math.PI / 2);
@@ -476,6 +774,7 @@ export class Damage {
     this.cracks.forEach((c, i) => { if (c && c.leak) this.g.lifeSupport.removeLeak(c.leak); glassUniforms.uWinGone.value[i] = 0; });
     this.cracks = OPENINGS.map(() => null);
     this.dents = []; this.scorch = [];
+    this.peels = []; this.panelHits.clear();
     for (const f of this.fractures) { if (f.leak) this.g.lifeSupport.removeLeak(f.leak); if (f.hiss) this.g.audio.stopLoop(f.hiss); }
     this.fractures = [];
     for (const s of this.g.layout.pipes) { s.leak = 0; s.patched = false; s.issue = null; if (s.emitter) { this.g.fx.removeEmitter(s.emitter); s.emitter = null; } }
@@ -486,6 +785,7 @@ export class Damage {
     this.pocks.clear();
     this.broken = false;
     this.group.clear();
+    if (this.g.b29Display) this.g.b29Display.repair();
     this.syncUniforms();
   }
 
@@ -496,10 +796,12 @@ export class Damage {
    */
   integrity() {
     let x = (this.fatigue || 0) + (this.shotWear || 0);
-    for (const d of this.dents) x += d.depth * d.r * 2.2;
+    // (a gun round's own crater counts little: its wear is in shotWear already)
+    for (const d of this.dents) x += d.depth * d.r * 2.2 * (1 - 0.85 * (d.sharp || 0));
     for (const b of this.breaches) x += b.r * (b.patched ? 0.8 : 2.4);
     for (const c of this.cracks) if (c && c.broken) x += 0.12;
     for (const f of this.fractures) x += f.sev * (f.sealed ? 0.008 : 0.03);
+    for (const pe of this.peels) x += pe.style === 2 ? 0.002 + pe.R * 0.004 : 0.005;
     return Math.max(0, 1 - x);
   }
 
@@ -607,6 +909,7 @@ export class Damage {
       }
       if (!it.worseNotified && it.sev > 0.6 && it.state !== 'fixed') { it.worseNotified = true; this.events.push({ type: 'worse', issue: it }); }
     }
+    this.updateSkin(dt);
     // frost where the escaping air freezes round a hole; sparks from severed live cables
     const BS = shipUniforms.uBreachS.value, lsp = g.lifeSupport;
     this.breaches.forEach((b, i) => {
@@ -669,13 +972,64 @@ export class Damage {
     this.stress = Math.max(0, this.stress - dt * 0.001);
   }
 
-  syncUniforms() {
-    const D = shipUniforms.uDents.value, DD = shipUniforms.uDentDir.value;
-    for (let i = 0; i < MAX_DENTS; i++) {
+  /** the dents and the torn panels into the ship materials' data texture */
+  syncDents() {
+    const W = MAX_DENTS, A = dentData;
+    A.fill(0);
+    const put = (row, i, a, b, c, d) => { const o = (row * W + i) * 4; A[o] = a; A[o + 1] = b; A[o + 2] = c; A[o + 3] = d; };
+    const n = Math.min(MAX_DENTS, this.dents.length);
+    for (let i = 0; i < n; i++) {
       const d = this.dents[i];
-      if (d) { D[i].set(d.pos.x, d.pos.y, d.pos.z, d.r); DD[i].set(d.dir.x, d.dir.y, d.dir.z, d.depth); }
-      else { D[i].set(0, 0, 0, 0); DD[i].set(0, 0, 0, 0); }
+      put(0, i, d.pos.x, d.pos.y, d.pos.z, d.r);
+      put(1, i, d.dir.x, d.dir.y, d.dir.z, d.depth);
+      put(2, i, d.heat || 0, d.seed || 0, d.sharp || 0, 0);
     }
+    const m = Math.min(MAX_PEEL, this.peels.length);
+    for (let j = 0; j < m; j++) {
+      const p = this.peels[j];
+      put(3, j, p.u0, p.u1, p.v0, p.v1);
+      put(4, j, p.ax, p.side, p.plane, p.style);
+      put(5, j, p.heat || 0, p.seed, p.depth, p.R || 0);
+    }
+    shipUniforms.uDentN.value = n;
+    shipUniforms.uPeelN.value = m;
+    shipUniforms.tDents.value.needsUpdate = true;
+  }
+
+  /**
+   * Fresh strikes cool off; torn wiring in the open bays spits sparks while there is power; in
+   * the air the bent panels are torn away by the wind, and where tiles are missing from the belly
+   * the heat of entry gets in at the bare skin and burns through it
+   */
+  updateSkin(dt) {
+    const g = this.g, f = g.flight;
+    let dirty = false;
+    for (const d of this.dents) if (d.heat > 0) { d.heat = d.heat < 0.01 ? 0 : d.heat * Math.exp(-dt / 5); dirty = true; }
+    for (const pe of [...this.peels]) {
+      if (pe.heat > 0) { pe.heat = pe.heat < 0.01 ? 0 : pe.heat * Math.exp(-dt / 7); dirty = true; }
+      if (this.catchingUp) continue;
+      if (pe.style !== 2 && g.fx && (g.systems.power ?? 1) > 0.3 && Math.random() < dt * 0.07) g.fx.burst('spark', pe.centre, pe.n, 4 + Math.floor(Math.random() * 10), { speed: 1.6, spread: 0.7 });
+      const q = f.dynPressure || 0;
+      if (pe.flap && q > 1500 && Math.random() < dt * Math.min(2, q / 6000)) this.panelGone(pe, null);
+      if (pe.style === 2 && f.heatFlux > 6e4) {
+        pe.heat = Math.max(pe.heat, Math.min(1, f.heatFlux / 4e5));
+        pe.burn = (pe.burn || 0) + dt * (f.heatFlux - 6e4) / 3e6 * (0.5 + pe.R * 2);
+        dirty = true;
+        if (pe.burn > 1 && !pe.burnt) {
+          pe.burnt = true;
+          const zone = this.zoneForHullPoint(pe.centre);
+          this.addScorch(pe.centre, pe.R * 2.5);
+          this.addDent(pe.centre, pe.n.clone().negate(), pe.R * 1.6, 0.05, { heat: 1 });
+          if (zone) this.addBreach(pe.centre.clone(), pe.n.clone(), Math.min(0.1, 0.02 + pe.R * 0.12), zone);
+          this.events.push({ type: 'burnthrough', zone, pos: pe.centre.clone() });
+        }
+      }
+    }
+    if (dirty) this.syncDents();
+  }
+
+  syncUniforms() {
+    this.syncDents();
     const B = shipUniforms.uBreach.value, BN = shipUniforms.uBreachN.value, BS = shipUniforms.uBreachS.value;
     for (let i = 0; i < MAX_BREACH; i++) {
       const b = this.breaches[i];
@@ -714,7 +1068,9 @@ export class Damage {
 
   serialize() {
     return {
-      dents: this.dents.map((d) => ({ p: d.pos.toArray(), d: d.dir.toArray(), r: d.r, depth: d.depth })),
+      dents: this.dents.map((d) => ({ p: d.pos.toArray(), d: d.dir.toArray(), r: d.r, depth: d.depth, r0: d.r0, s: d.sharp || 0, sd: d.seed || 0 })),
+      peels: this.peels.map((pe) => ({ k: pe.key, a: pe.ax, sd: pe.side, pl: pe.plane, r: [pe.u0, pe.u1, pe.v0, pe.v1], st: pe.style, s: pe.seed, R: pe.R || 0, c: pe.style === 2 ? [pe.cx, pe.cz] : null, f: pe.flap ? [pe.flap.hinge, pe.flap.angle] : null, b: pe.burn || 0, bt: !!pe.burnt })),
+      panelHits: [...this.panelHits].slice(-120).map(([k, e]) => [k, Math.round(e)]),
       breaches: this.breaches.map((b) => ({ p: b.pos.toArray(), n: b.n.toArray(), r: b.r, zone: b.zone, patched: b.patched, seed: b.seed })),
       fractures: this.fractures.map((f) => ({ p: f.p0.toArray(), d: f.dir ? f.dir.toArray() : null, len: f.len, seed: f.seed, sev: f.sev, sealed: f.sealed })),
       cracks: this.cracks.map((c) => c ? { u: c.u, v: c.v, sev: c.sev, seed: c.seed, patched: c.patched, broken: !!c.broken } : null),
@@ -727,7 +1083,17 @@ export class Damage {
   }
 
   restore(d) {
-    this.dents = (d.dents || []).map((x) => ({ pos: V(...x.p), dir: V(...x.d), r: x.r, depth: x.depth }));
+    this.dents = (d.dents || []).map((x) => ({ pos: V(...x.p), dir: V(...x.d), r: x.r, r0: x.r0 || x.r, depth: x.depth, sharp: x.s || 0, heat: 0, seed: x.sd || 0 }));
+    this.panelHits = new Map(d.panelHits || []);
+    for (const pe of this.peels) if (pe.flap) this.group.remove(pe.flap.mesh);
+    this.peels = [];
+    for (const x of d.peels || []) {
+      const pe = { key: x.k, ax: x.a, side: x.sd, plane: x.pl, u0: x.r[0], u1: x.r[1], v0: x.r[2], v1: x.r[3], style: x.st, seed: x.s, heat: 0, depth: x.st === 2 ? 0.05 : 0.065, R: x.R || 0, flap: null, burn: x.b || 0, burnt: !!x.bt };
+      if (x.c) { pe.cx = x.c[0]; pe.cz = x.c[1]; }
+      this.peelFrame(pe);
+      this.peels.push(pe);
+      if (x.f) { const cu = this.catchingUp; this.catchingUp = true; this.addFlap(pe, x.f[1], x.f[0]); this.catchingUp = cu; }
+    }
     this.scorch = (d.scorch || []).map((x) => ({ pos: V(...x.p), r: x.r }));
     Object.assign(this.health, d.health || {});
     this.coolant = d.coolant ?? 1;
@@ -735,8 +1101,7 @@ export class Damage {
     this.shotWear = d.shotWear || 0;
     this.pocks.restore(d.pocks);
     for (const b of d.breaches || []) {
-      const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone);
-      br.seed = b.seed;
+      const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone, b.seed);
       if (b.patched) { br.patched = true; this._updateBreachLeak(br); this._breachMeshes(br); if (br.vent) { this.g.fx.removeEmitter(br.vent); br.vent = null; } const is = this.issues.find((i) => i.ref === br); if (is) is.state = 'patched'; }
     }
     (d.cracks || []).forEach((c, i) => {

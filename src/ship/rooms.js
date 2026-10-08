@@ -8,6 +8,7 @@ import { bookRow, plantPot, hangingPlant, mug, boxStack, cargoBag, cableBundle, 
 import { hullCabinet, hullPadding } from './furniture.js';
 import { roundPolygon } from './sweep.js';
 import { buildExtras } from './extras.js';
+import { B29D, dispDir, sphereSection, skirtGeometry, bulkheadGeometry, borderPoints, displayPanels } from './b29Display.js';
 
 export function createLayout() {
   return { monitors: [], seats: [], interact: [], lamps: [], loose: [], controls: {}, anim: [], pipes: [], spots: {} };
@@ -21,167 +22,6 @@ function monitorSlot(L, id, pos, n, up, w, h, room, res = 512) {
 }
 
 // ------------------------------------------------------------------ cockpit
-function consoleSweep(b, C, R0, a0, a1, profile, key, steps = 40) {
-  // revolve the closed (r, y) profile around the vertical axis through C. Each profile edge
-  // gets its own vertices (crisp edges between faces, smooth shading along the arc) and is
-  // wound so that it faces outward whichever way round the profile was written.
-  const n = profile.length;
-  let area = 0;
-  for (let k = 0; k < n; k++) { const [r0, y0] = profile[k], [r1, y1] = profile[(k + 1) % n]; area += r0 * y1 - r1 * y0; }
-  const ccw = area > 0;
-  const dirAt = (a) => V(Math.sin(a), 0, -Math.cos(a));
-  const pos = [], nrm = [], idx = [];
-  for (let k = 0; k < n; k++) {
-    const [r0, y0] = profile[k], [r1, y1] = profile[(k + 1) % n];
-    const dr = r1 - r0, dy = y1 - y0, len = Math.hypot(dr, dy) || 1;
-    const nr = (ccw ? dy : -dy) / len, ny = (ccw ? -dr : dr) / len;
-    const base = pos.length / 3;
-    for (let i = 0; i <= steps; i++) {
-      const d = dirAt(a0 + (a1 - a0) * (i / steps));
-      const N = d.clone().multiplyScalar(nr).add(V(0, ny, 0)).normalize();
-      for (const [r, y] of [[r0, y0], [r1, y1]]) {
-        const p = C.clone().addScaledVector(d, R0 + r).setY(y);
-        pos.push(p.x, p.y, p.z);
-        nrm.push(N.x, N.y, N.z);
-      }
-    }
-    // pick the winding whose geometric normal agrees with the outward normal
-    const P = (j) => V(pos[(base + j) * 3], pos[(base + j) * 3 + 1], pos[(base + j) * 3 + 2]);
-    const mid = Math.floor(steps / 2) * 2;
-    const g0 = P(mid + 1).sub(P(mid)).cross(P(mid + 2).sub(P(mid)));
-    const Nm = V(nrm[(base + mid) * 3], nrm[(base + mid) * 3 + 1], nrm[(base + mid) * 3 + 2]);
-    const flip = g0.dot(Nm) < 0;
-    for (let i = 0; i < steps; i++) {
-      const A = base + i * 2, B = A + 1, Cc = A + 2, D = A + 3;
-      if (!flip) idx.push(A, B, Cc, B, D, Cc);
-      else idx.push(A, Cc, B, B, Cc, D);
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-  g.setIndex(idx);
-  b.add(g, key);
-  // end caps (built in a right-handed frame, then turned to face outward at each end)
-  for (const a of [a0, a1]) {
-    const shape = new THREE.Shape(profile.map(([r, y]) => new THREE.Vector2(r, y)));
-    const cap = new THREE.ShapeGeometry(shape);
-    const d = dirAt(a);
-    const side = V(Math.cos(a), 0, Math.sin(a));   // = d x up: direction of increasing a
-    const m = new THREE.Matrix4().makeBasis(d, V(0, 1, 0), side);
-    m.setPosition(C.clone().addScaledVector(d, R0));
-    cap.applyMatrix4(m);
-    if (a === a0) {
-      // the start cap must face towards decreasing a: reverse its winding and normals
-      const ix = cap.index.array;
-      for (let i = 0; i < ix.length; i += 3) { const t = ix[i + 1]; ix[i + 1] = ix[i + 2]; ix[i + 2] = t; }
-      const na = cap.attributes.normal;
-      for (let i = 0; i < na.count; i++) na.setXYZ(i, -na.getX(i), -na.getY(i), -na.getZ(i));
-    }
-    b.add(cap, key);
-  }
-}
-
-/** side console (builder-local: x across, z along, inner side toward -side): a closed body with a
- * deck sloping toward the pilot, kick recess, switch bank, rotary knobs and a keypad */
-function sideConsole(b, R, side) {
-  const s = side;
-  const prof = roundPolygon([[s * 0.23, 0.0], [s * 0.23, 0.78], [s * 0.17, 0.81], [-s * 0.19, 0.70], [-s * 0.23, 0.66], [-s * 0.23, 0.12], [-s * 0.19, 0.08], [-s * 0.19, 0.0]],
-    [0, 0.02, 0.025, 0.03, 0.02, 0.01, 0.01, 0], 3);
-  const pts = s > 0 ? prof.slice().reverse() : prof;
-  const sh = new THREE.Shape(pts.map(([u, y]) => new THREE.Vector2(u, y)));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: 1.13, bevelEnabled: true, bevelThickness: 0.012, bevelSize: 0.012, bevelSegments: 2, curveSegments: 4 });
-  g.translate(0, 0, -1.13 / 2);
-  b.add(g, 'panel');
-  b.colBox(0.46, 0.8, 1.16, [0, 0.4, 0]);
-  // kick recess light + a seam band
-  b.box(0.012, 0.016, 1.05, 'ledBlue', [-s * 0.192, 0.05, 0], null, 0);
-  b.box(0.008, 0.012, 1.1, 'black', [-s * 0.232, 0.4, 0], null, 0);
-  // control deck: tilted toward the pilot
-  const tilt = s * Math.atan2(0.11, 0.36);
-  b.push([-s * 0.01, 0.755, 0], [0, 0, tilt]);
-  b.box(0.3, 0.008, 1.0, 'panelDark', [0, 0.006, 0], null, 0.003);
-  switchPanel(b, R, [0, 0.012, 0.3], [-Math.PI / 2, 0, 0], 4, 3, 0.05);
-  for (let k = 0; k < 3; k++) {
-    b.cyl(0.018, 0.02, 0.022, 'plasticK', [-0.08 + k * 0.08, 0.02, 0.0], null, 14);
-    b.box(0.004, 0.006, 0.014, 'plasticW', [-0.08 + k * 0.08, 0.032, -0.008], null, 0);
-  }
-  b.box(0.2, 0.012, 0.09, 'plasticK', [0, 0.012, -0.12], null, 0.004);
-  for (let i = 0; i < 6; i++) for (let j = 0; j < 3; j++) b.box(0.022, 0.007, 0.022, 'plasticW', [-0.075 + i * 0.03, 0.021, -0.15 + j * 0.03], null, 0.003);
-  for (let k = 0; k < 5; k++) b.box(0.012, 0.008, 0.012, k % 2 ? 'ledGreen' : 'ledAmber', [0.12, 0.014, 0.1 + k * 0.035], null, 0);
-  b.pop();
-}
-
-/**
- * Dash between the console arc and the nose: a matte shelf at the console's back edge that runs
- * forward to the hull, with a padded brow, defrost vents and standby instruments. An invisible
- * curtain over the console's back edge keeps a floating player from drifting into the nose.
- */
-function cockpitDash(b, C, R0, a0, a1) {
-  const yT = 0.775, th = 0.03, rB = R0 + 0.555;
-  const arc = [];
-  const N = 40;
-  for (let i = 0; i <= N; i++) { const a = a0 + (a1 - a0) * (i / N); arc.push([C.x + Math.sin(a) * rB, C.z - Math.cos(a) * rB]); }
-  const zE = arc[N][1];
-  const wall = [];
-  for (let i = 0; i <= 40; i++) {
-    const z = zE + (-13.34 - zE) * (i / 40);
-    const hw = halfWidthAt(z, yT, INSET) - 0.004;
-    if (hw <= 0.02) break;
-    wall.push([hw, z]);
-  }
-  const outline = [...arc, ...wall, ...wall.slice().reverse().map(([x, z]) => [-x, z])];
-  const sh = new THREE.Shape(outline.map(([x, z]) => new THREE.Vector2(x, -z)));
-  const g = new THREE.ExtrudeGeometry(sh, { depth: th, bevelEnabled: false, curveSegments: 4 });
-  g.rotateX(-Math.PI / 2);
-  g.translate(0, yT - th, 0);
-  b.add(g, 'panelDark');
-  b.colMesh(g);
-  // padded brow along the console's back edge
-  const brow = arc.map(([x, z]) => V(x, yT + 0.012, z).add(V(x - C.x, 0, z - C.z).normalize().multiplyScalar(0.03)));
-  b.tube(brow, 0.016, 'wallPad', { radial: 8 });
-  // defrost vent slots along the window base and a row of standby instruments
-  for (let i = -6; i <= 6; i++) {
-    const a = i * 0.12, r = rB + 0.42;
-    const p = V(C.x + Math.sin(a) * r, yT + 0.002, C.z - Math.cos(a) * r);
-    if (halfWidthAt(p.z, yT, INSET) - Math.abs(p.x) < 0.08) continue;
-    b.box(0.11, 0.004, 0.012, 'black', p.toArray(), [0, -a, 0], 0);
-  }
-  for (const a of [-0.33, 0.33]) {
-    // standby instrument pods between the console screens, tilted up toward the pilot
-    const r = rB + 0.13;
-    b.push([C.x + Math.sin(a) * r, yT, C.z - Math.cos(a) * r], [-0.55, -a, 0], [1, 1, 1]);
-    b.box(0.3, 0.1, 0.07, 'panelDark', [0, 0.04, 0], null, 0.012);
-    for (let k = 0; k < 3; k++) gaugeFlat(b, [-0.095 + k * 0.095, 0.05, 0.037], 0.027);
-    b.pop();
-  }
-  // service hatch seams on the shelf
-  for (const sx of [-1, 1]) {
-    const zc = -12.35, xc = sx * 0.9;
-    for (const [w, d, dx, dz] of [[0.42, 0.006, 0, -0.17], [0.42, 0.006, 0, 0.17], [0.006, 0.34, -0.21, 0], [0.006, 0.34, 0.21, 0]]) b.box(w, 0.003, d, 'black', [xc + dx, yT + 0.001, zc + dz], null, 0);
-  }
-  // collision curtain: from the brow up to the hull roof, plus wings out to the hull at the ends
-  const pos = [], idx = [];
-  const col = [...arc.map(([x, z]) => [x, z])];
-  const wingS = [], wingP = [];
-  for (let k = 1; k <= 6; k++) {
-    const t = k / 6, hw = halfWidthAt(zE, 1.2, INSET) + 0.05;
-    wingS.push([arc[N][0] + (hw - arc[N][0]) * t, zE]);
-    wingP.push([arc[0][0] + (-hw - arc[0][0]) * t, zE]);
-  }
-  const path = [...wingP.reverse(), ...col, ...wingS];
-  for (const [x, z] of path) {
-    const [, top] = heightRangeAt(z, Math.max(-2.5, Math.min(2.5, x)), INSET);
-    const yTop = Number.isFinite(top) ? top + 0.1 : 2.6;
-    pos.push(x, yT - 0.05, z, x, yTop, z);
-  }
-  for (let i = 0; i < path.length - 1; i++) { const a = i * 2; idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2); }
-  const cg = new THREE.BufferGeometry();
-  cg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  cg.setIndex(idx);
-  b.colMesh(cg.toNonIndexed());
-}
-
 /**
  * Flat mounting bezel on a hull cabinet's curved front, centred at (zc, yc), w along z, h along y.
  * Returns the x of its face (where a flat plate can be mounted without sinking into the curve).
@@ -221,68 +61,29 @@ function inlineValve(b, p, out, pipeR, wheelR, key) {
   valveWheel(b, s1.toArray(), [0, yaw, 0], wheelR, key);
 }
 
-/** small round instrument set into a face (builder-local, facing +z) */
-function gaugeFlat(b, pos, r) {
-  b.cyl(r, r, 0.012, 'steel', pos, [Math.PI / 2, 0, 0], 18);
-  b.cyl(r * 0.85, r * 0.85, 0.004, 'paper', [pos[0], pos[1], pos[2] + 0.007], [Math.PI / 2, 0, 0], 18);
-  b.box(r * 0.08, r * 0.75, 0.002, 'plasticR', [pos[0] + r * 0.2, pos[1] + r * 0.15, pos[2] + 0.01], [0, 0, -0.7], 0);
-}
-
 export function buildCockpit(b, L) {
   const R = rng(101);
-  const C = V(0, 0, -10.35);
-  const R0 = 1.0;
-  // main console (arc desk)
-  const prof = [[0.0, 0.0], [0.0, 0.58], [-0.1, 0.66], [-0.1, 0.71], [0.02, 0.74], [0.38, 0.84], [0.47, 0.86], [0.56, 0.78], [0.62, 0.0]];
-  consoleSweep(b, C, R0, -1.12, 1.12, prof, 'panel');
-  b.colBox(2.0, 0.85, 0.7, [0, 0.42, -11.55]);
-  b.colBox(0.6, 0.85, 0.9, [-1.0, 0.42, -10.9], [0, 0.9, 0]);
-  b.colBox(0.6, 0.85, 0.9, [1.0, 0.42, -10.9], [0, -0.9, 0]);
-  // kick plate + lighting strip at console base
-  consoleSweep(b, C, R0 - 0.005, -1.1, 1.1, [[0, 0.02], [0, 0.04], [-0.01, 0.04], [-0.01, 0.02]], 'ledBlue', 96);
-  // the nose in front of the console is closed by the dash (no gap to float into)
-  cockpitDash(b, C, R0, -1.12, 1.12);
-  // monitors on the console (slots)
-  const tilt = 0.82;
-  const mons = [['sys', -0.66, 0.44, 0.28], ['nav', 0, 0.56, 0.32], ['cam', 0.66, 0.44, 0.28]];
-  for (const [id, a, w, h] of mons) {
-    const d = V(Math.sin(a), 0, -Math.cos(a));
-    const up = V(0, Math.cos(tilt), 0).addScaledVector(d, Math.sin(tilt)).normalize();
-    const n = d.clone().negate().multiplyScalar(Math.cos(tilt)).add(V(0, Math.sin(tilt), 0)).normalize();
-    const base = C.clone().addScaledVector(d, R0 + 0.43).setY(0.855);
-    const pos = base.clone().addScaledVector(up, h / 2 + 0.02).addScaledVector(n, 0.025);
-    monitorSlot(L, id, pos, n, up, w, h, 'cockpit', id === 'nav' ? 768 : 512);
+  // ---- the wraparound screen (b29Display.js) set into a dark front bulkhead: the cowl over it up
+  // to the ceiling, the skirt under it down to the deck, the wings out to the walls. Nothing of the
+  // old desk, its monitors or the canopy is left: the nose behind is closed
+  const D = B29D;
+  b.add(sphereSection(D.az[0], D.az[1], D.el[1], D.brow, D.R + 0.003, 40, 8), 'armor');
+  b.add(skirtGeometry(), 'armor');
+  b.add(bulkheadGeometry(), 'bulk');
+  // the bezel round the screen and a thin lit line inside it
+  b.tube(borderPoints(D.R - 0.008), 0.016, 'metalDark', { closed: true, radial: 6 });
+  b.tube(borderPoints(D.R - 0.034), 0.004, 'ledBlue', { closed: true, radial: 5 });
+  // the screen's mounting: two struts from the deck behind the skirt (seen in the gap at the sides)
+  for (const s of [-1, 1]) {
+    const p = dispDir(s * 0.9, D.el[0]).multiplyScalar(D.R + 0.06).add(D.C);
+    b.pipe([p.x, 0, p.z], [p.x, p.y + 0.05, p.z], 0.03, 'metalDark');
   }
-  // physical controls on the desk
-  const deskPt = (a, r, dy = 0) => C.clone().addScaledVector(V(Math.sin(a), 0, -Math.cos(a)), R0 + r).setY(0.74 + (r - 0.02) * 0.27 + dy);
-  const deskRot = (a) => [-(Math.PI / 2 - 0.27), -a, 0];
-  for (const a of [-0.42, -0.2, 0.2, 0.42]) switchPanel(b, R, deskPt(a, 0.13).toArray(), deskRot(a), 5, 2, 0.045);
-  // ULTRA guarded switch + alarm silence button (interactive)
-  L.spots.ultra = deskPt(0.06, 0.2, 0.02);
-  L.spots.silence = deskPt(-0.06, 0.2, 0.02);
-  L.spots.deskRot = (a) => deskRot(a);
-  // side consoles: one solid sculpted body whose control deck slopes toward the pilot
-  for (const side of [-1, 1]) {
-    const x = side * 1.36;
-    b.push([x, 0, -10.0], [0, -side * 0.18, 0]);
-    sideConsole(b, R, side);
-    b.pop();
-    const mp = V(x - side * 0.02, 0.98, -10.25);
-    const n = V(-side, 0.35, 0.15).normalize();
-    monitorSlot(L, side < 0 ? 'comms' : 'life', mp, n, V(side * 0.3, 1, 0).normalize(), 0.34, 0.22, 'cockpit');
-    // monitor arm
-    b.cyl(0.02, 0.02, 0.28, 'metal', [x, 0.82, -10.25], null, 8);
-  }
-  // overhead panel
-  b.push([0, 2.12, -9.95], [0.25, 0, 0]);
-  b.box(1.0, 0.13, 0.72, 'panelDark', [0, 0, 0], null, 0.03);
-  switchPanel(b, R, [-0.25, -0.07, 0.05], [Math.PI / 2, 0, 0], 6, 4, 0.05);
-  switchPanel(b, R, [0.25, -0.07, 0.05], [Math.PI / 2, 0, 0], 6, 4, 0.05);
-  b.pop();
-  monitorSlot(L, 'status', V(0, 1.98, -10.33), V(0, -0.55, 1), V(0, 0.83, 0.55), 0.3, 0.14, 'cockpit', 256);
-  // ceiling struts for the overhead panel
-  b.pipe([-0.42, 2.18, -9.7], [-0.42, 2.55, -9.6], 0.025, 'metal');
-  b.pipe([0.42, 2.18, -9.7], [0.42, 2.55, -9.6], 0.025, 'metal');
+  // colliders: the screen, the cowl, the skirt and the bulkhead
+  b.colMesh(sphereSection(D.az[0], D.az[1], D.el[0], D.brow, D.R + 0.01, 24, 12).toNonIndexed());
+  b.colMesh(skirtGeometry().toNonIndexed());
+  b.colMesh(bulkheadGeometry().toNonIndexed());
+  // the ship's pages on the screen
+  displayPanels(L);
 
   // pilot seat
   b.cyl(0.11, 0.16, 0.34, 'metalDark', [0, 0.17, -10.3], null, 16);
@@ -298,35 +99,42 @@ export function buildCockpit(b, L) {
   for (const s of [-1, 1]) {
     b.box(0.09, 0.07, 0.46, 'plasticK', [s * 0.32, 0.62, -10.36], null, 0.025);
     b.box(0.05, 0.16, 0.05, 'metalDark', [s * 0.32, 0.53, -10.15], null, 0.01);
+    // a control pod on the outer side of each armrest (the ULTRA switch, the alarm silence)
+    b.push([s * 0.395, 0.628, -10.43], [0, 0, -s * 0.5]);
+    b.box(0.075, 0.05, 0.13, 'plasticK', [0, 0, 0], null, 0.012);
+    b.box(0.062, 0.004, 0.116, 'panelDark', [0, 0.026, 0], null, 0.002);
+    b.pop();
   }
   b.colBox(0.6, 0.55, 0.6, [0, 0.27, -10.3]);
   b.colBox(0.6, 0.8, 0.15, [0, 0.9, -10.0], [0.2, 0, 0]);
   L.seats.push({ id: 'pilot', eye: V(0, 1.17, -10.42), fwd: V(0, -0.12, -1).normalize(), kind: 'pilot', room: 'cockpit', exit: V(0.75, 0, -9.5) });
   L.spots.stick = V(0.32, 0.66, -10.6);
   L.spots.throttle = V(-0.32, 0.66, -10.58);
+  // ULTRA guarded switch (right pod) + alarm silence button (left pod), facing up and outward
+  for (const [k, s] of [['ultra', 1], ['silence', -1]]) {
+    const n = V(s * Math.sin(0.5), Math.cos(0.5), 0);
+    L.spots[k] = V(s * 0.395, 0.628, -10.43).addScaledVector(n, 0.03);
+    L.spots[k + 'N'] = n;
+    L.spots[k + 'Up'] = V(0, 0, -1);
+  }
 
-  // clutter
-  photoFrame(b, [0.3, 0.98, -11.58], [-0.6, -0.1, 0.05], 'poster1', 0.09, 0.065);
-  b.sphere(0.03, 'plasticY', [-0.42, 0.93, -11.48], 10); // little figure
-  b.cyl(0.02, 0.025, 0.06, 'plasticY', [-0.42, 0.88, -11.48], null, 10);
-  sticker(b, [0.62, 0.77, -11.35], [-1.3, -0.5, 0], 0.07, 0.045);
-  sticker(b, [-0.75, 0.77, -11.28], [-1.3, 0.55, 0], 0.07, 0.045);
-  plantPot(b, R, [1.3, 0.72, -9.55], 0.8);
-  mug(b, [1.22, 0.72, -10.5], 0.4, 'plasticB');
-  b.box(0.22, 0.03, 0.3, 'plasticR', [-1.3, 0.735, -9.6], [0, 0.3, 0], 0.005); // checklist binder
-  b.torus(0.08, 0.012, 'plasticK', [0.4, 1.95, -9.75], [0.2, 0, 0], 16, Math.PI); // headset band
-  b.sphere(0.035, 'plasticK', [0.32, 1.9, -9.75], 10, [1, 1, 0.6]);
-  b.sphere(0.035, 'plasticK', [0.48, 1.9, -9.75], 10, [1, 1, 0.6]);
+  // clutter: a plant on the deck by the wall, the headset hung on the seat
+  plantPot(b, R, [1.45, 0.0, -9.35], 1.25);
+  b.torus(0.08, 0.012, 'plasticK', [0.24, 1.32, -9.98], [1.4, 0, 0], 16, Math.PI); // headset on the seat back
+  b.sphere(0.035, 'plasticK', [0.16, 1.3, -9.97], 10, [0.6, 1, 1]);
+  b.sphere(0.035, 'plasticK', [0.32, 1.3, -9.97], 10, [0.6, 1, 1]);
   // rear storage cabinet + jump seat
   b.box(0.7, 1.0, 0.55, 'panel', [1.65, 0.5, -8.85], null, 0.03, 2, true);
   b.box(0.68, 0.02, 0.53, 'wood', [1.65, 1.01, -8.85], null, 0.005);
   mug(b, [1.5, 1.02, -8.8], 1.2);
   boxStack(b, R, [1.8, 1.02, -8.9], 2);
+  b.box(0.22, 0.03, 0.3, 'plasticR', [1.62, 1.035, -8.72], [0, 0.3, 0], 0.005); // checklist binder
+  photoFrame(b, [1.42, 1.1, -8.62], [0, 0.5, 0], 'poster1', 0.09, 0.065);
   b.box(0.45, 0.08, 0.4, 'fabric', [-1.6, 0.55, -8.65], null, 0.03); // folded jump seat
   b.box(0.45, 0.55, 0.05, 'metalDark', [-1.6, 0.85, -8.47], null, 0.01);
   L.lamps.push({ pos: V(0, 2.25, -10.2), color: 0xfff1dc, intensity: 5.5, room: 'cockpit' });
-  L.lamps.push({ pos: V(0, 0.3, -11.0), color: 0x7fb0ff, intensity: 1.6, room: 'cockpit' });
-  L.lamps.push({ pos: V(0, 1.05, -11.05), color: 0x6fd0ff, intensity: 1.5, room: 'cockpit' });   // screen glow on the pilot
+  L.lamps.push({ pos: V(0, 0.3, -10.9), color: 0x7fb0ff, intensity: 1.2, room: 'cockpit' });
+  L.lamps.push({ pos: V(0, 1.05, -10.95), color: 0x6fd0ff, intensity: 1.6, room: 'cockpit' });   // the screen's glow on the pilot
   L.lamps.push({ pos: V(-1.5, 1.6, -9.6), color: 0xffd2a0, intensity: 1.4, room: 'cockpit' });
   L.lamps.push({ pos: V(1.5, 1.6, -9.6), color: 0xcfe0ff, intensity: 1.4, room: 'cockpit' });
 }
@@ -528,9 +336,7 @@ export function buildStorage(b, L) {
 // ------------------------------------------------------------------ airlock (starboard)
 export function buildAirlock(b, L) {
   const R = rng(606);
-  // suit rack against the forward cross wall
-  b.box(0.7, 0.06, 0.25, 'metalDark', [1.75, 1.85, -2.42], null, 0.01);
-  b.pipe([1.75, 1.85, -2.45], [1.75, 2.2, -2.52], 0.02, 'metal');
+  // the suit's rack against the forward cross wall (machines.js: the turntable, the suit on it)
   L.spots.suit = V(1.75, 0.95, -2.14);
   // bench
   b.box(0.95, 0.06, 0.4, 'panelDark', [1.7, 0.45, 0.32], null, 0.02, 2, true);

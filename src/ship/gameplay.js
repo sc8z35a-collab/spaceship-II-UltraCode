@@ -264,8 +264,8 @@ export class Gameplay {
 
   toggleValve(v) {
     v.open = !v.open;
-    this.g.audio.click(v.pos);
-    if (this.g.audio.ready) this.g.audio._burst(v.pos, { dur: 0.6, freq: 260, q: 2, gain: 0.08, type: 'brown', sweep: v.open ? 1.6 : 0.6 });
+    this.g.audio.mech(v.pos, 'valve', { open: v.open });
+    if (this.g.audio.ready) this.g.audio._burst(v.pos, { dur: 0.6, freq: 260, q: 2, gain: 0.08, type: 'brown', sweep: v.open ? 1.6 : 0.6, when: 0.4 });
   }
 
   /** a leaking segment is isolated when any valve of its system is closed */
@@ -277,14 +277,19 @@ export class Gameplay {
   // ================================================================== airlock / suit / EVA
   breathable(p) { return p > 60; }
 
+  /** B-29's suit on its rack: climb into it (the rack turns it round, in through the back), or
+   * take it off again there. H8's suit goes back to H8's shelter, not here */
   suitTapped() {
-    const g = this.g, pl = g.player;
+    const g = this.g, pl = g.player, S = g.suits;
+    if (!S || S.busy) return;
+    if (pl.suit && pl.suitH8) { g.audio.denied(pl.eyeLocal); g.asphalt.say('suit_h8_here', {}, { minGap: 6, force: true }); return; }
     if (!pl.suit) {
-      this.fadeAction(() => { pl.suit = true; pl.suitO2 = 1; pl.suitFuel = Math.max(pl.suitFuel, 0.98); g.asphalt.say('suit_on', {}, { force: true }); });
+      if (pl.state === 'seated') return;
+      S.don('b29');
     } else {
       const here = g.lifeSupport.pressureAt(pl.pos, pl.outside);
       if (!this.breathable(here)) { g.audio.denied(pl.eyeLocal); return; }
-      this.fadeAction(() => { pl.suit = false; g.asphalt.say('suit_off', {}, { force: true }); });
+      S.doff();
     }
   }
 
@@ -297,12 +302,12 @@ export class Gameplay {
 
   hatchTap() {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
-    if (h.target > 0.5) { h.target = 0; g.audio.doorMotor(h.o.center, false); return; }
+    if (h.target > 0.5) { h.target = 0; g.audio.mech(h.o.center, 'hatch', { open: false }); return; }
     const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
     if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
     if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
     h.target = 1;
-    g.audio.doorMotor(h.o.center, true);
+    g.audio.mech(h.o.center, 'hatch', { open: true });
   }
 
   airlockCycle(mode) {
@@ -370,7 +375,7 @@ export class Gameplay {
       else g.asphalt.say('eva_back', {}, { minGap: 60 });
     }
     if (pl.suit) {
-      pl.suitO2 = Math.max(0, pl.suitO2 - dt / (8 * 3600));
+      // (the oxygen and the charge run down in the suit's own state: suits.js)
       if (pl.suitO2 < 0.15) g.asphalt.say('eva_o2', {}, { minGap: 300 });
       if (pl.outside && pl.suitFuel < 0.15 && !g.flight.landed) g.asphalt.say('fuel_low', {}, { minGap: 300 });
       g.audio.breath(true, 0.24 + (1 - pl.health) * 0.3);

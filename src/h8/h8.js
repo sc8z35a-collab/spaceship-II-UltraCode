@@ -69,6 +69,8 @@ export const JUNCTIONS = {
 // the drive's glow do not
 const PLATES = new Set(['armor', 'armorPlain', 'trim', 'decal']);
 const NO_DENT = new Set(['ledG', 'ledR', 'ledA', 'ledB', 'navR', 'navG', 'strobe', 'flood', 'coil', 'throat', 'dome']);
+// the plates themselves and what lies on them: gone with a plate knocked off
+const ON_TILES = new Set(['armor', 'decal', 'bolt']);
 
 // H8-local points of interest
 const NECK_HATCH = V(0, H8.neckHatchY, H8.shaftZ);
@@ -92,7 +94,7 @@ export class H8Vessel {
     createH8InteriorMaterials(M);
     shelterMaterials(M);
     this.intKeys = new Set(Object.keys(M).filter((k) => !extKeys.has(k)));
-    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k));
+    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k), ON_TILES.has(k));
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
@@ -701,7 +703,7 @@ export class H8Vessel {
     this.attachTo(false);
     this.applyBoost(false);
     this.pilot.startUndock(after);
-    g.audio.impact(V(0, 2.6, PORT.z), 0.18);
+    g.audio.mech(V(0, 2.6, PORT.z), 'clamp', { open: true });
     g.shake = Math.max(g.shake, 0.3);
     this.say(this.crew ? 'hachi_undock_crew' : 'hachi_undock');
     if (!this.crew) setTimeout(() => this.asphalt('h8_undocked'), 3500);
@@ -719,7 +721,8 @@ export class H8Vessel {
     this.latchT = 1.2;
     this.umbTarget = this.power.feedOn ? 1 : 0;
     this.applyBoost(true);
-    g.audio.impact(V(0, 3.0, PORT.z), 0.3);
+    g.audio.impact(V(0, 3.0, PORT.z), 0.16);
+    g.audio.mech(V(0, 3.0, PORT.z), 'clamp', { open: false });
     g.shake = Math.max(g.shake, 0.45);
     this.say('hachi_docked');
     if (!this.metAsphalt) {
@@ -778,7 +781,7 @@ export class H8Vessel {
     this.goalKind = null;
     this.holdBerth();
     this.latchT = 1.2;
-    if (this.crew) { g.audio.impact(V(0, -3.5, 0.8).add(DOCK), 0.3); g.shake = Math.max(g.shake, 0.45); }
+    if (this.crew) { g.audio.impact(V(0, -3.5, 0.8).add(DOCK), 0.16); g.audio.mech(V(0, -3.5, 0.8).add(DOCK), 'clamp', { open: false }); g.shake = Math.max(g.shake, 0.45); }
     this.say('hachi_berthed', { name: s.name });
   }
 
@@ -928,7 +931,7 @@ export class H8Vessel {
     const open = this.hatch.target > 0.5;
     this.hatch.setTarget(open ? 0 : 1);
     this.neckTarget = open ? 0 : 1;
-    g.audio.doorMotor && g.audio.doorMotor(V(0, 2.8, PORT.z), !open);
+    g.audio.mech(V(0, 2.8, PORT.z), 'hatch', { open: !open });
     g.audio.beep(open ? 660 : 990, 0.08, 0.06, { pos: PORT.panel });
   }
 
@@ -972,7 +975,7 @@ export class H8Vessel {
     g.shake = Math.max(g.shake, docked || inShelter ? 3 : 1);
     if (docked) {
       // the blast on B-29's back
-      g.damage.impact(V(0, 3.2, PORT.z), V(0, -1, 0), 5.0e6, { normal: V(0, 1, 0) });
+      g.damage.impact(V(0, 3.2, PORT.z), V(0, -1, 0), 5.0e6, { normal: V(0, 1, 0), snap: true });
       g.systems.onImpact(5.0e6, V(0, 3.2, PORT.z));
       g.flight.mul = 1; g.flight.aExtra = 0; g.flight.extMass = 0; g.flight.extTank = null; g.flight.extHealth = 0; g.flight.boostDamp = false; g.flight.turnK = g.flight.spec.turnK;
     }
@@ -1329,8 +1332,11 @@ export class H8Vessel {
     // ---- hatches, air, umbilical
     this.updateHatches(sdt);
     this.updateAir(sdt);
+    const umb0 = this.umb;
     this.umb += (((this.umbTarget || 0) > 0.5 && this.mode === 'docked' ? 1 : 0) - this.umb > 0 ? 1 : -1) * sdt / 3.5;
     this.umb = Math.max(0, Math.min(1, this.umb));
+    // (the umbilical's drive as it sets off)
+    if ((umb0 === 0 || umb0 === 1) && this.umb !== umb0 && g.audio.ready) g.audio.mech(V(0.5, 3.0, PORT.z + 0.9), 'fold', { open: this.umb > umb0, dur: 3.5 });
     // ---- pending release (after the hatches shut)
     if (this.pending && this.pending.kind === 'release' && this.hatch.open <= 0 && this.neckOpen <= 0) this.unlatch(this.pending.after);
     // ---- B-29 coming to H8 by its own autopilot: HACHI takes over the last stretch
@@ -1370,6 +1376,8 @@ export class H8Vessel {
     }
     // ---- radiators fold up while B-29 docks at (or lies at) a station's berth
     const fold = this.mode === 'docked' && g.docking && g.docking.state !== 'free' ? 1 : 0;
+    if (this._foldWas !== undefined && fold !== this._foldWas && g.audio.ready) for (const sx of [-1, 1]) g.audio.mech(V(sx * (H8.R + 0.1), 0, 0).add(DOCK), 'fold', { open: !fold, dur: 2.6, pitch: sx > 0 ? 1 : 1.04 });
+    this._foldWas = fold;
     this.radFold += (fold - this.radFold) * Math.min(1, sdt * 0.6);
     // ---- point defence (and the pair's evasive step for the big ones)
     this.pointDefence(sdt);
@@ -1550,7 +1558,7 @@ export class H8Vessel {
     if (this.floorHatch !== fh0) {
       const k = this.floorHatch * this.floorHatch * (3 - 2 * this.floorHatch);
       this.floorCol.body.setNextKinematicTranslation({ x: hx + k * (FLOOR.hatchR * 2 + 0.1), y: hy - 0.03 - 0.06 * Math.min(1, this.floorHatch * 5), z: hz });
-      if ((fh0 === 0 || fh0 === 1) && this.g.audio.doorMotor) this.g.audio.doorMotor(V(hx, hy, hz), want > 0.5);
+      if (fh0 === 0 || fh0 === 1) this.g.audio.mech(V(hx, hy, hz), 'hatch', { open: want > 0.5, dur: 0.9 });
     }
   }
 
@@ -1727,24 +1735,20 @@ export class H8Vessel {
   lockerTapped() {
     const g = this.g, pl = g.player, LK = this.shelter.locker, GP = g.gameplay;
     if (!(pl.state === 'seated' && pl.seat === this.shelter.seat)) { this.say('hachi_suit_where', {}, { minGap: 6 }); return; }
+    const S = g.suits;
+    if (!S || S.busy) return;
+    void GP;
     if (pl.suit && pl.suitH8) {
       const z = g.lifeSupport.z.h8shelter;
       const kPa = z ? z.n2 + z.o2 + z.co2 : 0;
       if (kPa < 60) { g.audio.denied(pl.eyeLocal); this.say('hachi_suit_keep', {}, { minGap: 6 }); return; }
-      this.setSuitShutter(true);
-      GP.fadeAction(() => { pl.suit = false; pl.suitH8 = false; pl.suitKit = { patches: 4, parts: 6 }; this.say('hachi_suit_off', {}, { force: true }); setTimeout(() => this.setSuitShutter(false), 1800); });
+      pl.suitKit = { patches: 4, parts: 6 };
+      S.doff();
       return;
     }
     if (pl.suit) { g.audio.denied(pl.eyeLocal); return; }      // already in B-29's suit
-    if (LK.target < 0.5 || LK.open < 0.95) {
-      if (LK.target < 0.5) { this.setSuitShutter(true); this.say('hachi_suit_out', {}, { minGap: 5 }); }
-      return;
-    }
-    GP.fadeAction(() => {
-      pl.suit = true; pl.suitH8 = true; pl.suitO2 = 1; pl.suitFuel = Math.max(pl.suitFuel, 0.98);
-      this.say('hachi_suit_on', {}, { force: true });
-      setTimeout(() => this.setSuitShutter(false), 1200);
-    });
+    // (the shutter opens and the carriage brings the suit out to the seat: suits.js runs it)
+    S.don('h8');
   }
 
   /**
@@ -1823,7 +1827,7 @@ export class H8Vessel {
         this.armourHit(E * 0.5, nE.clone().negate().applyQuaternion(_q2.copy(f.quat).invert()));
         if (what === 'b29') {
           const pLocal = f.pos.clone().addScaledVector(nE, -H8.R).sub(g.flight.pos).applyQuaternion(_q.copy(g.flight.quat).invert());
-          g.damage.impact(pLocal, nE.clone().applyQuaternion(_q.copy(g.flight.quat).invert()), E * 0.3);
+          g.damage.impact(pLocal, nE.clone().negate().applyQuaternion(_q.copy(g.flight.quat).invert()), E * 0.3, { snap: true });
           g.systems.onImpact(E * 0.3, pLocal);
         }
         if (this.crew) g.shake = Math.max(g.shake, Math.min(3, 0.6 + vn * vn * 0.3));
@@ -2608,6 +2612,7 @@ export class H8Vessel {
     const g = this.g;
     if (!c) return;
     if (c.kind === 'body') { this.say('hachi_goto_far', { name: c.name }, { minGap: 3 }); return; }
+    if (c.kind === 'kaito') { this.callToKaito(); return; }
     if (this.mode === 'docked') {
       const ok = c.kind === 'station' && c.ref ? g.autopilot.engage(c.ref.id) : g.autopilot.engageObj(this.targetObj(c));
       this.say(ok ? 'hachi_goto' : 'hachi_goto_no', { name: c.name }, { minGap: 2 });
@@ -2625,6 +2630,18 @@ export class H8Vessel {
     this.goalKind = 'target';
     this.goalId = c.id;
     this.say('hachi_goto', { name: c.name }, { minGap: 2 });
+  }
+
+  /** Kaito out in his suit calls H8 over: it casts off if it must and comes to hold by him */
+  callToKaito() {
+    const g = this.g;
+    if (!g.suits) return;
+    const c = { kind: 'kaito', name: 'カイト' };
+    if (this.mode === 'docked') { this.release({ goto: c }); return; }
+    if (this.berthAt) { this.unberth({ goto: c }); return; }
+    this.wake();
+    this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.playerEci(pos); if (vel) vel.copy(g.flight.vel); return pos; }, standoff: 25, onArrive: () => this.say('hachi_kaito_here', {}, { force: true }) });
+    this.goalKind = 'kaito';
   }
 
   /** a lock as a target B-29's autopilot can fly to (it moves: followed as it goes) */

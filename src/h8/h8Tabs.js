@@ -404,7 +404,7 @@ export class H8Tabs {
     const holes = v.hull.dents.filter((d) => d.hole && !d.patched).length;
     const integ = Math.round((v.armour.outer * 0.45 + v.armour.inner * 0.4 + (v.circuitHealth ? v.circuitHealth() : 1) * 0.15) * 100);
     K.text(`機体 ${integ}%`, 14, 30, { size: 22, color: integ < 50 ? COL.red : COL.text, weight: 700 });
-    K.text(`被弾 ${v.hits}  へこみ ${v.hull.dents.length}  貫通 ${holes}`, 498, 28, { size: 14, color: holes ? '#ff8a7a' : COL.dim, align: 'right' });
+    K.text(`被弾 ${v.hits}  へこみ ${v.hull.dents.length}  貫通 ${holes}  装甲板脱落 ${v.hull.tiles.length}`, 498, 28, { size: 14, color: holes ? '#ff8a7a' : COL.dim, align: 'right' });
     let y = 42;
     y = this.row(K, y, '外部装甲', v.armour.outer, `${Math.round(v.armour.outer * 100)}%`, COL.green, v.armour.outer < 0.35);
     y = this.row(K, y, '内部装甲', v.armour.inner, `${Math.round(v.armour.inner * 100)}%`, COL.green, v.armour.inner < 0.5);

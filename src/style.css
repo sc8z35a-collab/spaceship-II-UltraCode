@@ -168,3 +168,39 @@ html, body {
   background: rgba(150, 40, 25, 0.75); border: 1px solid rgba(255, 150, 120, 0.6); border-radius: 999px; padding: 1vh 2vh;
 }
 #msl-ask button[data-k="no"] { background: rgba(40, 48, 64, 0.8); border-color: rgba(170, 190, 220, 0.45); }
+
+/* ---------- the suit's visor display ---------- */
+#visor { display: none; position: absolute; inset: 0; z-index: 12; pointer-events: none; }
+#visor.on { display: block; }
+#visor canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#visor .vz-bar {
+  position: absolute; left: 50%; bottom: 3.2vh; transform: translateX(-50%); display: flex; gap: 1vh; pointer-events: auto;
+}
+#visor.busy .vz-bar, #visor.busy .vz-cam, #visor.busy .vz-call { display: none; }
+#visor button {
+  font: 600 clamp(10px, 2.1vh, 13px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #eaf4ff;
+  background: rgba(20, 40, 64, 0.45); border: 1px solid rgba(150, 210, 255, 0.45); border-radius: 999px; padding: 0.9vh 1.7vh;
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+}
+#visor button:active { background: rgba(110, 170, 240, 0.45); }
+#visor button.red { background: rgba(130, 30, 20, 0.55); border-color: rgba(255, 140, 110, 0.6); }
+#visor button.dim { background: rgba(40, 46, 58, 0.6); border-color: rgba(170, 190, 220, 0.35); }
+#visor .vz-bar button:nth-child(1), #visor .vz-bar button:nth-child(6) { transform: translateY(-1.4vh) rotate(var(--r, 0deg)); }
+#visor .vz-bar button:nth-child(1) { --r: -6deg; }
+#visor .vz-bar button:nth-child(6) { --r: 6deg; }
+#visor .vz-bar button:nth-child(2) { transform: translateY(-0.4vh) rotate(-3deg); }
+#visor .vz-bar button:nth-child(5) { transform: translateY(-0.4vh) rotate(3deg); }
+#visor .vz-call {
+  display: none; position: absolute; left: 50%; top: 30vh; transform: translateX(-50%); pointer-events: auto;
+  flex-direction: column; gap: 1.2vh; padding: 1.8vh 2.4vh; border-radius: 1.6vh; background: rgba(40, 10, 8, 0.6); border: 1.5px solid rgba(255, 130, 100, 0.55);
+}
+#visor.calling .vz-call { display: flex; }
+#visor .vz-call .vz-t { font: 700 clamp(11px, 2.4vh, 15px) -apple-system, "Hiragino Sans", sans-serif; color: #ffd9cf; text-align: center; }
+#visor .vz-cam { display: none; position: absolute; right: 3vh; top: 18vh; bottom: 16vh; width: 9vh; pointer-events: auto; flex-direction: column; align-items: center; gap: 1.2vh; }
+#visor.cam .vz-cam { display: flex; }
+#visor.cam .vz-bar { display: none; }
+#visor .vz-slider { position: relative; flex: 1; width: 1.2vh; border-radius: 1vh; background: rgba(150, 210, 255, 0.25); touch-action: none; }
+#visor .vz-knob { position: absolute; left: 50%; width: 4.4vh; height: 2.4vh; margin: 0 0 -1.2vh -2.2vh; border-radius: 1.2vh; background: rgba(230, 245, 255, 0.85); }
+#visor button.shoot { width: 8vh; height: 8vh; border-radius: 50%; padding: 0; background: rgba(255, 255, 255, 0.75); border: 0.6vh solid rgba(255, 255, 255, 0.35); }
+#visor .vz-hatch { display: none; position: absolute; left: 50%; top: 58vh; transform: translateX(-50%); pointer-events: auto; font-size: clamp(12px, 2.8vh, 16px) !important; padding: 1.4vh 3vh !important; background: rgba(30, 110, 60, 0.55) !important; border-color: rgba(140, 255, 170, 0.6) !important; }
+#visor.hatch .vz-hatch { display: block; }

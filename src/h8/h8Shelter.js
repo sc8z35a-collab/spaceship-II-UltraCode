@@ -282,12 +282,16 @@ export class H8Shelter {
     niche.name = 'h8SuitNiche';
     this.niche = new THREE.Group();
     this.niche.add(niche);
-    // H8's own suit (racked: no one in it), facing the seat
+    // H8's own suit (racked: no one in it), facing the seat, on the niche's carriage (it runs out
+    // toward the seat and turns the suit round to be climbed into: suits.js)
     try {
       this.suit = buildSuit(SUITS.h8, { wearer: false });
-      this.suit.root.position.set(xo + 0.24, N.y0, (N.z0 + N.z1) / 2);
-      this.suit.root.rotation.y = Math.PI / 2;
-      this.niche.add(this.suit.root);
+      this.suitPivot = new THREE.Group();
+      this.suitPivot.position.set(xo + 0.24, N.y0, (N.z0 + N.z1) / 2);
+      this.suitX0 = xo + 0.24;
+      this.suitPivot.rotation.y = Math.PI / 2;
+      this.suitPivot.add(this.suit.root);
+      this.niche.add(this.suitPivot);
     } catch (e) { console.warn('suit model', e); this.suit = null; }
     this.niche.visible = false;
     this.group.add(this.niche);
@@ -776,8 +780,23 @@ export class H8Shelter {
     this.shutter.visible = lo < 0.995;
     this.niche.visible = this.group.visible && L.open > 0.002;
     M.nicheLamp.emissiveIntensity = 2.0 * lo;
-    const pl = v.g.player;
-    if (this.suit) this.suit.root.visible = !(pl.suit && pl.suitH8);
+    const pl = v.g.player, SU = v.g.suits;
+    const seq = SU && SU.seq && SU.seq.kind === 'h8';
+    if (this.suit) this.suit.root.visible = !(pl.suit && pl.suitH8) || !!seq;
+    // (while it goes on or comes off the niche stays lit and open)
+    if (seq) this.niche.visible = this.group.visible;
+  }
+
+  /** the niche as the suit's rack (suits.js): the carriage runs out 0.25 m toward the seat; the
+   * shutter opens for it and closes again after */
+  suitRack(suits) {
+    if (!this.suit) return;
+    const v = this.v;
+    suits.setRack('h8', this.suit, this.suitPivot, Math.PI / 2, {
+      slide: (k) => { this.suitPivot.position.x = this.suitX0 - 0.25 * k; },
+      onStart: () => v.setSuitShutter(true),
+      onEnd: () => setTimeout(() => v.setSuitShutter(false), 600),
+    });
   }
 
   /** the lamp in the light pool (dim; nothing more in here) */
