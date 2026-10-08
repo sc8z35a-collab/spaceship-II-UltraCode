@@ -5,7 +5,7 @@
 //                    3 holed through: the blanket gone, the frames and cables bare, the pressure
 //                      hull's dark wall at the bottom, the edges glowing (on the belly the stages
 //                      are the tile's glaze, the tile, then the skin under it)
-//   H8 (5 stages)    1 the coating burned off the armour   2 the ceramic face spalled and cracked
+//   H8 (5 stages)    1 its hexagonal plate knocked off     2 the ceramic face spalled and cracked
 //                    3 the ceramic gone, the woven backing  4 the backing torn, the titanium
 //                    honeycomb under it                     5 holed through to the inner wall
 //   drones (3)       1 the paint chipped off the plate   2 the plate torn   3 holed, the insides
@@ -152,8 +152,9 @@ const PALETTE = {
     floor: /* glsl */`
       float n1 = mix(0.5, stN(q * 60.0 + seed * 13.0), fine), n2 = stN(q * 15.0 - seed * 7.0), n3 = mix(0.5, stN(q * 160.0 + seed), fine);
       if (k == 1) {
-        // the armour's own steel, the coating burned off it: heat colours, grit-blasted
-        col = vec3(0.56, 0.57, 0.6) * (0.85 + 0.15 * n3);
+        // the plate knocked off: the steel of the layer under it, scorched where the round went
+        // on into it, heat colours round that
+        col = vec3(0.42, 0.43, 0.46) * (0.85 + 0.15 * n3);
         vec3 temper = mix(vec3(0.82, 0.66, 0.4), vec3(0.4, 0.34, 0.66), smoothstep(0.3, 0.8, n2 + (1.0 - rr) * 0.3));
         col = mix(col, col * temper * 1.25, 0.6 * (1.0 - smoothstep(0.2, 0.9, rr)));
         rough = 0.36 + 0.15 * n1; metal = 0.9; h = (n3 - 0.5) * 0.0004;

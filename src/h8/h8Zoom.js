@@ -7,9 +7,9 @@
 // smoothly, the slower the further in they are zoomed. It is worked like a camera: pinch or the
 // zoom buttons, the zoom ring at the bottom of the view (drag it like a lens ring), the shutter
 // (photos), and auto-follow — which keeps the chosen target (any tracked thing; the focus unless
-// Kaito picks another in the camera tab) in the middle of the view and sizes it to fill a good
-// part of it, turning Kaito's head (and the seat with it) to stay on it. A drag to look elsewhere
-// hands the view back to him.
+// Kaito picks another in the camera tab) in the middle of the view and sizes it to fill three
+// quarters of the view's height, turning Kaito's head (and the seat with it) to stay on it. A drag
+// to look elsewhere hands the view back to him.
 import * as THREE from 'three';
 import { spring1 } from '../core/spring.js';
 
@@ -134,11 +134,11 @@ export class H8Zoom {
       } else this.target = live;
       const T = this.target;
       if (T && pl && pl.state === 'seated') {
-        // sized to fill about a seventh of the view's height (the whole of it: its hull's size)
+        // sized big: the whole of it (its hull's size) across three quarters of the view's height
         const R = v.hud ? v.hud.radiusOf(T) : (T.R || 5);
         const ang = 2 * Math.atan(R / Math.max(1, T.dist));
         const fov = v.g.engine.baseVFov ? v.g.engine.baseVFov() * Math.PI / 180 : 1.0;
-        this.zT = Math.max(1.5, Math.min(Z_MAX, fov * 0.16 / Math.max(1e-7, ang)));
+        this.zT = Math.max(1.5, Math.min(Z_MAX, fov * 0.75 / Math.max(1e-7, ang)));
       }
     }
     // the magnification on a spring in log space: the optical part is driven by the lens motor

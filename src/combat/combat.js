@@ -247,6 +247,8 @@ export class Combat {
     add('b29', g.flight, g.flight.pos, g.flight.vel, 20);
     if (g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'pod' && g.h8.mode !== 'lost') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
     if (g.drones) for (const d of g.drones.list) if (d.alive) add('drone', d, d.pos, d.vel, d.R);
+    // H8's K3 robots out of their bay (a small cube; on H8's hull they are part of H8)
+    if (g.h8 && g.h8.k3) for (const u of g.h8.k3.free()) add('k3', u, u.pos, u.vel, 0.32);
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) add('rock', a, a.pos, a.vel, a.radius);
     // (a missile as the drones' guns see it: their shells carry proximity fuses against missiles —
     // one that goes off within six metres counts; six bring it down)
@@ -471,6 +473,8 @@ export class Combat {
       }
     } else if (tg.kind === 'drone') {
       g.drones.damage(tg.ref, R.drone * Math.min(1.5, Ek), hit, r);
+    } else if (tg.kind === 'k3') {
+      if (g.h8 && g.h8.k3) g.h8.k3.hit(tg.ref, R.E * Ek, hit);
     } else if (tg.kind === 'rock') {
       const a = tg.ref;
       a.hp = (a.hp ?? Math.pow(a.radius / 0.5, 3) * 0.6) - R.rock;

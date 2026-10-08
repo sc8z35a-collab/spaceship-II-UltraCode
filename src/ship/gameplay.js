@@ -972,6 +972,7 @@ export class Gameplay {
         g.h8.armour.outer = 1; g.h8.armour.inner = 1;
         if (g.h8._leak) { g.lifeSupport.removeLeak(g.h8._leak); g.h8._leak = null; }
         g.h8.hull.repairAll();
+        if (g.h8.k3) g.h8.k3.restock();
         g.h8.flight.tank.kg = g.h8.flight.tank.cap;
         g.h8.air = { o2: 650, n2: 1500 };
         for (const k of Object.keys(g.h8.circuits)) g.h8.circuits[k] = 1;

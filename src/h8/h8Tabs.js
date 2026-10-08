@@ -37,7 +37,7 @@ const RT = Math.PI * 2;
  * w, h: size in degrees) */
 const DEFS = [
   { id: 'ops', title: '操縦', az: -44, el: 12, w: 56, h: 44, open: true, color: AMBER, pages: [['nav', '航法'], ['drive', '推進・電力'], ['wpn', '兵装'], ['cam', 'カメラ']] },
-  { id: 'ship', title: '機体', az: 44, el: 12, w: 56, h: 44, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['gear', '装備']] },
+  { id: 'ship', title: '機体', az: 44, el: 12, w: 56, h: 44, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['k3', 'K3'], ['gear', '装備']] },
 ];
 /** the tabs' text: a little larger than the pages ask for, and brighter (the dim greys lifted, the
  * colours lit up) — drawn by the display, it has to read at a glance */
@@ -364,6 +364,7 @@ export class H8Tabs {
       }
       case 'hachi': return { text: v.hachiLine ? v.hachiLine() : '' };
       case 'gear': return { text: v.gearLine ? v.gearLine() : (v.suitLine ? v.suitLine() : '') };
+      case 'k3': return { text: v.k3 ? v.k3.line() : '', warn: !!(v.k3 && v.k3.units.some((u) => u.state === 'dead' || u.state === 'lost')) };
       default: return { text: '' };
     }
   }
@@ -653,6 +654,11 @@ export class H8Tabs {
   body_hachi(K, H) {
     const v = this.v;
     if (v.drawHachi) v.drawHachi(K, H);
+  }
+
+  body_k3(K, H) {
+    const v = this.v;
+    if (v.k3) v.k3.drawTab(K, H, this);
   }
 
   body_gear(K, H) {

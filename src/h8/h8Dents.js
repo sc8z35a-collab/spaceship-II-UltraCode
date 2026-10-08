@@ -16,6 +16,7 @@ import { LAYER_NEAR } from '../core/layers.js';
 import { Pockmarks } from '../combat/pockmarks.js';
 import { CAM_DEAD } from './h8Display.js';
 import { armourTileAt, armourTileGeometry } from './h8Exterior.js';
+import { HEX, hexAt } from './h8Hex.js';
 import { StrikeSet, H8_STRIKE_U, strikeGLSL, ST_BUMP, strikeDebris } from '../combat/strikes.js';
 
 export const DENT_MAX = 32;
@@ -24,10 +25,12 @@ const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 // the dents and the knocked-off plates in a small float texture (one column each):
 //   row 0  dir.xyz, angular radius     row 2  soot, seed, -, -
-//   row 1  depth, lip, heat, hole      row 3  plate gone: band, index, plates in the band, heat
+//   row 1  depth, lip, heat, hole      row 3  plate gone: its tile's point xyz, heat
+//   rows 4-9  that tile's neighbours' points (xyz, 1; 0 where it has only five)
 const TW = Math.max(DENT_MAX, TILE_MAX);
-const dentData = new Float32Array(TW * 4 * 4);
-const dentTex = new THREE.DataTexture(dentData, TW, 4, THREE.RGBAFormat, THREE.FloatType);
+const TH = 10;
+const dentData = new Float32Array(TW * TH * 4);
+const dentTex = new THREE.DataTexture(dentData, TW, TH, THREE.RGBAFormat, THREE.FloatType);
 dentTex.minFilter = dentTex.magFilter = THREE.NearestFilter;
 dentTex.generateMipmaps = false;
 dentTex.needsUpdate = true;
@@ -114,18 +117,20 @@ const fragDent = (plate, tiles) => /* glsl */`
 float dSoot = 0.0, dBare = 0.0, dCrack = 0.0;
 vec3 dGlow = vec3(0.0);
 ${tiles ? `{
-  // a plate knocked off: none of it is left (its bolts and markings go with it)
+  // a plate knocked off: none of it is left (its bolts and markings go with it) — wherever its
+  // tile's point is nearer than each of its neighbours'
   vec3 u = normalize(vH8P);
-  float lat = asin(clamp(u.y, -1.0, 1.0));
-  float lon = atan(u.x, -u.z);
-  float bi = floor((lat + ${LATMAX.toFixed(6)}) / ${(2 * LATMAX / 16).toFixed(6)});
   for (int k = 0; k < ${TILE_MAX}; k++) {
     if (k >= uTileN) break;
     vec4 T = texelFetch(tH8Dent, ivec2(k, 3), 0);
-    if (abs(T.x - bi) > 0.5) continue;
-    float dl = 6.2831853 / T.z;
-    float ii = floor(mod(lon - mod(bi, 2.0) * dl * 0.5, 6.2831853) / dl);
-    if (abs(ii - T.y) < 0.5) discard;
+    float dc = dot(u, T.xyz);
+    if (dc < 0.95) continue;
+    bool inside = true;
+    for (int j = 0; j < 6; j++) {
+      vec4 Nb = texelFetch(tH8Dent, ivec2(k, 4 + j), 0);
+      if (Nb.w > 0.5 && dot(u, Nb.xyz) > dc) { inside = false; break; }
+    }
+    if (inside) discard;
   }
 }` : ''}
 {
@@ -245,7 +250,7 @@ export class H8Hull {
   constructor(vessel) {
     this.v = vessel;
     this.dents = [];          // { dir, a, a0, depth, lip, heat, hole, soot, seed, E }
-    this.tiles = [];          // plates knocked off: { bi, i, n, heat }
+    this.tiles = [];          // plates knocked off: { id (h8Hex tile), heat }
     this.tileHits = new Map();
     this.cams = [1, 1, 1, 1];
     this.petals = [];
@@ -313,8 +318,14 @@ export class H8Hull {
     // it further at once); its pieces and sparks fly off it
     if (shot || E > 2e6) {
       const p = d.clone().multiplyScalar(PLATE_OUT);
+      const travel = d.clone().negate().add(new THREE.Vector3().randomDirection().multiplyScalar(0.3)).normalize();
       const res = this.strikes.hit(p, d, d.clone().negate(), E);
-      if (!this.restoring) strikeDebris(this.debrisCtx(), res, p.clone().addScaledVector(d, 0.01), d, d.clone().negate().add(new THREE.Vector3().randomDirection().multiplyScalar(0.3)).normalize(), E);
+      if (!this.restoring) strikeDebris(this.debrisCtx(), res, p.clone().addScaledVector(d, 0.01), d, travel, E);
+      // the first stage: the hexagonal plate it struck is knocked clean off its bolts (the dark
+      // layer under it takes the next ones); the deeper it goes the more of the plates round it
+      // are undermined and go too
+      if (res.to >= 1 && !this.restoring) this.peelAt(d, E, travel);
+      if (res.to >= 2 && res.from < res.to && !this.restoring) this.undermine(res.site);
       // through all five: the armour round the hole torn into petals curling into it
       if (res.to >= this.strikes.stages && res.from < this.strikes.stages) this.strikePetals(res.site);
     }
@@ -372,9 +383,9 @@ export class H8Hull {
   /** a blow on the plate under d: enough of them and its bolts shear — it is knocked off */
   plateBlow(d, E) {
     const t = armourTileAt(d);
-    if (!t || this.tiles.length >= TILE_MAX) return;
-    if (this.tiles.some((x) => x.bi === t.bi && x.i === t.i)) return;
-    const key = t.bi * 1000 + t.i;
+    if (!t || t.red || this.tiles.length >= TILE_MAX) return;
+    if (this.tiles.some((x) => x.id === t.id)) return;
+    const key = t.id;
     const acc = (this.tileHits.get(key) || 0) + E;
     this.tileHits.set(key, acc);
     if (this.tileHits.size > 200) this.tileHits.delete(this.tileHits.keys().next().value);
@@ -382,8 +393,32 @@ export class H8Hull {
     if (acc > hold) this.popTile(t);
   }
 
-  popTile(t, quiet = false) {
-    this.tiles.push({ bi: t.bi, i: t.i, n: t.n, heat: quiet ? 0 : 1 });
+  /** the plate on the spot a round struck is knocked off: the first stage of every strike on H8
+   * (the red hatch of the K3 bay stays: it is built to) */
+  peelAt(d, E, travel) {
+    const t = armourTileAt(d);
+    if (!t || t.red || this.tiles.length >= TILE_MAX || this.tiles.some((x) => x.id === t.id)) return null;
+    this.popTile(t, false, { travel, E });
+    return t;
+  }
+
+  /** a crater undermines the plates round it: those it reaches under (their middles within its
+   * radius and half a plate) go too */
+  undermine(site) {
+    const R = (site.Rt || site.R || 0.2) + 0.4;
+    const n = site.n.clone().normalize();
+    const t0 = hexAt(n);
+    if (t0 < 0) return;
+    for (const j of HEX.tiles[t0].nb) {
+      const T = HEX.tiles[j];
+      if (T.excluded || T.red || this.tiles.some((x) => x.id === j) || this.tiles.length >= TILE_MAX) continue;
+      if (T.c.angleTo(n) * H8.R < R) this.popTile({ id: j, cdir: T.c, equator: T.equator, tile: T }, false, { travel: n.clone().negate() });
+    }
+  }
+
+  popTile(t, quiet = false, o = {}) {
+    if (t.red) return;
+    this.tiles.push({ id: t.id, heat: quiet ? 0 : 1 });
     this.sync();
     if (quiet) return;
     const v = this.v, g = v.g;
@@ -402,10 +437,13 @@ export class H8Hull {
       }
       const mesh = new THREE.Mesh(geo, t.equator ? this.tileMatO : this.tileMat);
       const vel = (v.mode === 'docked' ? g.flight.vel : f.vel).clone();
-      const out = t.cdir.clone().multiplyScalar(2 + Math.random() * 5).add(new THREE.Vector3().randomDirection().multiplyScalar(0.8));
+      // knocked off its bolts: out off the hull, a round's push in it, spinning (a round: harder)
+      const kick = o.E ? Math.min(14, 3 + Math.sqrt(o.E / 2e5) * 2.5) : 2 + Math.random() * 5;
+      const out = t.cdir.clone().multiplyScalar(kick * (0.7 + 0.5 * Math.random())).add(new THREE.Vector3().randomDirection().multiplyScalar(0.8));
+      if (o.travel) out.addScaledVector(o.travel, kick * 0.35);
       g.combat.addWreck(mesh, c.clone().applyQuaternion(f.quat).add(f.pos), vel.add(out.applyQuaternion(f.quat)), 45, 1.2);
       const w = g.combat.wrecks[g.combat.wrecks.length - 1];
-      if (w) { w.q.copy(f.quat); w.spin = 1 + Math.random() * 3; }
+      if (w) { w.q.copy(f.quat); w.spin = (o.E ? 3 : 1) + Math.random() * 4; }
     }
     if (g && g.audio && g.audio.ready && (v.crew || v.mode === 'docked')) {
       const ap = p.clone().multiplyScalar(0.9).add(H8.dockAt);
@@ -488,7 +526,12 @@ export class H8Hull {
       put(1, i, d.depth, d.lip, d.heat, d.hole);
       put(2, i, d.soot, d.seed, 0, 0);
     }
-    for (let k = 0; k < m; k++) { const t = this.tiles[k]; put(3, k, t.bi, t.i, t.n, t.heat); }
+    for (let k = 0; k < m; k++) {
+      const t = this.tiles[k], T = HEX.tiles[t.id];
+      if (!T) continue;
+      put(3, k, T.c.x, T.c.y, T.c.z, t.heat);
+      T.nb.forEach((j, q) => { if (q < 6) { const N = HEX.tiles[j].c; put(4 + q, k, N.x, N.y, N.z, 1); } });
+    }
     DENT_U.uDentN.value = n;
     DENT_U.uTileN.value = m;
     dentTex.needsUpdate = true;
@@ -519,7 +562,7 @@ export class H8Hull {
   serialize() {
     return {
       d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E, d.a0 || d.a].map((x) => +x.toFixed(5))),
-      t: this.tiles.map((t) => [t.bi, t.i]),
+      t: this.tiles.map((t) => t.id),
       cams: this.cams.slice(), p: this.pocks.serialize(160), st: this.strikes.serialize(),
     };
   }
@@ -532,13 +575,17 @@ export class H8Hull {
       this.dents.push(d);
       if (d.hole) this.addPetals(d);
     }
-    for (const [bi, i] of s.t || []) {
-      // (the plate's direction back from its place in the grid)
-      const la = -LATMAX + (2 * LATMAX / 16) * (bi + 0.5);
-      const n = Math.max(6, Math.round(2 * Math.PI * H8.R * Math.cos(la) / 1.05));
-      const lon = ((bi % 2) * 0.5 + i + 0.5) * (2 * Math.PI / n);
-      const t = armourTileAt(V(Math.cos(la) * Math.sin(lon), Math.sin(la), -Math.cos(la) * Math.cos(lon)));
-      if (t && this.tiles.length < TILE_MAX) this.tiles.push({ bi: t.bi, i: t.i, n: t.n, heat: 0 });
+    for (const e of s.t || []) {
+      let t = null;
+      if (Array.isArray(e)) {
+        // (an old save's plate, from its place in the latitude-band grid of then)
+        const [bi, i] = e;
+        const la = -LATMAX + (2 * LATMAX / 16) * (bi + 0.5);
+        const n = Math.max(6, Math.round(2 * Math.PI * H8.R * Math.cos(la) / 1.05));
+        const lon = ((bi % 2) * 0.5 + i + 0.5) * (2 * Math.PI / n);
+        t = armourTileAt(V(Math.cos(la) * Math.sin(lon), Math.sin(la), -Math.cos(la) * Math.cos(lon)));
+      } else if (HEX.tiles[e] && !HEX.tiles[e].excluded) t = { id: e, red: HEX.tiles[e].red };
+      if (t && !t.red && this.tiles.length < TILE_MAX && !this.tiles.some((x) => x.id === t.id)) this.tiles.push({ id: t.id, heat: 0 });
     }
     if (s.cams) this.cams = s.cams.slice(0, 4);
     this.pocks.restore(s.p);

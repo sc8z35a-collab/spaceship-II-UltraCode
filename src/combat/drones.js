@@ -311,6 +311,10 @@ export class Drones {
       // never ram: a hard push away inside 120 m
       if (dist < 120 + T.R) acc.addScaledVector(rel.clone().normalize(), -d.G.a);
       aimAt = T;
+      // H8's repair robots flying round it: the drones know what they are (they keep H8 going) and
+      // the better ones turn their gun on one now and then
+      const K = this.k3Target(d, dt);
+      if (K) aimAt = K;
     }
     // ---- a missile coming: once it has noticed it, the drone jinks across the missile's line
     // (a new way every second or so, sooner the better it is) and, close in, away from it — on top
@@ -353,6 +357,7 @@ export class Drones {
     // ---- what the gun is on: a missile in reach comes first, else the vessel it attacks
     let G = null;
     if (evading && M.dist < d.G.mR) G = { id: 'msl', pos: M.r.pos, vel: M.r.vel, acc: M.r.aAct || null, range: M.dist };
+    else if (aimAt && aimAt.kind === 'k3') G = { id: aimAt.id, pos: aimAt.pos, vel: aimAt.vel, acc: aimAt.acc, range: aimAt.pos.distanceTo(d.pos) };
     else if (aimAt) G = { id: T.kind, pos: T.pos, vel: T.vel, acc: T.acc, range: dist };
     // ---- point the nose: at its fire control's solution while it can shoot, else along its motion
     let want = null;
@@ -375,7 +380,7 @@ export class Drones {
     d.cool -= dt;
     d.shotT -= dt;
     const onMsl = G && G.id === 'msl';
-    if ((onMsl || (aimAt && dist < GUN_RANGE)) && want) {
+    if ((onMsl || (aimAt && (G ? G.range : dist) < GUN_RANGE)) && want) {
       const nose = Z.clone().applyQuaternion(d.q);
       const err = nose.angleTo(want);
       if (d.burst <= 0 && d.cool <= 0 && err < (onMsl ? 0.004 : 0.05) && d.ammo > 0) { d.burst = 6 + Math.floor(Math.random() * 5); }
@@ -391,6 +396,22 @@ export class Drones {
         if (d.ammo <= 0) { d.reloadT = RELOAD * rand(0.8, 1.2); d.run = null; this.onDry(d); }
       }
     } else d.burst = 0;
+  }
+
+  /** a K3 robot for this drone's gun (or null): picked for a few seconds at a time */
+  k3Target(d, dt) {
+    const h8 = this.g.h8, K = h8 && h8.k3;
+    if (!K) return null;
+    d.k3T = (d.k3T || 0) - dt;
+    if (d.k3T <= 0) {
+      d.k3T = rand(3, 6);
+      d.k3 = null;
+      const near = K.free().filter((u) => u.state !== 'dead' && u.pos.distanceTo(d.pos) < 3000);
+      if (near.length && Math.random() < 0.12 + 0.08 * (d.stars || 3)) { d.k3 = near[Math.floor(Math.random() * near.length)]; d.k3T = rand(6, 12); }
+    }
+    const u = d.k3;
+    if (!u || u.attached || u.state === 'lost' || u.state === 'dead') { d.k3 = null; return null; }
+    return { kind: 'k3', id: 'k3:' + u.i, pos: u.pos, vel: u.vel, acc: null, R: 0.32 };
   }
 
   /**

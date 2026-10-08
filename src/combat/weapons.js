@@ -490,7 +490,7 @@ export class Weapons {
     if (hud) {
       for (const l of hud.locks) {
         const c = l.c;
-        if (!c || c.kind === 'drone' || c.kind === 'rock' || c.kind === 'body' || !c.pos) continue;
+        if (!c || c.kind === 'drone' || c.kind === 'rock' || c.kind === 'body' || c.kind === 'k3' || !c.pos) continue;
         if (c.pos.distanceTo(P.pos) > reach) continue;
         const ref = c.ref || null;
         // (a station shows less than its whole bounding sphere: trusses, panels, gaps)

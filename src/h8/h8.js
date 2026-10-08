@@ -28,6 +28,7 @@ import { HachiMind } from './hachiMind.js';
 import { HachiDefence } from './hachiDefence.js';
 import { NORMAL_MW } from '../combat/arsenal.js';
 import { H8Hull, dentify, DENT_U } from './h8Dents.js';
+import { K3Fleet } from './k3.js';
 import { Particles } from '../fx/particles.js';
 import { HachiPilot } from './h8Pilot.js';
 import { PORT, DorsalHatch, receptacleSocket } from './b29Port.js';
@@ -96,7 +97,8 @@ export class H8Vessel {
     this.intKeys = new Set(Object.keys(M).filter((k) => !extKeys.has(k)));
     // (the strike engine: craters down through the plates; the fittings burned; the stencils go
     // with the paint)
-    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k), ON_TILES.has(k), k === 'decal' ? 'cut1' : PLATES.has(k) ? 'deep' : 'surface');
+    // (the layer under the plates takes the craters once a plate is knocked off: the first stage)
+    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k), ON_TILES.has(k), k === 'decal' ? 'cut1' : PLATES.has(k) || k === 'substrate' ? 'deep' : 'surface');
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
@@ -149,6 +151,7 @@ export class H8Vessel {
     // ---------------------------------------------------------------- damage you can see
     this.hull = new H8Hull(this);
     this.fx = new Particles(this.root);
+    // the K3 repair robots in their bay behind the red hexagon
     this.fxIdle = true;
     // ---------------------------------------------------------------- state
     this.mode = 'parked';        // parked | free | docked
@@ -160,6 +163,7 @@ export class H8Vessel {
     this.armour = { outer: 1, inner: 1 };
     // H8's own master alarm (its own siren, heard in H8: gameplay.js)
     this.alarm = { active: false, silenced: false, level: 0, t: 0 };
+    this.k3 = new K3Fleet(this);
     this.neckOpen = 0;
     this.neckTarget = 0;
     this.radFold = 0;
@@ -1200,6 +1204,7 @@ export class H8Vessel {
     this.armour.outer = 1; this.armour.inner = 1;
     for (const k of Object.keys(this.circuits)) this.circuits[k] = 1;
     this.hull.repairAll();
+    if (this.k3) this.k3.restock();
     if (this._leak) { g.lifeSupport.removeLeak(this._leak); this._leak = null; }
     this.power.smes = H8.smesMJ * 0.85;
     this.flight.tank.kg = this.flight.tank.cap;
@@ -1420,6 +1425,8 @@ export class H8Vessel {
     if (this.mode === 'docked' && this._leak && lsx.leaky.has('corridor') && lsx.leaky.has('h8')) this.asphalt('h8_leak_port', {}, { minGap: 90, force: false });
     // ---- fresh craters cool down
     this.hull.update(sdt);
+    // ---- the K3 robots: out to mend what is broken, home to charge
+    if (this.k3) this.k3.update(sdt);
     // ---- a hole through both armours: the cabin air streams out of it
     const z = g.lifeSupport.z.h8;
     if (this._leak && z) this.hull.vent(true, Math.min(1, (z.n2 + z.o2 + z.co2) / 101.3) + 0.05);
@@ -2143,6 +2150,7 @@ export class H8Vessel {
       this.fire.update(dt, live ? fireLevel(fl.heatFlux || 0) : 0, flow);
     }
     if (this.mode === 'pod' || this.mode === 'lost') { this.plumeMain.mesh.visible = this.plumeAux.mesh.visible = false; this.wreckVisual(dt, eyePF, dCam); return; }
+    if (this.k3) this.k3.updateVisual(dt, origin, camWorld);
     // where H8 is this frame, for the dents (they are worked out in H8's own frame)
     const rw = this.mode === 'docked' ? _m.multiplyMatrices(g.shipVis.root.matrixWorld, this.root.matrix) : this.root.matrixWorld;
     DENT_U.uH8Root.value.copy(rw);
@@ -2500,6 +2508,11 @@ export class H8Vessel {
         extra: threat ? `衝突まで ${Math.max(0, tca).toFixed(0)} 秒・${a.radius <= 0.8 ? '迎撃' : '回避'}` : `最接近 ${fmtDist(miss)}`, tca,
       });
     }
+    // H8's own K3 robots out of their bay
+    if (this.k3) for (const u of this.k3.free()) {
+      out.push({ id: 'k3:' + u.i, kind: 'k3', name: `${u.name} 修理ロボット`, short: u.name, pos: u.pos, vel: u.vel, ref: u, R: 0.35,
+        extra: `${u.state === 'dead' ? '電池切れ・漂流' : u.state === 'home' ? '帰還中' : u.job ? u.job.name + 'へ' : '移動中'}  電池 ${Math.round(u.battery * 100)}%` });
+    }
     // the hunter drones: hostile once they are after Kaito (they lock themselves then)
     if (g.drones) {
       for (const d of g.drones.list) {
@@ -2853,7 +2866,7 @@ export class H8Vessel {
       hull: this.hull.serialize(), leak: !!this._leak, v2: 1, air: this.air || null, panels: this.display.serializePanels(),
       circuits: { ...this.circuits }, patched: this.hull.dents.filter((d) => d.patched).map((d) => +d.seed.toFixed(5)), drive: this.driveMode,
       shelter: this.shelter.serialize(), structure: +this.structure.toFixed(3), berth: this.berthAt ? this.berthAt.id : null,
-      learn: +this.mind.learn.toFixed(3), defence: this.defence.serialize(),
+      learn: +this.mind.learn.toFixed(3), defence: this.defence.serialize(), k3: this.k3 ? this.k3.serialize() : null,
     };
   }
 
@@ -2869,6 +2882,7 @@ export class H8Vessel {
     this.metAsphalt = !!d.met;
     this.hits = d.hits || 0;
     this.hull.restore(d.hull);
+    if (this.k3 && d.k3) this.k3.restore(d.k3);
     this.display.restorePanels(d.panels, Math.max(0, Math.min(1, 1 - (0.35 * this.armour.outer + 0.45 * this.armour.inner + 0.2 * (d.structure ?? 1)))));
     if (d.air) this.air = { o2: d.air.o2, n2: d.air.n2 };
     if (d.circuits) Object.assign(this.circuits, d.circuits);
