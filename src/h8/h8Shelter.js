@@ -468,7 +468,10 @@ export class H8Shelter {
   /** a point of the physics frame inside the box */
   containsPF(p) {
     const x = p.x - DOCK.x, y = p.y - DOCK.y, z = p.z - DOCK.z;
-    const { X, y0, y1, z1 } = SHELTER;
+    const { X, y0, y1, z1, niche: N } = SHELTER;
+    // (the suit's niche counts as in here: run out of it, the suit stands half in it, the eye in
+    // its helmet)
+    if (x > X - 0.02 && x < X + N.d && y > N.y0 && y < N.y1 + 0.02 && z > N.z0 && z < N.z1) return true;
     return Math.abs(x) < X && y > y0 - 0.02 && y < y1 + 0.02 && z < z1 && z > zFront(y, Math.abs(x)) - 0.05;
   }
 
@@ -793,6 +796,9 @@ export class H8Shelter {
     if (!this.suit) return;
     const v = this.v;
     suits.setRack('h8', this.suit, this.suitPivot, Math.PI / 2, {
+      // (built in H8's own frame; docked, that is B-29's shifted by the docking offset — the frame
+      // the seats' eyes are given in too)
+      frame: v.root, toPF: new THREE.Matrix4().makeTranslation(DOCK.x, DOCK.y, DOCK.z),
       slide: (k) => { this.suitPivot.position.x = this.suitX0 - 0.25 * k; },
       onStart: () => v.setSuitShutter(true),
       onEnd: () => setTimeout(() => v.setSuitShutter(false), 600),

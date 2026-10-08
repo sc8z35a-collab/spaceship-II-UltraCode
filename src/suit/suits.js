@@ -61,25 +61,36 @@ export class Suits {
   // ================================================================== putting it on / off
   /** a rack's suit: its turntable (pivot: the suit stands on it, rotation.y), where its feet are
    * (pivot's origin) and which way it faces when idle (rotation.y) */
+  /**
+   * frame: the object whose own frame the rack is built in (B-29's root; H8's, whose world
+   * placement is managed apart from B-29's), toPF: that frame into the player's (H8 docked: its
+   * offset on B-29's back)
+   */
   setRack(kind, api, pivot, idle, opts = {}) {
-    this.racks[kind] = { api, pivot, idle, slide: opts.slide || null, seatEye: opts.seatEye || null, onStart: opts.onStart || null, onEnd: opts.onEnd || null };
+    this.racks[kind] = { api, pivot, idle, slide: opts.slide || null, seatEye: opts.seatEye || null, onStart: opts.onStart || null, onEnd: opts.onEnd || null, frame: opts.frame || null, toPF: opts.toPF || null };
     pivot.rotation.y = idle;
+  }
+
+  /**
+   * the rack's suit frame in the player's frame: the suit's own transforms up to the rack's frame
+   * (their local matrices: a world matrix set apart for drawing — H8's — would throw it out)
+   */
+  rackMatrix(R, out = new THREE.Matrix4()) {
+    const top = R.frame || this.g.shipVis.root;
+    out.identity();
+    for (let o = R.api.root; o && o !== top; o = o.parent) { if (o.matrixAutoUpdate) o.updateMatrix(); out.premultiply(o.matrix); }
+    if (R.toPF) out.premultiply(R.toPF);
+    return out;
   }
 
   /** the PF pose of a point (suit frame) on a rack's suit */
   suitPoint(R, local, out = new THREE.Vector3()) {
-    R.api.root.updateWorldMatrix(true, false);
-    out.copy(local).applyMatrix4(R.api.root.matrixWorld);
-    return this.g.shipVis.root.worldToLocal(out);
+    return out.copy(local).applyMatrix4(this.rackMatrix(R, _m));
   }
 
   /** the direction the rack's suit faces (PF) */
   suitFacing(R, out = new THREE.Vector3()) {
-    R.api.root.updateWorldMatrix(true, false);
-    _m.extractRotation(R.api.root.matrixWorld);
-    out.set(0, 0, -1).applyMatrix4(_m);
-    _q.setFromRotationMatrix(this.g.shipVis.root.matrixWorld).invert();
-    return out.applyQuaternion(_q).normalize();
+    return out.set(0, 0, -1).transformDirection(this.rackMatrix(R, _m));
   }
 
   /** start putting a suit on (kind: its rack) */
@@ -184,9 +195,10 @@ export class Suits {
     const p0 = R.pivot.position.clone(), r0 = R.pivot.rotation.y;
     R.pivot.rotation.y = R.idle + Math.PI;
     if (R.slide) R.slide(1);
-    const behind = this.suitPoint(R, V(0, h8 ? 1.62 : 1.74, h8 ? 0.95 : 1.3));
+    // (H8's shelter is under a metre across: there he leans back against its far wall to see it)
+    const behind = this.suitPoint(R, V(0, h8 ? 1.66 : 1.74, h8 ? 0.72 : 1.3));
     const look = this.suitPoint(R, V(0, 1.3, 0.1));
-    const hatch = this.suitPoint(R, V(0, 1.3, 0.42));
+    const hatch = this.suitPoint(R, V(0, 1.3, h8 ? 0.3 : 0.42));
     const torso = this.suitPoint(R, V(0, 1.36, 0.02));
     const eye = this.suitPoint(R, EYE_IN);
     R.pivot.position.copy(p0); R.pivot.rotation.y = r0;
