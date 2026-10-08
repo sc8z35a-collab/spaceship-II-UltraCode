@@ -205,7 +205,7 @@ export class Suits {
     const k = Math.max(0, Math.min(1, (S.t - L.move[0]) / (L.move[1] - L.move[0])));
     const inside = S.on ? k : 1 - k;
     const sm = (a, b, x) => { const u = Math.max(0, Math.min(1, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
-    return { frame: sm(0.74, 0.94, inside), dark: sm(0.3, 0.5, inside) * (1 - sm(0.8, 0.96, inside)) };
+    return { frame: sm(0.74, 0.94, inside), dark: sm(0.16, 0.34, inside) * (1 - sm(0.8, 0.96, inside)) };
   }
 
   /** where the eye is during the sequence (PF), at time t */
@@ -546,7 +546,7 @@ export class Suits {
   updateLight() {
     const g = this.g, pl = g.player, S = this.state;
     const on = !!S && this.lamp && S.sys.lamp > 0.15 && !S.shutdown && S.battery > 0;
-    this.light.intensity = on ? 3.2 * Math.min(1, S.sys.lamp * 1.3) : 0;
+    this.light.intensity = on ? 1.3 * Math.min(1, S.sys.lamp * 1.3) : 0;
     if (on) {
       this.light.position.copy(pl.eyeLocal).add(V(0, 0.08, 0));
       this.light.target.position.copy(pl.eyeLocal).add(V(0, 0, -1).applyQuaternion(pl.lookQuat));

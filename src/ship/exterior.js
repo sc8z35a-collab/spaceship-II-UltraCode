@@ -500,7 +500,8 @@ function noseCameras(b) {
   const pos = [];
   for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
     const A = P[i][j], B = P[i][j + 1], C = P[i + 1][j], D = P[i + 1][j + 1];
-    for (const tri of [[A, C, D], [A, D, B]]) {
+    // (wound to face out of the hull)
+    for (const tri of [[A, D, C], [A, B, D]]) {
       if (!tri.every((p) => inCanopy(p))) continue;
       for (const p of tri) pos.push(p.x, p.y, p.z);
     }

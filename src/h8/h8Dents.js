@@ -315,6 +315,8 @@ export class H8Hull {
       const p = d.clone().multiplyScalar(PLATE_OUT);
       const res = this.strikes.hit(p, d, d.clone().negate(), E);
       if (!this.restoring) strikeDebris(this.debrisCtx(), res, p.clone().addScaledVector(d, 0.01), d, d.clone().negate().add(new THREE.Vector3().randomDirection().multiplyScalar(0.3)).normalize(), E);
+      // through all five: the armour round the hole torn into petals curling into it
+      if (res.to >= this.strikes.stages && res.from < this.strikes.stages) this.strikePetals(res.site);
     }
     // the plate it struck works loose (and those round a big blow; a gun round's work is the
     // strike engine's)
@@ -338,6 +340,19 @@ export class H8Hull {
       if (E > 1e6 && !shot) v.fx.burst('smoke', p, d, 12, { speed: 0.6, spread: 0.8 });
     }
     return { dent: shot && !dent.hole ? { hole: 0, holeSaid: true } : dent, blinded };
+  }
+
+  /** a spot struck through all five layers: the plate round the hole in jagged petals */
+  strikePetals(site) {
+    const rHole = (site.Rt || this.strikes.P.R[4]) * Math.pow(1 / this.strikes.stages, 0.72);
+    const dir = site.n.clone().normalize();
+    const mesh = new THREE.Mesh(petalGeometry(dir, rHole, () => -0.06, site.seed * 7.7), this.petalMat);
+    mesh.layers.set(LAYER_NEAR);
+    const grp = new THREE.Group();
+    grp.add(mesh);
+    this.v.ext.group.add(grp);
+    this.v.extMeshes.push(mesh);
+    this.petals.push({ grp, dent: null, site });
   }
 
   /** where the strike engine's pieces fly from: H8 in its orbit (or with B-29, docked) */
@@ -528,6 +543,7 @@ export class H8Hull {
     if (s.cams) this.cams = s.cams.slice(0, 4);
     this.pocks.restore(s.p);
     this.strikes.restore(s.st);
+    for (const st of this.strikes.sites) if (st.stage >= this.strikes.stages) this.strikePetals(st);
     this.restoring = true;
     this.sync();
     this.restoring = false;

@@ -106,7 +106,7 @@ const PALETTE = {
   // the top grade: graphite shell, a pale grey soft layer, orange like H8's trim
   h8: { shell: 0x50565e, shell2: 0x2a2e34, soft: 0xbfc3c8, accent: 0xe8641e, cap: 0x26292e, plate: 0x3d4249 },
   // civilian: white, light grey, blue
-  b29: { shell: 0xe4e5e1, shell2: 0x8f98a2, soft: 0xdcddd8, accent: 0x2f6fd0, cap: 0xeeeeea, plate: 0xc9ccc8 },
+  b29: { shell: 0xd8dad6, shell2: 0x7d8792, soft: 0xd2d3ce, accent: 0x2f6fd0, cap: 0xe6e6e2, plate: 0xbcc0bc },
 };
 
 /** the materials of one suit (each suit its own: its visor carries its own damage) */
@@ -130,10 +130,11 @@ export function suitMaterials(spec) {
     liner: S({ color: 0x24272c, roughness: 0.95, metalness: 0, side: THREE.BackSide }),
     pad: S({ color: 0x33363c, roughness: 0.95, metalness: 0 }),
     inside: S({ color: 0x0b0c0e, roughness: 0.95, metalness: 0, side: THREE.DoubleSide }),
-    skin: S({ color: 0xd8a585, roughness: 0.62, metalness: 0 }),
+    // (the face in there catches a little of the visor display's light: its colour)
+    skin: S({ color: 0xd8a585, roughness: 0.62, metalness: 0, emissive: new THREE.Color(spec.grade === 'top' ? 0x3a2408 : 0x0c2236), emissiveIntensity: 1 }),
     cap: S({ color: P.cap, roughness: 0.85, metalness: 0 }),
     eye: S({ color: 0x18120e, roughness: 0.15, metalness: 0 }),
-    sclera: S({ color: 0xe9e4dc, roughness: 0.3, metalness: 0 }),
+    sclera: S({ color: 0xe9e4dc, roughness: 0.3, metalness: 0, emissive: new THREE.Color(spec.grade === 'top' ? 0x2a1a06 : 0x081a2a), emissiveIntensity: 1 }),
     brow: S({ color: 0x2a1d14, roughness: 0.9, metalness: 0 }),
     lens: S({ color: 0x0a0f14, roughness: 0.05, metalness: 0.6 }),
     nozzle: S({ color: 0x3d3833, roughness: 0.34, metalness: 0.88 }),
@@ -351,8 +352,9 @@ function limbPlate(b, a, c, R, face, len = 0.7, w = 1.1) {
   b.add(g, 'plate');
 }
 
-/** the hard upper torso: superellipse sections lofted up the body ([y, half width, half depth, z]) */
-function torsoGeometry(levels, n = 2.7, seg = 48) {
+/** the hard upper torso: superellipse sections lofted up the body ([y, half width, half depth, z]);
+ * hole: the entry hatch cut out of its back ({ w, h, y }) */
+function torsoGeometry(levels, n = 2.7, seg = 48, hole = null) {
   const pos = [], idx = [];
   const sp = (v, p) => Math.sign(v) * Math.pow(Math.abs(v), p);
   levels.forEach(([y, hw, hd, z0], j) => {
@@ -365,9 +367,17 @@ function torsoGeometry(levels, n = 2.7, seg = 48) {
     }
   });
   const W = seg + 1;
+  const inHole = (...vs) => {
+    if (!hole) return false;
+    let x = 0, y = 0, z = 0;
+    for (const v of vs) { x += pos[v * 3]; y += pos[v * 3 + 1]; z += pos[v * 3 + 2]; }
+    x /= vs.length; y /= vs.length; z /= vs.length;
+    return z > 0.04 && Math.abs(x) < hole.w / 2 && Math.abs(y - hole.y) < hole.h / 2;
+  };
   for (let j = 0; j < levels.length - 1; j++) for (let i = 0; i < seg; i++) {
     const a = j * W + i, b = a + 1, c = a + W, d = c + 1;
-    idx.push(a, c, b, b, c, d);
+    if (!inHole(a, c, b)) idx.push(a, c, b);
+    if (!inHole(b, c, d)) idx.push(b, c, d);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -460,7 +470,7 @@ export function buildSuit(spec, opts = {}) {
   b.add(torsoGeometry([
     [1.045, 0.178, 0.142, 0.0], [1.1, 0.19, 0.15, -0.004], [1.18, 0.212, 0.163, -0.01], [1.27, 0.232, 0.172, -0.014],
     [1.34, 0.24, 0.172, -0.012], [1.4, 0.236, 0.165, -0.008], [1.45, 0.214, 0.152, -0.004], [1.49, 0.17, 0.138, -0.004], [1.515, 0.142, 0.128, -0.006],
-  ]), 'shell');
+  ], 2.7, 48, { w: 0.33, h: 0.45, y: 1.27 }), 'shell');
   // panel lines, the side panels, the chest plate
   for (const s of [-1, 1]) b.add(new RoundedBoxGeometry(0.014, 0.28, 0.17, 1, 0.006), 'shell2', [s * 0.226, 1.25, 0.01], [0, 0, s * -0.05]);
   b.add(new RoundedBoxGeometry(0.36, 0.2, 0.03, 2, 0.012), top ? 'shell2' : 'plate', [0, 1.36, -0.16], [-0.12, 0, 0]);

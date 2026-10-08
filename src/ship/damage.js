@@ -111,6 +111,8 @@ export class Damage {
       const belly = pLocal.y < -1.15 && nOut.y < -0.55;
       strike = this.strikes.hit(pLocal, nOut, inward, E, { kind: belly ? 1 : 0 });
       if (!this.catchingUp) strikeDebris(this.debrisCtx(belly ? 'b29Belly' : 'b29'), strike, pLocal.clone().addScaledVector(nOut, 0.01), nOut, inward, E);
+      // holed right through: the skin round the hole torn into jagged petals, bent back out
+      if (strike.to >= this.strikes.stages && strike.from < this.strikes.stages) this.strikePetals(strike.site);
     } else {
       this.addDent(pLocal, push, r, depth, { sharp: E < 2e6 ? 0.4 : 0.15, heat: Math.min(1, 0.3 + E / 4e6) });
       this.addScorch(pLocal, r * 0.8);
@@ -196,6 +198,24 @@ export class Damage {
   }
 
   dentCount(p, rad) { return this.dents.filter((d) => d.pos.distanceTo(p) < rad).length; }
+
+  /** a spot struck right through: the skin round the hole in jagged petals (paint on their outer
+   * face, soot, the torn bright edge), most of them bent back out by the blasts, a few in */
+  strikePetals(site) {
+    if (site.petals) { this.group.remove(site.petals); site.petals.geometry.dispose(); }
+    const T = this._tornMats();
+    const P = this.strikes.P;
+    // (about the hole's own size: the last layer's outline)
+    const R = (site.Rt || P.R[P.stages - 1]) * Math.pow(1 / P.stages, 0.72) * 0.92;
+    const side = site.t.clone().multiplyScalar(site.seed - 0.5);
+    const travel = site.n.clone().multiplyScalar(0.75).add(side).normalize();
+    const geo = petalGeometry({ c: site.p.clone().addScaledVector(site.n, -0.006), n: site.n, R, seed: site.seed * 97.3, travel, paint: site.kind ? 'inner' : 'outer', bend: 1.25, lenK: 0.6 });
+    const m = new THREE.Mesh(geo, T.metal);
+    m.matrixAutoUpdate = false; m.updateMatrix();
+    setLayersDeep(m, LAYER_NEAR, LAYER_MID);
+    this.group.add(m);
+    site.petals = m;
+  }
 
   /** where the strike engine's pieces fly from: B-29 in its orbit, its own particles, the sounds */
   debrisCtx(kind) {
@@ -1141,7 +1161,9 @@ export class Damage {
     this.fatigue = d.fatigue || 0;
     this.shotWear = d.shotWear || 0;
     this.pocks.restore(d.pocks);
+    for (const st of this.strikes.sites) if (st.petals) this.group.remove(st.petals);
     this.strikes.restore(d.strikes);
+    for (const st of this.strikes.sites) if (st.stage >= this.strikes.stages) this.strikePetals(st);
     for (const b of d.breaches || []) {
       const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone, b.seed);
       if (b.patched) { br.patched = true; this._updateBreachLeak(br); this._breachMeshes(br); if (br.vent) { this.g.fx.removeEmitter(br.vent); br.vent = null; } const is = this.issues.find((i) => i.ref === br); if (is) is.state = 'patched'; }

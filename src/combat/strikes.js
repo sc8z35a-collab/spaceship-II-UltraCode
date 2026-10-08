@@ -70,7 +70,7 @@ const PALETTE = {
           vec3 temper = mix(vec3(0.9, 0.72, 0.45), vec3(0.5, 0.42, 0.66), smoothstep(0.3, 0.8, n2));
           col = mix(col, col * temper * 1.15, 0.6 * (1.0 - smoothstep(0.1, 0.8, rr)));
           col *= 1.0 - 0.45 * (1.0 - smoothstep(0.0, 0.35, rr)) * (0.6 + 0.4 * n1);
-          rough = 0.42 + 0.12 * n1; metal = 0.7; h = 0.0;
+          rough = 0.55 + 0.12 * n1; metal = 0.62; h = 0.0;
         }
       } else if (k == 2) {
         if (kind > 0.5) {
