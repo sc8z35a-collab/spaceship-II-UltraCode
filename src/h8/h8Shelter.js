@@ -782,7 +782,7 @@ export class H8Shelter {
     M.nicheLamp.emissiveIntensity = 2.0 * lo;
     const pl = v.g.player, SU = v.g.suits;
     const seq = SU && SU.seq && SU.seq.kind === 'h8';
-    if (this.suit) this.suit.root.visible = !(pl.suit && pl.suitH8) || !!seq;
+    if (this.suit && !seq) this.suit.root.visible = !(pl.suit && pl.suitH8);
     // (while it goes on or comes off the niche stays lit and open)
     if (seq) this.niche.visible = this.group.visible;
   }

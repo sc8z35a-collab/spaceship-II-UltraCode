@@ -136,6 +136,9 @@ export class Suits {
       this.mirror();
     });
     if (!S.on && t > L.open[0]) once('off', () => { const pl = g.player; pl.suit = false; pl.suitH8 = false; this.mirror(); });
+    // (the suit is not drawn while the eye is inside it: from in there the visor's frame is enough)
+    const mid = (L.move[0] + L.move[1]) / 2;
+    R.api.root.visible = S.on ? t < mid : t > mid;
     if (t >= S.T) this.endSeq();
   }
 
@@ -172,17 +175,32 @@ export class Suits {
     if (R.onEnd) R.onEnd(S.on);
   }
 
+  /** where things are with the suit turned round (its back to the wearer, run out of its niche):
+   * the place behind it the wearer climbs in from, and its eye then */
+  backPoints(R, h8) {
+    const p0 = R.pivot.position.clone(), r0 = R.pivot.rotation.y;
+    R.pivot.rotation.y = R.idle + Math.PI;
+    if (R.slide) R.slide(1);
+    const behind = this.suitPoint(R, V(0, 1.6, h8 ? 0.62 : 0.78));
+    const eye = this.suitPoint(R, EYE_IN);
+    R.pivot.position.copy(p0); R.pivot.rotation.y = r0;
+    R.api.root.updateWorldMatrix(true, false);
+    return { behind, eye };
+  }
+
   /** where the eye is during the sequence (PF), at time t */
   seqPose(t) {
     const S = this.seq || this._last, R = this.racks[S.kind], L = S.L;
     const h8 = S.kind === 'h8';
-    // the key poses: behind the suit (its back to us), inside the helmet, the seat (H8)
+    // the key poses: behind the suit once it has turned its back (fixed), inside the helmet (it
+    // rides the turntable with the suit), the seat (H8)
     const eyeIn = this.suitPoint(R, EYE_IN);
     const fwd = this.suitFacing(R);
-    const behind = this.suitPoint(R, V(0, 1.6, h8 ? 0.62 : 0.78));
+    const B = S.back || (S.back = this.backPoints(R, h8));
+    const behind = B.behind;
     const look = (from, to) => _q2.setFromRotationMatrix(_m.lookAt(from, to, V(0, 1, 0))).clone();
     const qIn = look(eyeIn, eyeIn.clone().add(fwd));
-    const qBehind = look(behind, eyeIn);
+    const qBehind = look(behind, B.eye);
     const from = S.from;
     let pos, q;
     if (S.on) {
@@ -234,6 +252,7 @@ export class Suits {
     } else this.throttle = 0;
     this.cam.update(rdt);
     this.updateLight();
+    this.stationContacts();
     this.updateHatches();
     this.hud.update(rdt);
     this.updateRescue(dt);
@@ -286,6 +305,41 @@ export class Suits {
     const pose = g.docking.stationPose(s, g.time, this._pose || (this._pose = {}));
     out.copy(H.local).applyQuaternion(pose.quat).add(pose.pos).sub(g.flight.pos).applyQuaternion(_q.copy(g.flight.quat).invert());
     return out;
+  }
+
+  /**
+   * out in a suit near a station (or H8 flying free): its hull is solid. The suit is pushed back
+   * out of it, and the speed it came in at is an impact on the part that met it
+   */
+  stationContacts() {
+    const g = this.g, pl = g.player;
+    if (!pl.suit || !pl.outside || this.seq || (g.h8 && g.h8.solo)) return;
+    const dk = g.docking, me = this.playerEci(_v2), n = new THREE.Vector3();
+    const qShip = _q.copy(g.flight.quat), qInv = qShip.clone().invert();
+    for (const s of g.stations.list) {
+      const P = s.model && s.model.userData.proxies;
+      if (!P || s.pos.distanceTo(me) > (s.model.userData.radius || 200) + 60) continue;
+      const pose = dk.stationPose(s, g.time, this._pc || (this._pc = {}));
+      const ps = dk.toLocal(pose, me, new THREE.Vector3());
+      for (const pr of P) {
+        const d = dk.proxyDist(ps, pr, n) - 0.45;            // (the suit's own size)
+        if (d >= 0) continue;
+        // the surface's normal into the ship's frame; the station's speed there, in that frame
+        const nPF = n.clone().applyQuaternion(pose.quat).applyQuaternion(qInv);
+        const vSt = dk.frameVel(s, pose, me, new THREE.Vector3()).sub(g.flight.vel).applyQuaternion(qInv);
+        const rel = pl.vel.clone().sub(vSt);
+        const vn = rel.dot(nPF);
+        pl.pos.addScaledVector(nPF, -d + 0.02);
+        pl.body.setNextKinematicTranslation({ x: pl.pos.x, y: pl.pos.y, z: pl.pos.z });
+        if (vn < 0) {
+          // what it came in with goes into the knock (and it bounces back a little)
+          const inward = nPF.clone().multiplyScalar(vn);
+          pl.vel.addScaledVector(inward, -1.3);
+          this.contact(pl, inward, rel.clone().sub(inward));
+        }
+        break;
+      }
+    }
   }
 
   /** suited and out: is a station's EVA hatch within reach? (the visor shows a button) */

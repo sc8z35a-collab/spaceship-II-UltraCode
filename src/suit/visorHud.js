@@ -195,7 +195,8 @@ export class VisorHud {
     const place = (ang, fn) => {
       const a = ang * Math.PI / 180;
       const px = cx + Math.cos(a) * rx, py = cy - Math.sin(a) * ry;
-      x.save(); x.translate(px, py); x.rotate(-(a - Math.PI / 2) * 0.16 * (Math.cos(a) > 0 ? 1 : 1)); fn(); x.restore();
+      // (leaning in toward the middle at the sides, as the glass curves round)
+      x.save(); x.translate(px, py); x.rotate(-Math.cos(a) * 0.12); fn(); x.restore();
     };
     // ---- the boot sequence's lines
     if (this.on < 1) {

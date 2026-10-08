@@ -736,6 +736,6 @@ export class Machines {
     }
     // suit model visible only when not worn
     // (on its rack unless worn — or going on / coming off, when the sequence shows it)
-    if (this.suitModel) this.suitModel.visible = !(g.player.suit && !g.player.suitH8) || !!(g.suits && g.suits.seq && g.suits.seq.kind === 'b29');
+    if (this.suitModel && !(g.suits && g.suits.seq && g.suits.seq.kind === 'b29')) this.suitModel.visible = !(g.player.suit && !g.player.suitH8);
   }
 }
