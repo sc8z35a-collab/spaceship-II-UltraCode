@@ -138,12 +138,17 @@ export class VisorHud {
   update(dt) {
     const g = this.g, s = this.s, pl = g.player, S = s.state;
     const wearing = !!S && (pl.suit || (s.seq && s.seq.on));
+    // the inside of the helmet round the glass (and the dark of the suit's body on the way in or
+    // out through its back)
+    const ins = s.seq ? s.seqInside() : { frame: pl.suit ? 1 : 0, dark: 0 };
+    this.frameK = ins.frame; this.darkK = ins.dark;
+    this.frameTop = s.seq ? s.seq.kind === 'h8' : !!pl.suitH8;
     // boot / shutdown
     if (this.bootT > 0) { this.bootT += dt; this.on = Math.min(1, this.bootT / 2.2); if (this.bootT > 2.2) this.bootT = 0; }
     else if (this.bootT < 0) { this.on = Math.max(0, this.on - dt * 2); if (this.on <= 0) this.bootT = 0; }
     else if (pl.suit && !s.seq && this.on < 1) this.on = Math.min(1, this.on + dt * 2);
     if (!pl.suit && !s.seq) this.on = 0;
-    const show = wearing && this.on > 0.01 && g.mode !== 'camera' && pl.state !== 'dead';
+    const show = (wearing && this.on > 0.01 || this.frameK > 0.01 || this.darkK > 0.01) && g.mode !== 'camera' && pl.state !== 'dead';
     this.el.classList.toggle('on', show);
     this.el.classList.toggle('busy', !!s.seq);
     this.el.classList.toggle('hatch', !!s.hatchNear);
@@ -163,16 +168,84 @@ export class VisorHud {
     }
     if (!show) return;
     this.t += dt;
-    if ((this._acc = (this._acc || 0) + dt) < 1 / 20) return;
+    // (the sequence's dark and frame move with the eye: every frame then; the readouts 20 a second)
+    if ((this._acc = (this._acc || 0) + dt) < (s.seq ? 0 : 1 / 20)) return;
     this._acc = 0;
     this.draw();
   }
 
+  /**
+   * The inside of the helmet seen round the visor: the shell and its padding close to the eye (out
+   * of focus, dark, faintly lit by the display), the brow over the glass, the neck ring under it,
+   * a faint reflection of the light on the inside of the glass. Drawn once per size into its own
+   * canvas.
+   */
+  helmetFrame(x, W, H, top) {
+    const key = W + 'x' + H + (top ? 't' : 'c');
+    if (this._frameKey !== key) {
+      this._frameKey = key;
+      const c = this._frame || (this._frame = document.createElement('canvas'));
+      c.width = W; c.height = H;
+      const g = c.getContext('2d');
+      const cx = W / 2, cy = H * 0.46;
+      const A = W * (top ? 0.66 : 0.6), B = H * (top ? 0.78 : 0.72);
+      // the shell's inside, all over
+      const sh = g.createLinearGradient(0, 0, 0, H);
+      sh.addColorStop(0, '#0d0f12'); sh.addColorStop(0.45, '#08090b'); sh.addColorStop(1, '#030304');
+      g.fillStyle = sh; g.fillRect(0, 0, W, H);
+      // the padding's quilting, barely lit
+      g.strokeStyle = 'rgba(70,78,90,0.10)'; g.lineWidth = Math.max(1, W / 500);
+      for (let i = -8; i < 30; i++) { g.beginPath(); g.moveTo(i * W / 18, 0); g.lineTo(i * W / 18 - H * 0.5, H); g.stroke(); g.beginPath(); g.moveTo(i * W / 18 - H * 0.5, 0); g.lineTo(i * W / 18, H); g.stroke(); }
+      // the glass: cut out with a soft edge (the rim is a few centimetres from the eye: blurred)
+      g.save();
+      g.globalCompositeOperation = 'destination-out';
+      g.translate(cx, cy); g.scale(A, B);
+      const cut = g.createRadialGradient(0, 0, 0, 0, 0, 1);
+      cut.addColorStop(0, 'rgba(0,0,0,1)'); cut.addColorStop(0.84, 'rgba(0,0,0,1)'); cut.addColorStop(0.93, 'rgba(0,0,0,0.6)'); cut.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = cut; g.beginPath(); g.arc(0, 0, 1, 0, Math.PI * 2); g.fill();
+      g.restore();
+      // the rim of the visor's frame, catching a little light all round
+      g.save();
+      g.translate(cx, cy); g.scale(A, B);
+      const rim = g.createRadialGradient(0, 0, 0.9, 0, 0, 1.04);
+      rim.addColorStop(0, 'rgba(120,130,145,0)'); rim.addColorStop(0.55, 'rgba(120,130,145,0.16)'); rim.addColorStop(1, 'rgba(120,130,145,0)');
+      g.fillStyle = rim; g.beginPath(); g.arc(0, 0, 1.04, 0, Math.PI * 2); g.fill();
+      g.restore();
+      // the neck ring under the glass: a dark curve with a thin bright edge
+      g.save();
+      g.beginPath(); g.ellipse(cx, H * 1.16, W * 0.62, H * 0.3, 0, Math.PI, 0); g.closePath();
+      const nr = g.createLinearGradient(0, H * 0.86, 0, H);
+      nr.addColorStop(0, 'rgba(10,11,13,0.0)'); nr.addColorStop(0.25, 'rgba(10,11,13,0.85)'); nr.addColorStop(1, 'rgba(4,4,5,1)');
+      g.fillStyle = nr; g.fill();
+      g.strokeStyle = 'rgba(160,170,185,0.14)'; g.lineWidth = Math.max(1.5, H / 260);
+      g.beginPath(); g.ellipse(cx, H * 1.16, W * 0.62, H * 0.3, 0, Math.PI * 1.08, Math.PI * 1.92); g.stroke();
+      g.restore();
+      // the inside of the glass: faint streaks of reflected light, the glass darker toward its edge
+      g.save();
+      g.translate(cx, cy); g.scale(A, B);
+      const vg = g.createRadialGradient(0, 0, 0.45, 0, 0, 0.92);
+      vg.addColorStop(0, 'rgba(0,0,0,0)'); vg.addColorStop(1, 'rgba(0,0,0,0.22)');
+      g.fillStyle = vg; g.beginPath(); g.arc(0, 0, 0.92, 0, Math.PI * 2); g.fill();
+      g.restore();
+      for (const [x0, y0, x1, y1, w, a] of [[0.16, 0.12, 0.34, 0.05, 0.05, 0.05], [0.2, 0.2, 0.3, 0.16, 0.02, 0.04], [0.74, 0.08, 0.86, 0.16, 0.03, 0.03]]) {
+        const gr = g.createLinearGradient(x0 * W, y0 * H, x1 * W, y1 * H);
+        gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(0.5, `rgba(235,242,255,${a})`); gr.addColorStop(1, 'rgba(255,255,255,0)');
+        g.strokeStyle = gr; g.lineWidth = w * H; g.lineCap = 'round';
+        g.beginPath(); g.moveTo(x0 * W, y0 * H); g.quadraticCurveTo((x0 + x1) / 2 * W, Math.min(y0, y1) * H - w * H, x1 * W, y1 * H); g.stroke();
+      }
+    }
+    x.drawImage(this._frame, 0, 0);
+  }
+
   draw() {
     const g = this.g, s = this.s, S = s.state, pl = g.player, x = this.ctx;
-    const W = this.W, H = this.H, k = this.dpr;
+    const W = this.W, H = this.H;
     x.clearRect(0, 0, W, H);
-    if (!S) return;
+    x.globalAlpha = 1;
+    // the helmet round the glass, and the dark inside the suit while the eye passes through it
+    if (this.frameK > 0.01) { x.globalAlpha = Math.min(1, this.frameK); this.helmetFrame(x, W, H, this.frameTop); x.globalAlpha = 1; }
+    if (this.darkK > 0.01) { x.fillStyle = `rgba(2,2,3,${Math.min(1, this.darkK)})`; x.fillRect(0, 0, W, H); }
+    if (!S || this.on <= 0.01) return;
     const top = S.spec.grade === 'top';
     const C = top ? [255, 178, 80] : [110, 200, 255];
     const col = (a) => `rgba(${C[0]},${C[1]},${C[2]},${a})`;
@@ -180,84 +253,99 @@ export class VisorHud {
     // a dead HUD flickers, a shut-down suit shows only that it is down
     const hudK = S.sys.hud;
     const flick = hudK < 0.6 && Math.random() > hudK + 0.25;
-    x.globalAlpha = this.on * (flick ? 0.25 : 1) * (S.shutdown ? 0.85 : 1);
+    const base = this.on * (flick ? 0.25 : 1) * (S.shutdown ? 0.85 : 1);
+    x.globalAlpha = base;
     const f = Math.min(W, H * 1.9);
-    const font = (px, w = 600) => `${w} ${Math.round(px * f / 900)}px -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif`;
+    const u = f / 900;
+    const font = (px, w = 600) => `${w} ${Math.round(px * u)}px -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif`;
     x.textBaseline = 'middle';
+    // (what has been drawn where: the markers' labels keep out of it)
+    const boxes = this._boxes = [];
+    const T = (str, X, Y, align = 'left', px = 13) => {
+      x.textAlign = align;
+      x.fillText(str, X, Y);
+      const w = x.measureText(str).width;
+      const x0 = align === 'left' ? X : align === 'right' ? X - w : X - w / 2;
+      boxes.push([x0 - 4, Y - px * u * 0.7, x0 + w + 4, Y + px * u * 0.7]);
+    };
+    // the light of the display on the glass: a soft glow round its lines
+    x.shadowColor = col(0.45); x.shadowBlur = 5 * u;
     if (S.shutdown) {
-      x.font = font(26, 700); x.fillStyle = red(0.5 + 0.5 * Math.sin(this.t * 5)); x.textAlign = 'center';
-      x.fillText('システム停止 — 受動生命維持のみ', W / 2, H * 0.3);
+      x.font = font(26, 700); x.fillStyle = red(0.5 + 0.5 * Math.sin(this.t * 5));
+      T('システム停止 — 受動生命維持のみ', W / 2, H * 0.3, 'center', 26);
       this.cracks(x, S, W, H);
+      x.shadowBlur = 0; x.globalAlpha = 1;
       return;
     }
-    // the visor's curve: a block placed on the arc round the view, turned to lie along it
-    const cx = W / 2, cy = H * 0.56, rx = W * 0.47, ry = H * 0.5;
-    const place = (ang, fn) => {
-      const a = ang * Math.PI / 180;
-      const px = cx + Math.cos(a) * rx, py = cy - Math.sin(a) * ry;
-      // (leaning in toward the middle at the sides, as the glass curves round)
-      x.save(); x.translate(px, py); x.rotate(-Math.cos(a) * 0.12); fn(); x.restore();
-    };
     // ---- the boot sequence's lines
     if (this.on < 1) {
-      x.font = font(16, 600); x.fillStyle = col(0.9); x.textAlign = 'left';
+      x.font = font(16, 600); x.fillStyle = col(0.9);
       const L = ['POWER ON', 'LIFE SUPPORT  ……  OK', `O₂ ${Math.round(S.o2 * 100)}%  …  OK`, 'SUIT PRESSURE 29.6 kPa  …  OK', 'BOOSTERS  …  ' + (S.thrustK() > 0 ? 'READY' : 'FAULT'), 'HUD READY'];
       const n = Math.floor(this.on * L.length * 1.2);
-      L.slice(0, n).forEach((l, i) => x.fillText(l, W * 0.3, H * 0.3 + i * 22 * f / 900));
+      L.slice(0, n).forEach((l, i) => T(l, W * 0.36, H * 0.3 + i * 24 * u, 'left', 16));
     }
+    // the side blocks lean a little, as the glass curves away round the face
+    const side = (X, Y, lean, fn) => { x.save(); x.translate(X, Y); x.transform(0.96, lean, 0, 1, 0, 0); fn(); x.restore(); };
     // ---- left: oxygen
     const o2Left = S.o2Left(pl.state === 'evaWalk' ? 0.4 : 0.15);
-    place(196, () => {
-      x.textAlign = 'left';
-      x.font = font(13); x.fillStyle = col(0.7); x.fillText('O₂', 0, -46 * f / 900);
-      x.font = font(30, 700); x.fillStyle = S.o2 < 0.15 ? red(0.95) : col(0.95); x.fillText(`${Math.round(S.o2 * 100)}%`, 0, -18 * f / 900);
-      x.font = font(13); x.fillStyle = col(0.8); x.fillText(`残り ${hms(o2Left)}`, 0, 10 * f / 900);
-      x.fillText(`非常用 ${Math.round(S.reserve * 100)}%   スーツ内 29.6 kPa`, 0, 30 * f / 900);
-      if (S.leakK > 0.01) { x.fillStyle = red(0.95); x.fillText(`漏れ ×${S.leakK.toFixed(0)}`, 0, 50 * f / 900); }
-      this.bar(x, 0, -66 * f / 900, 150 * f / 900, 6 * f / 900, S.o2, S.o2 < 0.15 ? red(0.9) : col(0.9), col(0.15));
+    const lx = W * 0.085, ly = H * 0.3;
+    side(lx, ly, 0.045, () => {
+      x.font = font(13); x.fillStyle = col(0.75); x.textAlign = 'left';
+      x.fillText('O₂  酸素', 0, 0);
+      this.bar(x, 0, 14 * u, 150 * u, 5 * u, S.o2, S.o2 < 0.15 ? red(0.9) : col(0.9), col(0.15));
+      x.font = font(34, 700); x.fillStyle = S.o2 < 0.15 ? red(0.95) : col(0.97);
+      x.fillText(`${Math.round(S.o2 * 100)}%`, 0, 48 * u);
+      x.font = font(14); x.fillStyle = col(0.85);
+      x.fillText(`残り ${hms(o2Left)}`, 0, 80 * u);
+      x.font = font(12); x.fillStyle = col(0.7);
+      x.fillText(`非常用ボンベ ${Math.round(S.reserve * 100)}%`, 0, 102 * u);
+      x.fillText('スーツ内 29.6 kPa', 0, 120 * u);
+      if (S.leakK > 0.01) { x.fillStyle = red(0.95); x.fillText(`漏れ ×${S.leakK.toFixed(0)}`, 0, 140 * u); }
     });
+    boxes.push([lx - 6, ly - 12 * u, lx + 170 * u, ly + 150 * u]);
     // ---- right: power and the boosters
-    const B = S.spec.battery;
-    place(-16, () => {
-      x.textAlign = 'right';
-      x.font = font(13); x.fillStyle = col(0.7); x.fillText('バッテリー', 0, -46 * f / 900);
-      x.font = font(30, 700); x.fillStyle = S.battery < 0.15 ? red(0.95) : col(0.95); x.fillText(`${Math.round(S.battery * 100)}%`, 0, -18 * f / 900);
-      x.font = font(13); x.fillStyle = col(0.8);
-      x.fillText(`飛行可能 ${hms(S.flightLeft())}   予備 ${S.spares.length ? S.spares.map((b) => Math.round(b * 100) + '%').join(' ') : 'なし'}`, 0, 10 * f / 900);
-      const P = S.spec.propulsion;
-      const bst = P.boosters > 1 ? `L ${S.boosterL > 0.5 ? '●' : '×'}  R ${S.boosterR > 0.5 ? '●' : '×'}` : `${S.boosterL > 0.5 ? '●' : '×'}`;
-      x.fillText(`ブースター ${bst}   ${s.boost ? '起動中' : '待機'}  最大 ${P.vMax} m/s`, 0, 30 * f / 900);
-      if (S.swapT > 0) { x.fillStyle = col(0.5 + 0.5 * Math.sin(this.t * 8)); x.fillText(`予備バッテリーに交換中 ${S.swapT.toFixed(0)} 秒`, 0, 50 * f / 900); }
-      this.bar(x, -150 * f / 900, -66 * f / 900, 150 * f / 900, 6 * f / 900, S.battery, S.battery < 0.15 ? red(0.9) : col(0.9), col(0.15));
+    const B = S.spec.battery, Pp = S.spec.propulsion;
+    const rx = W * 0.865, ry = H * 0.3;
+    side(rx, ry, -0.045, () => {
+      x.font = font(13); x.fillStyle = col(0.75); x.textAlign = 'right';
+      x.fillText('バッテリー', 0, 0);
+      this.bar(x, -150 * u, 14 * u, 150 * u, 5 * u, S.battery, S.battery < 0.15 ? red(0.9) : col(0.9), col(0.15));
+      x.font = font(34, 700); x.fillStyle = S.battery < 0.15 ? red(0.95) : col(0.97);
+      x.fillText(`${Math.round(S.battery * 100)}%`, 0, 48 * u);
+      x.font = font(14); x.fillStyle = col(0.85);
+      x.fillText(`飛行可能 ${hms(S.flightLeft())}`, 0, 80 * u);
+      x.font = font(12); x.fillStyle = col(0.7);
+      x.fillText(`予備 ${S.spares.length ? S.spares.map((b) => Math.round(b * 100) + '%').join(' ') : 'なし'}`, 0, 102 * u);
+      const bst = Pp.boosters > 1 ? `L${S.boosterL > 0.5 ? '●' : '×'} R${S.boosterR > 0.5 ? '●' : '×'}` : `${S.boosterL > 0.5 ? '●' : '×'}`;
+      x.fillText(`ブースター ${bst}  ${s.boost ? '起動' : '待機'}`, 0, 120 * u);
+      x.fillText(`最大 ${Pp.vMax} m/s`, 0, 138 * u);
+      if (S.swapT > 0) { x.fillStyle = col(0.5 + 0.5 * Math.sin(this.t * 8)); x.fillText(`予備に交換中 ${S.swapT.toFixed(0)} 秒`, 0, 158 * u); }
     });
+    boxes.push([rx - 170 * u, ry - 12 * u, rx + 6, ry + 165 * u]);
     // ---- top: the suit, the time
-    place(90, () => {
-      x.textAlign = 'center';
-      x.font = font(12); x.fillStyle = col(0.6);
-      const d = new Date(g.time);
-      x.fillText(`${S.spec.name}  ${S.spec.gradeJP}   ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`, 0, 52 * f / 900);
-    });
-    // ---- bottom: speed, mode, the distances
+    x.font = font(12); x.fillStyle = col(0.6);
+    const d = new Date(g.time);
+    T(`${S.spec.name}  ${S.spec.gradeJP}    ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`, W / 2, H * 0.055, 'center', 12);
+    // ---- bottom: speed, mode, the call under way
     const ref = this.refVel();
-    place(270, () => {
-      x.textAlign = 'center';
-      x.font = font(26, 700); x.fillStyle = col(0.95);
-      x.fillText(`${ref.v < 10 ? ref.v.toFixed(2) : ref.v.toFixed(0)} m/s`, 0, -112 * f / 900);
-      x.font = font(12); x.fillStyle = col(0.75);
-      x.fillText(`${ref.name}に対する速度   ${s.boost ? 'ブースター' : '微調整スラスター'}   ${s.hold ? '自動停止 ON' : '自動停止 OFF'}`, 0, -88 * f / 900);
-      if (s.rescue) { x.fillStyle = col(0.6 + 0.4 * Math.sin(this.t * 4)); x.fillText(this.rescueText(), 0, -68 * f / 900); }
-    });
-    // ---- markers: B-29, H8, the nearest station
-    this.markers(x, col, f);
-    // ---- the suit's figure and the systems that are out
-    this.figure(x, S, W * 0.06, H * 0.62, f, col, red);
+    x.font = font(30, 700); x.fillStyle = col(0.97);
+    T(`${ref.v < 10 ? ref.v.toFixed(2) : ref.v.toFixed(0)} m/s`, W / 2, H * 0.745, 'center', 30);
+    x.font = font(12); x.fillStyle = col(0.75);
+    T(`${ref.name}に対する速度   ${s.boost ? 'ブースター' : '微調整スラスター'}   ${s.hold ? '自動停止 ON' : '自動停止 OFF'}`, W / 2, H * 0.792, 'center', 12);
+    if (s.rescue) { x.fillStyle = col(0.6 + 0.4 * Math.sin(this.t * 4)); T(this.rescueText(), W / 2, H * 0.7, 'center', 12); }
     // ---- what just happened
-    x.textAlign = 'center';
     this.events.forEach((e, i) => {
       x.font = font(15, 700);
       x.fillStyle = e.red ? red(Math.min(1, 2 - e.t / 4)) : col(Math.min(1, 2 - e.t / 4));
-      x.fillText(e.txt, W / 2, H * 0.17 + i * 24 * f / 900);
+      T(e.txt, W / 2, H * 0.11 + i * 24 * u, 'center', 15);
     });
+    // ---- the suit's figure and the systems that are out (bottom left)
+    this.figure(x, S, W * 0.1, H * 0.6, f, col, red);
+    boxes.push([W * 0.1 - 6, H * 0.6 - 16 * u, W * 0.1 + 130 * u, H * 0.6 + 130 * u]);
+    // ---- markers: B-29, H8 (their labels keep clear of the rest)
+    x.shadowBlur = 3 * u;
+    this.markers(x, col, f);
+    x.shadowBlur = 0;
     // ---- the camera's frame
     if (this.camMode) this.viewfinder(x, W, H, f, col, font);
     // ---- cracks in the visor
@@ -303,7 +391,7 @@ export class VisorHud {
         let dx = q.x, dy = -q.y;
         if (!inFront) { dx = -dx; dy = -dy; }
         const a = Math.atan2(dy, dx);
-        sx = W / 2 + Math.cos(a) * W * 0.42; sy = H / 2 + Math.sin(a) * H * 0.38;
+        sx = W / 2 + Math.cos(a) * W * 0.36; sy = H * 0.46 + Math.sin(a) * H * 0.3;
         x.save(); x.translate(sx, sy); x.rotate(a);
         x.fillStyle = col(0.8); x.beginPath(); x.moveTo(12, 0); x.lineTo(-6, -7); x.lineTo(-6, 7); x.closePath(); x.fill();
         x.restore();
@@ -312,8 +400,16 @@ export class VisorHud {
         x.strokeStyle = col(0.85); x.lineWidth = 1.5;
         for (const [ax, ay] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { x.beginPath(); x.moveTo(sx + ax * r, sy + ay * r * 0.4); x.lineTo(sx + ax * r, sy + ay * r); x.lineTo(sx + ax * r * 0.4, sy + ay * r); x.stroke(); }
       }
+      // the label under it, moved on down (or up) until it is clear of what is already there
       x.fillStyle = col(0.9); x.textAlign = 'center';
-      x.fillText(`${it.name}  ${fmtD(it.d)}`, sx, sy + 26 * f / 900);
+      const label = `${it.name}  ${fmtD(it.d)}`;
+      const w = x.measureText(label).width, lh = 16 * f / 900;
+      let ly = sy + 26 * f / 900;
+      const hit = (yy) => (this._boxes || []).some((b) => sx + w / 2 > b[0] && sx - w / 2 < b[2] && yy + lh / 2 > b[1] && yy - lh / 2 < b[3]);
+      for (let k = 0; k < 4 && hit(ly); k++) ly += (sy < H / 2 ? 1 : -1) * lh * 1.2;
+      if (hit(ly)) continue;
+      x.fillText(label, sx, ly);
+      if (this._boxes) this._boxes.push([sx - w / 2 - 4, ly - lh / 2, sx + w / 2 + 4, ly + lh / 2]);
     }
   }
 

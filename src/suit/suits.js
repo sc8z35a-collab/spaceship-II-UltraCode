@@ -46,7 +46,9 @@ export class Suits {
     this.rescue = null;
     this.ref = 'b29';            // what speeds are measured against on the visor
     this.hud = new VisorHud(g, this);
-    this.light = new THREE.SpotLight(0xf4f8ff, 0, 40, 0.42, 0.55, 1.4);
+    // the helmet's lamps: a pair of LED floods (a narrow-ish beam, soft edge, falling off with the
+    // square of the distance)
+    this.light = new THREE.SpotLight(0xf4f8ff, 0, 45, 0.38, 0.65, 2);
     this.light.layers.enableAll();
     g.shipVis.root.add(this.light, this.light.target);
   }
@@ -84,7 +86,7 @@ export class Suits {
   don(kind) {
     const g = this.g, pl = g.player, R = this.racks[kind];
     if (!R || this.seq || pl.suit) return false;
-    this.seq = { kind, on: true, t: 0, T: kind === 'h8' ? 7.4 : 6.6, from: { pos: pl.eyeLocal.clone(), q: pl.lookQuat.clone() }, said: {} };
+    this.seq = { kind, on: true, t: 0, T: kind === 'h8' ? 7.4 : 7.1, from: { pos: pl.eyeLocal.clone(), q: pl.lookQuat.clone() }, said: {} };
     if (R.onStart) R.onStart(true);
     this.lockInput(true);
     return true;
@@ -112,7 +114,7 @@ export class Suits {
     const at = this.suitPoint(R, V(0, 1.0, 0));
     // the timeline (seconds): turn to the back, door open, in / out, door shut, turn back
     const L = S.on
-      ? (h8 ? { turn0: [0.6, 2.4], open: [2.2, 3.0], move: [2.6, 4.1], shut: [4.1, 4.8], turn1: [4.9, 6.4], sit: [5.8, 7.2] } : { turn0: [0, 1.8], open: [1.5, 2.4], move: [2.0, 3.6], shut: [3.6, 4.3], turn1: [4.5, 6.3] })
+      ? (h8 ? { turn0: [0.6, 2.4], open: [2.2, 3.0], move: [2.6, 4.3], shut: [4.2, 4.9], turn1: [4.9, 6.4], sit: [5.8, 7.2] } : { turn0: [0, 1.8], open: [1.5, 2.4], move: [2.1, 3.9], shut: [3.8, 4.5], turn1: [4.6, 6.4], step: [6.4, 7.1] })
       : (h8 ? { stand: [0, 1.2], turn0: [1.2, 2.8], open: [2.8, 3.6], move: [3.5, 5.0], shut: [5.0, 5.8], turn1: [5.8, 7.4] } : { into: [0, 1.0], turn0: [1.0, 2.8], open: [2.6, 3.4], move: [3.4, 4.6], shut: [4.4, 5.2], turn1: [5.0, 6.6] });
     S.L = L;
     // the turntable: idle facing -> its back to the wearer -> idle again
@@ -153,7 +155,7 @@ export class Suits {
     if (S.on) {
       R.api.root.visible = false;
       if (S.kind === 'b29') {
-        // standing on the rack's spot, facing the room
+        // stepped off the turntable, facing the room
         const f = this.suitFacing(R);
         const feet = this.suitPoint(R, V(0, 0, 0.0));
         pl.teleport(feet.clone().add(V(0, 0.95, 0)).addScaledVector(f, 0.35));
@@ -176,16 +178,34 @@ export class Suits {
   }
 
   /** where things are with the suit turned round (its back to the wearer, run out of its niche):
-   * the place behind it the wearer climbs in from, and its eye then */
+   * the place behind it the wearer climbs in from (far enough back to see the whole of the open
+   * back), the hatch's opening, the inside of the torso, and the eye in the helmet then */
   backPoints(R, h8) {
     const p0 = R.pivot.position.clone(), r0 = R.pivot.rotation.y;
     R.pivot.rotation.y = R.idle + Math.PI;
     if (R.slide) R.slide(1);
-    const behind = this.suitPoint(R, V(0, 1.6, h8 ? 0.62 : 0.78));
+    const behind = this.suitPoint(R, V(0, h8 ? 1.62 : 1.74, h8 ? 0.95 : 1.3));
+    const look = this.suitPoint(R, V(0, 1.3, 0.1));
+    const hatch = this.suitPoint(R, V(0, 1.3, 0.42));
+    const torso = this.suitPoint(R, V(0, 1.36, 0.02));
     const eye = this.suitPoint(R, EYE_IN);
     R.pivot.position.copy(p0); R.pivot.rotation.y = r0;
     R.api.root.updateWorldMatrix(true, false);
-    return { behind, eye };
+    return { behind, look, hatch, torso, eye };
+  }
+
+  /**
+   * how far into the suit the eye is during the sequence: the helmet round the view once the head
+   * is up in it, the dark of the suit's body on the way through (it hides the suit going)
+   */
+  seqInside() {
+    const S = this.seq;
+    if (!S || !S.L) return { frame: 0, dark: 0 };
+    const L = S.L;
+    const k = Math.max(0, Math.min(1, (S.t - L.move[0]) / (L.move[1] - L.move[0])));
+    const inside = S.on ? k : 1 - k;
+    const sm = (a, b, x) => { const u = Math.max(0, Math.min(1, (x - a) / (b - a))); return u * u * (3 - 2 * u); };
+    return { frame: sm(0.74, 0.94, inside), dark: sm(0.3, 0.5, inside) * (1 - sm(0.8, 0.96, inside)) };
   }
 
   /** where the eye is during the sequence (PF), at time t */
@@ -200,23 +220,39 @@ export class Suits {
     const behind = B.behind;
     const look = (from, to) => _q2.setFromRotationMatrix(_m.lookAt(from, to, V(0, 1, 0))).clone();
     const qIn = look(eyeIn, eyeIn.clone().add(fwd));
-    const qBehind = look(behind, B.eye);
+    const qBehind = look(behind, B.look);
+    // the climb in: down to the hatch, in through it, up into the helmet (a smooth curve through
+    // those points; the eye ducks a little going through)
+    const path = (u) => {
+      const P = [behind, B.hatch, B.torso, eyeIn];
+      const n = P.length - 1, x = Math.max(0, Math.min(0.9999, u)) * n, i = Math.floor(x), f = x - i;
+      const p0 = P[Math.max(0, i - 1)], p1 = P[i], p2 = P[i + 1], p3 = P[Math.min(n, i + 2)];
+      const f2 = f * f, f3 = f2 * f;
+      return p1.clone().multiplyScalar(2).add(p2.clone().sub(p0).multiplyScalar(f)).add(p0.clone().multiplyScalar(2).sub(p1.clone().multiplyScalar(5)).add(p2.clone().multiplyScalar(4)).sub(p3).multiplyScalar(f2)).add(p0.clone().negate().add(p1.clone().multiplyScalar(3)).sub(p2.clone().multiplyScalar(3)).add(p3).multiplyScalar(f3)).multiplyScalar(0.5);
+    };
     const from = S.from;
     let pos, q;
     if (S.on) {
       const k1 = seg(t, 0, L.move[0]), k2 = seg(t, L.move[0], L.move[1]);
-      pos = from.pos.clone().lerp(behind, k1).lerp(eyeIn, k2);
-      q = from.q.clone().slerp(qBehind, k1).slerp(qIn, k2);
+      pos = k2 > 0 ? path(k2) : from.pos.clone().lerp(behind, k1);
+      // (looking ahead along the way in, then out through the visor)
+      q = from.q.clone().slerp(qBehind, k1).slerp(qIn, seg(k2, 0.35, 1.0));
+      if (k2 >= 1) pos = eyeIn.clone();
       if (h8 && L.sit) {
         // and back down into the seat, in the suit
         const k3 = seg(t, L.sit[0], L.sit[1]);
         pos.lerp(from.pos, k3); q.slerp(from.q, k3);
       }
+      if (L.step) {
+        // and off the turntable: a step forward onto the deck (a little dip in it)
+        const k4 = seg(t, L.step[0], L.step[1]);
+        pos.addScaledVector(fwd, 0.35 * k4).add(V(0, -0.035 * Math.sin(k4 * Math.PI), 0));
+      }
     } else {
       const k0 = h8 ? seg(t, L.stand[0], L.stand[1]) : seg(t, L.into[0], L.into[1]);
       const k2 = seg(t, L.move[0], L.move[1]);
-      pos = from.pos.clone().lerp(eyeIn, k0).lerp(behind, k2);
-      q = from.q.clone().slerp(qIn, k0).slerp(qBehind, k2);
+      pos = k2 > 0 ? path(1 - k2) : from.pos.clone().lerp(eyeIn, k0);
+      q = from.q.clone().slerp(qIn, k0).slerp(qBehind, seg(k2, 0.0, 0.65));
       if (h8) { const k3 = seg(t, S.T - 1.4, S.T); pos.lerp(from.pos, k3); q.slerp(from.q, k3); }
     }
     return { pos, q };
@@ -252,6 +288,9 @@ export class Suits {
     } else this.throttle = 0;
     this.cam.update(rdt);
     this.updateLight();
+    // the racked suits: the cabin round them in their glass and on their shells
+    const env = g.shipVis && g.shipVis.envInterior;
+    if (env) for (const R of Object.values(this.racks)) if (R.api && R._env !== env) { R._env = env; R.api.setEnv(env, 0.55); }
     this.stationContacts();
     this.updateHatches();
     this.hud.update(rdt);
@@ -507,7 +546,7 @@ export class Suits {
   updateLight() {
     const g = this.g, pl = g.player, S = this.state;
     const on = !!S && this.lamp && S.sys.lamp > 0.15 && !S.shutdown && S.battery > 0;
-    this.light.intensity = on ? 9 * Math.min(1, S.sys.lamp * 1.3) : 0;
+    this.light.intensity = on ? 3.2 * Math.min(1, S.sys.lamp * 1.3) : 0;
     if (on) {
       this.light.position.copy(pl.eyeLocal).add(V(0, 0.08, 0));
       this.light.target.position.copy(pl.eyeLocal).add(V(0, 0, -1).applyQuaternion(pl.lookQuat));

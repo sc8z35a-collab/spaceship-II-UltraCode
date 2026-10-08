@@ -35,11 +35,26 @@ function makeSystem(additive) {
   return { pts, pos, col, size, n: 0, p: [] };
 }
 
+/** the sparks' trails: a short bright line behind each (where it was a moment ago) */
+function makeStreaks() {
+  const g = new THREE.BufferGeometry();
+  const pos = new Float32Array(MAX * 6), col = new Float32Array(MAX * 6);
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3).setUsage(THREE.DynamicDrawUsage));
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3).setUsage(THREE.DynamicDrawUsage));
+  const m = new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending });
+  const lines = new THREE.LineSegments(g, m);
+  lines.frustumCulled = false;
+  lines.layers.set(LAYER_NEAR); lines.layers.enable(LAYER_MID);
+  lines.renderOrder = 21;
+  return { lines, pos, col };
+}
+
 export class Particles {
   constructor(parent) {
     this.add = makeSystem(true);
     this.alpha = makeSystem(false);
-    parent.add(this.add.pts, this.alpha.pts);
+    this.streaks = makeStreaks();
+    parent.add(this.add.pts, this.alpha.pts, this.streaks.lines);
     this.emitters = [];
     this.gravity = new THREE.Vector3();
     this.airflow = null; // function(pos) -> velocity of air (decompression)
@@ -108,6 +123,8 @@ export class Particles {
       }
     }
     const g = this.gravity;
+    let ns = 0;
+    const SP = this.streaks.pos, SC = this.streaks.col;
     for (const sys of [this.add, this.alpha]) {
       let n = 0;
       const out = [];
@@ -128,6 +145,18 @@ export class Particles {
         sys.col[n * 4] = P.c[0]; sys.col[n * 4 + 1] = P.c[1]; sys.col[n * 4 + 2] = P.c[2]; sys.col[n * 4 + 3] = P.a * Math.max(0, fade);
         sys.size[n] = s;
         n++;
+        // a spark draws its trail: from where it is back along where it came from (a few
+        // hundredths of a second of its flight), bright at the head, gone at the tail
+        if (P.kind === 'spark' && ns < MAX) {
+          const k = Math.min(0.035, 0.6 / Math.max(1, P.vel.length())) + 0.012;
+          const a = P.a * Math.max(0, fade) * 0.55;
+          const i6 = ns * 6;
+          SP[i6] = P.pos.x; SP[i6 + 1] = P.pos.y; SP[i6 + 2] = P.pos.z;
+          SP[i6 + 3] = P.pos.x - P.vel.x * k; SP[i6 + 4] = P.pos.y - P.vel.y * k; SP[i6 + 5] = P.pos.z - P.vel.z * k;
+          SC[i6] = P.c[0] * a; SC[i6 + 1] = P.c[1] * a; SC[i6 + 2] = P.c[2] * a;
+          SC[i6 + 3] = 0; SC[i6 + 4] = 0; SC[i6 + 5] = 0;
+          ns++;
+        }
       }
       sys.p = out;
       sys.n = n;
@@ -137,5 +166,10 @@ export class Particles {
       geo.attributes.color.needsUpdate = true;
       geo.attributes.size.needsUpdate = true;
     }
+    const sg = this.streaks.lines.geometry;
+    sg.setDrawRange(0, ns * 2);
+    sg.attributes.position.needsUpdate = true;
+    sg.attributes.color.needsUpdate = true;
+    this.streaks.lines.visible = ns > 0;
   }
 }

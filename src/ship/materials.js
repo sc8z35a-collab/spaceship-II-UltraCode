@@ -6,6 +6,7 @@ import * as THREE from 'three';
 import { noiseTex } from '../core/noiseTex.js';
 import { detailTextures, DETAIL_TILE } from './detailTex.js';
 import { OUTLINE_GLSL } from './tornMetal.js';
+import { strikeGLSL, B29_STRIKE_U } from '../combat/strikes.js';
 
 export const MAX_DENTS = 48;
 export const MAX_PEEL = 24;
@@ -95,6 +96,7 @@ uniform float uHeat;
 uniform vec3 uHeatDir;
 uniform float uTime;
 uniform vec4 uScorch[8];
+uniform mat4 uWorldToShip;
 varying vec3 vShipPos;
 varying vec3 vShipNrm;
 varying float vDent;
@@ -269,7 +271,6 @@ void dentFrag(vec3 p, out float bump, out float heat, out float depth){
 #endif
 #ifdef PEEL
 uniform int uPeelN;
-uniform mat4 uWorldToShip;
 // Skin panels torn off the hull. Where one was, the bay under it shows as a real recess: the view
 // ray is followed down into it to its floor (stringers and frames over the gold insulation
 // blanket, a bare flange round the edge with the rivets sheared off), or it meets the side of the
@@ -491,6 +492,38 @@ export function followDents(mat) {
   return mat;
 }
 
+/**
+ * decals and bullet pits on the skin: gone where the strike engine has taken off what they lie on
+ * (minLayer 1: the paint — the lettering goes with it; 2: the skin — the pits go with it)
+ */
+export function strikeCut(mat, minLayer = 1) {
+  const prev = mat.onBeforeCompile;
+  const prevKey = mat.customProgramCacheKey;
+  mat.onBeforeCompile = (sh, r) => {
+    if (prev) prev(sh, r);
+    Object.assign(sh.uniforms, { tStrike: B29_STRIKE_U.tStrike, uStrikeN: B29_STRIKE_U.uStrikeN, uStrikeTime: B29_STRIKE_U.uStrikeTime, uWorldToShip: shipUniforms.uWorldToShip });
+    const decl = sh.vertexShader.includes('uniform mat4 uWorldToShip;') ? '' : 'uniform mat4 uWorldToShip;\n';
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\n' + decl + 'varying vec3 vStP; varying vec3 vStN;')
+      .replace('#include <project_vertex>', `#include <project_vertex>
+        {
+          mat4 _m2 = modelMatrix;
+          #ifdef USE_INSTANCING
+          _m2 = _m2 * instanceMatrix;
+          #endif
+          vStP = (uWorldToShip * _m2 * vec4(transformed, 1.0)).xyz;
+          vStN = normalize(mat3(uWorldToShip * _m2) * objectNormal);
+        }`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vStP; varying vec3 vStN;\n' + strikeGLSL('b29', 'cut'))
+      .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+        { StOut _sc = strikeAt(vStP, normalize(vStN), vec3(0.0), 0.0); if (_sc.layer >= ${minLayer.toFixed(1)}) discard; }`);
+  };
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|strikeCut' + minLayer;
+  mat.needsUpdate = true;
+  return mat;
+}
+
 function openingDepthMaterial() {
   const m = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking });
   m.onBeforeCompile = (sh) => {
@@ -511,7 +544,7 @@ function openingDepthMaterial() {
  *         grime (0..1), heat (bool), triScale }
  */
 export function patchShipMaterial(mat, opts = {}) {
-  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false, peel: false }, opts);
+  const o = Object.assign({ dentable: false, openings: false, wear: 0.3, panels: 0, grime: 0.3, heat: false, triScale: 1, rough: 0.0, edge: 0.0, ao: true, detail: null, detailDepth: 0.004, belly: false, wainscot: false, peel: false, strike: null }, opts);
   if (o.peel) o.dentable = true;
   mat.userData.shipPatched = true;
   if (o.openings) mat.userData.depthMat = openingDepthMaterial();
@@ -524,6 +557,8 @@ export function patchShipMaterial(mat, opts = {}) {
     if (o.dentable) sh.defines = Object.assign(sh.defines || {}, { DENTABLE: '' });
     // (LOW II: no torn-off panels drawn; the dents and holes stay)
     if (o.peel && !L2) sh.defines = Object.assign(sh.defines || {}, { PEEL: '' });
+    // the strike engine's craters (the skin: down into it; fittings: burned and sooted)
+    if (o.strike) { sh.defines = Object.assign(sh.defines || {}, { STRIKE: '' }); Object.assign(sh.uniforms, { tStrike: B29_STRIKE_U.tStrike, uStrikeN: B29_STRIKE_U.uStrikeN, uStrikeTime: B29_STRIKE_U.uStrikeTime }); }
     // low quality: surface detail from one projection instead of three
     if (QUALITY.level !== 'high') sh.defines = Object.assign(sh.defines || {}, { LOWQ: '' });
     if (L2) sh.defines = Object.assign(sh.defines || {}, { LOW2: '' });
@@ -566,7 +601,7 @@ export function patchShipMaterial(mat, opts = {}) {
         #include <defaultnormal_vertex>`);
     }
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS + (detail ? '\nuniform sampler2D tDetail;\nuniform float uDetailScale;' : ''))
+      .replace('#include <common>', '#include <common>\n' + COMMON_FRAG_PARS + (detail ? '\nuniform sampler2D tDetail;\nuniform float uDetailScale;' : '') + (o.strike ? '\n' + strikeGLSL('b29', L2 && o.strike === 'deep' ? 'surface' : o.strike) : ''))
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
         float _bumpH = 0.0;
         float _detailRough = 0.0;
@@ -687,6 +722,17 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb = mix(diffuseColor.rgb, _rimCol, _rimK);
           if (_peelOn > 0.5) diffuseColor.rgb = _peelCol;
           #endif
+          #ifdef STRIKE
+          {
+            // the strike engine: soot and chipped paint round a crater, the crater itself
+            StOut _st = strikeAt(vShipPos, normalize(vShipNrm), (uWorldToShip * vec4(cameraPosition, 1.0)).xyz, length(fwidth(vShipPos)));
+            diffuseColor.rgb = mix(diffuseColor.rgb, ST_SOOT, _st.soot * 0.9);
+            diffuseColor.rgb = mix(diffuseColor.rgb, _st.kind > 0.5 ? ST_CHIP_B : ST_CHIP, _st.chip * 0.85);
+            if (_st.on > 0.5) { diffuseColor.rgb = _st.col; _peelOn = 1.0; _peelRough = _st.rough; _peelMetal = _st.metal; _peelAO = min(_peelAO, _st.ao); }
+            _bumpH += _st.bump;
+            _peelEm += _st.em;
+          }
+          #endif
         }`)
       .replace('#include <normal_fragment_maps>', `#include <normal_fragment_maps>
         ${panels > 0 || detail || o.belly || o.dentable ? `
@@ -723,7 +769,7 @@ export function patchShipMaterial(mat, opts = {}) {
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
         if (_peelOn > 0.5) metalnessFactor = _peelMetal;`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
-        #ifdef PEEL
+        #if defined(PEEL) || defined(STRIKE)
         reflectedLight.indirectDiffuse *= _peelAO;
         reflectedLight.indirectSpecular *= _peelAO;
         reflectedLight.directDiffuse *= mix(1.0, _peelAO, 0.7);
@@ -773,14 +819,14 @@ function canvasTex(size, draw, repeat = 1, srgb = true) {
 export function createMaterials() {
   const M = {};
   // ---- exterior ----
-  M.hull = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true });
+  M.hull = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true, strike: 'surface' });
   // the skin itself (not the fittings on it): its panels can be torn off
-  M.hullSkin = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true, peel: true });
+  M.hullSkin = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: true, openings: true, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006, belly: true, peel: true, strike: 'deep' });
   // the outer hatch leaf sits inside the hull's hatch opening, which the hull material cuts away:
   // it needs the same look without the opening cut (it rendered invisible when closed)
   M.hatchLeaf = patchShipMaterial(std(0xdcdeda, 0.5, 0.18), { dentable: false, openings: false, wear: 0.8, grime: 0.55, heat: true, ao: false, detail: 'hull', detailDepth: 0.006 });
-  M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true, ao: false });
-  M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true, ao: false });
+  M.hullDark = patchShipMaterial(std(0x4a4e55, 0.5, 0.35), { dentable: true, wear: 0.7, panels: 0.8, grime: 0.4, heat: true, ao: false, strike: 'surface' });
+  M.hullOrange = patchShipMaterial(std(0xd2691e, 0.5, 0.1), { dentable: true, wear: 0.9, grime: 0.5, heat: true, ao: false, strike: 'surface' });
   M.metal = patchShipMaterial(std(0xa8adb3, 0.32, 0.9), { wear: 0.6, grime: 0.3 });
   M.metalDark = patchShipMaterial(std(0x3a3d42, 0.45, 0.8), { wear: 0.5, grime: 0.3 });
   M.gold = patchShipMaterial(std(0xc8a24a, 0.28, 1.0), { wear: 0.8, grime: 0.15, heat: true });
@@ -874,6 +920,8 @@ export function createMaterials() {
   M.navWhite = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1, 1, 1), emissiveIntensity: 0 });
   M.stringLight = new THREE.MeshStandardMaterial({ color: 0x000000, emissive: new THREE.Color(1.0, 0.7, 0.35), emissiveIntensity: 5.0 });
   M.decal = new THREE.MeshStandardMaterial({ map: shipLettering(), transparent: true, roughness: 0.6, metalness: 0.1, polygonOffset: true, polygonOffsetFactor: -2, depthWrite: false });
+  // (the lettering is paint: it sinks with the dents, and goes where the paint is blasted off)
+  strikeCut(followDents(M.decal), 1);
   M.poster1 = new THREE.MeshStandardMaterial({ map: posterTexture(1), roughness: 0.8 });
   M.poster2 = new THREE.MeshStandardMaterial({ map: posterTexture(2), roughness: 0.8 });
   M.poster3 = new THREE.MeshStandardMaterial({ map: posterTexture(3), roughness: 0.8 });

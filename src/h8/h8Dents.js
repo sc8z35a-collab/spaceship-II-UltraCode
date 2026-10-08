@@ -16,6 +16,7 @@ import { LAYER_NEAR } from '../core/layers.js';
 import { Pockmarks } from '../combat/pockmarks.js';
 import { CAM_DEAD } from './h8Display.js';
 import { armourTileAt, armourTileGeometry } from './h8Exterior.js';
+import { StrikeSet, H8_STRIKE_U, strikeGLSL, ST_BUMP, strikeDebris } from '../combat/strikes.js';
 
 export const DENT_MAX = 32;
 export const TILE_MAX = 32;
@@ -38,7 +39,10 @@ export const DENT_U = {
   tH8Dent: { value: dentTex },
   uH8Root: { value: new THREE.Matrix4() },
   uH8RootInv: { value: new THREE.Matrix4() },
+  // the strike engine's sites (five stages through H8's armour)
+  tStrike: H8_STRIKE_U.tStrike, uStrikeN: H8_STRIKE_U.uStrikeN, uStrikeTime: H8_STRIKE_U.uStrikeTime,
 };
+const PLATE_OUT = H8.R + 0.07;          // the plates' outer face
 const LATMAX = 79 * Math.PI / 180;
 
 // the outer layer that dents: from just under the plates to just over them (the camera pods,
@@ -93,7 +97,18 @@ vec3 h8Disp = vec3(0.0);
 
 const FRAG_HEAD = /* glsl */`
 uniform int uDentN; uniform int uTileN; uniform highp sampler2D tH8Dent;
+uniform mat4 uH8RootInv;
 varying vec3 vH8P;`;
+
+// the strike engine in H8's frame: its craters down through the armour (the plates), the burned
+// and sooted look on the fittings, decals and bullet pits gone with the layer under them
+const fragStrike = (mode) => /* glsl */`
+StOut _st = strikeAt(vH8P, normalize(vH8P), (uH8RootInv * vec4(cameraPosition, 1.0)).xyz, length(fwidth(vH8P)));
+float _stBump = _st.bump;
+${mode === 'cut1' ? 'if (_st.layer >= 1.0) discard;' : mode === 'cut2' ? 'if (_st.layer >= 2.0) discard;' : ''}
+diffuseColor.rgb = mix(diffuseColor.rgb, ST_SOOT, _st.soot * 0.9);
+diffuseColor.rgb = mix(diffuseColor.rgb, ST_CHIP, _st.chip * 0.8);
+if (_st.on > 0.5) diffuseColor.rgb = _st.col;`;
 
 const fragDent = (plate, tiles) => /* glsl */`
 float dSoot = 0.0, dBare = 0.0, dCrack = 0.0;
@@ -153,9 +168,10 @@ ${tiles ? `{
 
 /** give a material the dents (plate: the outer plates, which can be torn through; tiles: it is
  * the plates themselves or lies on them, and goes when one is knocked off) */
-export function dentify(mat, plate = false, tiles = false) {
+export function dentify(mat, plate = false, tiles = false, strike = plate ? 'deep' : 'surface') {
   const prev = mat.onBeforeCompile;
   const prevKey = mat.customProgramCacheKey && mat.hasOwnProperty('customProgramCacheKey') ? mat.customProgramCacheKey : null;
+  const stMode = strike === 'cut1' || strike === 'cut2' ? 'cut' : strike;
   mat.onBeforeCompile = (sh, r) => {
     if (prev) prev(sh, r);
     Object.assign(sh.uniforms, DENT_U);
@@ -164,16 +180,24 @@ export function dentify(mat, plate = false, tiles = false) {
       .replace('#include <beginnormal_vertex>', '#include <beginnormal_vertex>\n' + VERT_DENT)
       .replace('#include <begin_vertex>', '#include <begin_vertex>\ntransformed += h8Disp;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\n' + FRAG_HEAD)
-      .replace('#include <alphamap_fragment>', fragDent(plate, tiles) + '\n#include <alphamap_fragment>')
+      .replace('#include <common>', '#include <common>\n' + FRAG_HEAD + '\n' + strikeGLSL('h8', stMode))
+      .replace('#include <alphamap_fragment>', fragDent(plate, tiles) + '\n' + fragStrike(strike) + '\n#include <alphamap_fragment>')
       .replace('#include <roughnessmap_fragment>', `#include <roughnessmap_fragment>
-        roughnessFactor = mix(mix(roughnessFactor, 0.97, dSoot), 0.32, dBare * 0.6);`)
+        roughnessFactor = mix(mix(roughnessFactor, 0.97, dSoot), 0.32, dBare * 0.6);
+        if (_st.on > 0.5) roughnessFactor = _st.rough;`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
-        metalnessFactor = mix(mix(metalnessFactor, 0.02, dSoot), 0.9, dBare * 0.6);`)
+        metalnessFactor = mix(mix(metalnessFactor, 0.02, dSoot), 0.9, dBare * 0.6);
+        if (_st.on > 0.5) metalnessFactor = _st.metal;`)
+      .replace('#include <normal_fragment_maps>', '#include <normal_fragment_maps>\n' + ST_BUMP)
+      .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        reflectedLight.indirectDiffuse *= _st.ao;
+        reflectedLight.indirectSpecular *= _st.ao;
+        reflectedLight.directDiffuse *= mix(1.0, _st.ao, 0.7);
+        reflectedLight.directSpecular *= _st.ao;`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
-        totalEmissiveRadiance += dGlow;`);
+        totalEmissiveRadiance += dGlow + _st.em;`);
   };
-  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|h8dent' + (plate ? 'P' : '') + (tiles ? 'T' : '');
+  mat.customProgramCacheKey = () => (prevKey ? prevKey.call(mat) : '') + '|h8dent' + (plate ? 'P' : '') + (tiles ? 'T' : '') + strike;
   mat.needsUpdate = true;
   return mat;
 }
@@ -227,9 +251,12 @@ export class H8Hull {
     this.petals = [];
     this.vents = [];
     this.petalMat = new THREE.MeshStandardMaterial({ color: 0x4a4f57, roughness: 0.55, metalness: 0.75, side: THREE.DoubleSide });
-    // bullet strikes: pits on the plates (they sink with the dents they lie in)
+    // bullet strikes: pits on the plates (they sink with the dents they lie in, and go with the
+    // ceramic when it is shot away)
     this.pocks = new Pockmarks(vessel.ext.group, 300, [LAYER_NEAR]);
-    dentify(this.pocks.mesh.material, false, true);
+    dentify(this.pocks.mesh.material, false, true, 'cut2');
+    // the strike engine: five stages down through the armour at every spot struck
+    this.strikes = new StrikeSet('h8', H8_STRIKE_U);
     vessel.extMeshes.push(this.pocks.mesh);
   }
 
@@ -282,8 +309,16 @@ export class H8Hull {
       dent.hole = Math.min(0.6, 0.28 + Math.log10(dent.E / 2.5e7 + 1) * 0.3);
       this.addPetals(dent);
     }
-    // the plate it struck works loose (and those round a big blow)
-    this.plateBlow(d, E);
+    // the strike engine: the spot struck one stage deeper through the armour (a heavy blow takes
+    // it further at once); its pieces and sparks fly off it
+    if (shot || E > 2e6) {
+      const p = d.clone().multiplyScalar(PLATE_OUT);
+      const res = this.strikes.hit(p, d, d.clone().negate(), E);
+      if (!this.restoring) strikeDebris(this.debrisCtx(), res, p.clone().addScaledVector(d, 0.01), d, d.clone().negate().add(new THREE.Vector3().randomDirection().multiplyScalar(0.3)).normalize(), E);
+    }
+    // the plate it struck works loose (and those round a big blow; a gun round's work is the
+    // strike engine's)
+    if (!shot) this.plateBlow(d, E);
     if (!shot && E > 1e7) {
       const ax = new THREE.Vector3().crossVectors(d, Math.abs(d.y) < 0.9 ? V(0, 1, 0) : V(1, 0, 0)).normalize();
       for (let k = 0; k < 6; k++) {
@@ -303,6 +338,20 @@ export class H8Hull {
       if (E > 1e6 && !shot) v.fx.burst('smoke', p, d, 12, { speed: 0.6, spread: 0.8 });
     }
     return { dent: shot && !dent.hole ? { hole: 0, holeSaid: true } : dent, blinded };
+  }
+
+  /** where the strike engine's pieces fly from: H8 in its orbit (or with B-29, docked) */
+  debrisCtx() {
+    const v = this.v, g = v.g, f = v.flight;
+    return {
+      kind: 'h8', combat: g && g.combat, fx: v.fx, pos: f.pos, quat: f.quat, vel: v.mode === 'docked' ? g.flight.vel : f.vel,
+      sound: (p, k, final) => {
+        if (!g || !g.audio || !g.audio.ready || !(v.crew || v.mode === 'docked')) return;
+        const ap = p.clone().multiplyScalar(0.9).add(H8.dockAt);
+        g.audio._burst(ap, { dur: 0.15 + 0.25 * k, freq: 3200 - 2200 * k, q: 2.2, gain: 0.04 + 0.08 * k, type: 'white', filter: 'bandpass', sweep: -0.5 });
+        if (final) g.audio._burst(ap, { dur: 0.7, freq: 300, q: 1.0, gain: 0.18, type: 'white', filter: 'lowpass', sweep: -0.6 });
+      },
+    };
   }
 
   /** a blow on the plate under d: enough of them and its bolts shear — it is knocked off */
@@ -404,6 +453,9 @@ export class H8Hull {
   }
 
   update(dt) {
+    this.strikes.update(dt);
+    // the spots struck right through: their cut wiring spits sparks
+    if (this.v.fx) for (const st of this.strikes.sites) if (st.stage >= this.strikes.stages && Math.random() < dt * 0.3) this.v.fx.burst('spark', st.p.clone().addScaledVector(st.n, -0.05), st.n, 4 + Math.floor(Math.random() * 12), { speed: 2, spread: 0.8 });
     let any = false;
     for (const d of this.dents) if (d.heat > 0.001) { d.heat *= Math.exp(-dt / 7); if (d.heat < 0.002) d.heat = 0; any = true; }
     for (const t of this.tiles) if (t.heat > 0.001) { t.heat *= Math.exp(-dt / 6); if (t.heat < 0.002) t.heat = 0; any = true; }
@@ -435,6 +487,7 @@ export class H8Hull {
     this.tiles.length = 0;
     this.tileHits.clear();
     this.pocks.clear();
+    this.strikes.clear();
     this.cams = [1, 1, 1, 1];
     for (const p of this.petals) {
       this.v.ext.group.remove(p.grp);
@@ -452,7 +505,7 @@ export class H8Hull {
     return {
       d: this.dents.map((d) => [d.dir.x, d.dir.y, d.dir.z, d.a, d.depth, d.hole, d.soot, d.seed, d.E, d.a0 || d.a].map((x) => +x.toFixed(5))),
       t: this.tiles.map((t) => [t.bi, t.i]),
-      cams: this.cams.slice(), p: this.pocks.serialize(160),
+      cams: this.cams.slice(), p: this.pocks.serialize(160), st: this.strikes.serialize(),
     };
   }
 
@@ -474,6 +527,7 @@ export class H8Hull {
     }
     if (s.cams) this.cams = s.cams.slice(0, 4);
     this.pocks.restore(s.p);
+    this.strikes.restore(s.st);
     this.restoring = true;
     this.sync();
     this.restoring = false;

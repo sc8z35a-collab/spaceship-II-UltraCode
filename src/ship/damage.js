@@ -4,7 +4,8 @@
 // stays and gets worse until the repair dock. A structural integrity figure sums it all up: when
 // it runs out (or one impact is simply too big) the hull breaks apart.
 import * as THREE from 'three';
-import { shipUniforms, MAX_DENTS, MAX_PEEL, MAX_BREACH, dentData, followDents } from './materials.js';
+import { shipUniforms, MAX_DENTS, MAX_PEEL, MAX_BREACH, dentData, followDents, strikeCut } from './materials.js';
+import { StrikeSet, B29_STRIKE_U, strikeDebris } from '../combat/strikes.js';
 import { glassUniforms } from './glass.js';
 import { OPENINGS, HULL, sectionPoint, sectionNormal, tForPoint, canopyF, halfWidthAt, heightRangeAt, DECK_Y } from './hullShape.js';
 import { PIPE_SYSTEMS } from './underfloor.js';
@@ -65,7 +66,12 @@ export class Damage {
     // bullet strikes on the outside (their wear counts against the structure)
     this.pocks = new Pockmarks(game.shipVis.root, 360, [LAYER_NEAR, LAYER_MID]);
     followDents(this.pocks.mesh.material);     // (they sink with the dents they lie in)
+    strikeCut(this.pocks.mesh.material, 2);    // (and go with the skin when it is torn away)
     this.shotWear = 0;
+    // the strike engine: every round's mark exactly where it struck, the same spot struck again
+    // one stage deeper (paint, skin, holed through). The sites lie along the ship: their frames
+    // and stringers run across and along it
+    this.strikes = new StrikeSet('b29', B29_STRIKE_U, (n) => { const t = V(0, 0, 1).addScaledVector(n, -n.z); return t.lengthSq() > 1e-4 ? t.normalize() : V(1, 0, 0); });
   }
 
   // ------------------------------------------------------------------ impacts
@@ -91,21 +97,30 @@ export class Damage {
     let old = 0;
     for (const d of this.dents) if (d.pos.distanceTo(pLocal) < Math.max(d.r, 0.3)) old = Math.max(old, d.depth);
     const weak = Math.min(0.8, this.dentCount(pLocal, 0.6) * 0.15 + 0.7 * Math.min(1, old / 0.45) + this.pocks.countNear(pLocal, 0.35) * 0.1);
-    if (opts.shot && E < 1e6) {
+    const gunRound = opts.shot && E < 1e6;
+    let strike = null;
+    if (gunRound) {
       // a gun round: a pit and a splash of soot where it struck, the skin punched in round it (a
       // small sharp crater with its lip thrown up, glowing for a moment); the wear adds up
       this.pocks.add(pLocal, opts.normal || nOut, 0.2 + 0.07 * Math.cbrt(E / 1e5));
       this.shotWear += E / 1e8;
       const k = Math.cbrt(E / 1000);
       this.addDent(pLocal, push, 0.045 + 0.016 * k, 0.004 + 0.0032 * k, { sharp: 1, heat: Math.min(1, 0.45 + E / 5e5) });
+      // and the strike engine: that spot one stage deeper — the paint off, the skin torn open,
+      // holed through (on the belly: the tile's glaze, the tile, the skin under it)
+      const belly = pLocal.y < -1.15 && nOut.y < -0.55;
+      strike = this.strikes.hit(pLocal, nOut, inward, E, { kind: belly ? 1 : 0 });
+      if (!this.catchingUp) strikeDebris(this.debrisCtx(belly ? 'b29Belly' : 'b29'), strike, pLocal.clone().addScaledVector(nOut, 0.01), nOut, inward, E);
     } else {
       this.addDent(pLocal, push, r, depth, { sharp: E < 2e6 ? 0.4 : 0.15, heat: Math.min(1, 0.3 + E / 4e6) });
       this.addScorch(pLocal, r * 0.8);
     }
-    // the skin's panels (the belly's tiles) round it: loosened, torn half off, torn away
-    if (!opts.noPanels) this.panelBlow(pLocal, nOut, inward, E, r);
-    // breach?
-    const pen = E / (3e5 * (1 - weak));
+    // the skin's panels (the belly's tiles) round it: loosened, torn half off, torn away (a big
+    // blow; a gun round's work is the strike engine's)
+    if (!opts.noPanels && !gunRound) this.panelBlow(pLocal, nOut, inward, E, r);
+    // breach? (a gun round only gets into the cabin through a spot already holed through to the
+    // pressure hull: the round after the third)
+    const pen = gunRound ? (strike.from >= this.strikes.stages ? E / 1.1e5 : 0) : E / (3e5 * (1 - weak));
     const zone = this.zoneForHullPoint(pLocal);
     let breach = null;
     if (pen > 1 && zone) {
@@ -181,6 +196,21 @@ export class Damage {
   }
 
   dentCount(p, rad) { return this.dents.filter((d) => d.pos.distanceTo(p) < rad).length; }
+
+  /** where the strike engine's pieces fly from: B-29 in its orbit, its own particles, the sounds */
+  debrisCtx(kind) {
+    const g = this.g, f = g.flight;
+    return {
+      kind, combat: g.combat, fx: g.fx, pos: f.pos, quat: f.quat, vel: f.vel,
+      sound: (p, k, final) => {
+        if (!g.audio.ready) return;
+        // metal tearing (higher and thinner for the paint, a deep rip for the skin), the last a crunch
+        g.audio._burst(p, { dur: 0.18 + 0.3 * k, freq: 2600 - 1700 * k, q: 2.5, gain: 0.05 + 0.08 * k, type: 'white', filter: 'bandpass', sweep: -0.5 });
+        if (k > 0.5) g.audio.creak(p, 0.35 + 0.5 * k);
+        if (final) g.audio._burst(p, { dur: 0.6, freq: 380, q: 1.2, gain: 0.16, type: 'white', filter: 'lowpass', sweep: -0.6 });
+      },
+    };
+  }
 
   /** a fatigue crack in the cabin wall from p0 (on/near the inner wall) */
   addFracture(p0, dir, sev, len = null, seed = null, restoring = false) {
@@ -783,6 +813,7 @@ export class Damage {
     this.fatigue = 0;
     this.shotWear = 0;
     this.pocks.clear();
+    this.strikes.clear();
     this.broken = false;
     this.group.clear();
     if (this.g.b29Display) this.g.b29Display.repair();
@@ -802,6 +833,8 @@ export class Damage {
     for (const c of this.cracks) if (c && c.broken) x += 0.12;
     for (const f of this.fractures) x += f.sev * (f.sealed ? 0.008 : 0.03);
     for (const pe of this.peels) x += pe.style === 2 ? 0.002 + pe.R * 0.004 : 0.005;
+    // (a spot struck through to the frames takes a little of the skin's strength with it)
+    for (const st of this.strikes.sites) x += st.stage >= this.strikes.stages ? 0.006 : st.stage === 2 ? 0.0015 : 0;
     return Math.max(0, 1 - x);
   }
 
@@ -1004,6 +1037,14 @@ export class Damage {
   updateSkin(dt) {
     const g = this.g, f = g.flight;
     let dirty = false;
+    this.strikes.update(dt);
+    // the spots struck through: their cut wiring spits sparks while there is power
+    if (!this.catchingUp && g.fx && (g.systems.power ?? 1) > 0.3) {
+      for (const st of this.strikes.sites) {
+        if (st.stage < this.strikes.stages || Math.random() > dt * 0.25) continue;
+        g.fx.burst('spark', st.p.clone().addScaledVector(st.n, -0.04), st.n, 5 + Math.floor(Math.random() * 14), { speed: 2.2, spread: 0.8 });
+      }
+    }
     for (const d of this.dents) if (d.heat > 0) { d.heat = d.heat < 0.01 ? 0 : d.heat * Math.exp(-dt / 5); dirty = true; }
     for (const pe of [...this.peels]) {
       if (pe.heat > 0) { pe.heat = pe.heat < 0.01 ? 0 : pe.heat * Math.exp(-dt / 7); dirty = true; }
@@ -1076,7 +1117,7 @@ export class Damage {
       cracks: this.cracks.map((c) => c ? { u: c.u, v: c.v, sev: c.sev, seed: c.seed, patched: c.patched, broken: !!c.broken } : null),
       scorch: this.scorch.map((s) => ({ p: s.pos.toArray(), r: s.r })),
       health: this.health, coolant: this.coolant ?? 1, fatigue: this.fatigue || 0,
-      shotWear: this.shotWear || 0, pocks: this.pocks.serialize(),
+      shotWear: this.shotWear || 0, pocks: this.pocks.serialize(), strikes: this.strikes.serialize(),
       pipes: this.g.layout.pipes.filter((s) => s.leak > 0 || s.patched).map((s) => ({ id: s.id, leak: s.leak, patched: s.patched })),
       equipIssues: this.issues.filter((i) => i.kind === 'equip').map((i) => ({ k: i.ref.k, sev: i.sev, state: i.state })),
     };
@@ -1100,6 +1141,7 @@ export class Damage {
     this.fatigue = d.fatigue || 0;
     this.shotWear = d.shotWear || 0;
     this.pocks.restore(d.pocks);
+    this.strikes.restore(d.strikes);
     for (const b of d.breaches || []) {
       const br = this.addBreach(V(...b.p), V(...b.n), b.r, b.zone, b.seed);
       if (b.patched) { br.patched = true; this._updateBreachLeak(br); this._breachMeshes(br); if (br.vent) { this.g.fx.removeEmitter(br.vent); br.vent = null; } const is = this.issues.find((i) => i.ref === br); if (is) is.state = 'patched'; }

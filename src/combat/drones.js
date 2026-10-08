@@ -20,6 +20,7 @@ import { assignLayers, LAYER_FAR, LAYER_MID } from '../core/layers.js';
 import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { AMMO, GUNS, FireControl, seedOf } from './ballistics.js';
+import { StrikeSet, strikeUniforms, strikeMaterial, strikeDebris } from './strikes.js';
 
 const N = 15;
 const SENSOR = 80e3;         // detection range (m)
@@ -66,13 +67,24 @@ export class Drones {
     this.template = T.mid || T.lo;     // (the pieces a kill leaves)
     this.low = low;
     this.list = [];
+    // (where a round really struck: the body itself, not the sphere round it)
+    this.hitModel = T.mid || T.lo;
+    this.hitModel.updateMatrixWorld(true);
+    this.ray = new THREE.Raycaster();
+    this.ray.layers.enableAll();
     for (let i = 0; i < N; i++) {
-      // each one its own lights (eye, jets, lamp), shared by its levels of detail
+      // each one its own lights (eye, jets, lamp), shared by its levels of detail; its own armour
+      // too, carrying its own strike sites (three stages: the paint, the plate, holed through)
       const own = { eye: this.M.eye.clone(), jet: this.M.jet.clone(), lamp: this.M.lamp.clone() };
+      const SU = strikeUniforms('drone');
+      own.strikes = new StrikeSet('drone', SU);
+      const armour = new Map();
+      for (const key of ['hull', 'plate', 'plate2', 'dark']) armour.set(this.M[key], strikeMaterial(this.M[key].clone(), 'drone', SU, 'deep'));
+      for (const key of ['gun', 'steel', 'radiator', 'stripe', 'red', 'heat', 'nozzle']) if (this.M[key]) armour.set(this.M[key], strikeMaterial(this.M[key].clone(), 'drone', SU, 'surface'));
       const lods = {};
       for (const [k, t] of Object.entries(T)) {
         const grp = t.clone();
-        grp.traverse((o) => { if (o.isMesh) { if (o.material === this.M.eye) o.material = own.eye; else if (o.material === this.M.jet) o.material = own.jet; else if (o.material === this.M.lamp) o.material = own.lamp; o.frustumCulled = false; } });
+        grp.traverse((o) => { if (o.isMesh) { if (o.material === this.M.eye) o.material = own.eye; else if (o.material === this.M.jet) o.material = own.jet; else if (o.material === this.M.lamp) o.material = own.lamp; else if (armour.has(o.material)) o.material = armour.get(o.material); o.frustumCulled = false; } });
         grp.matrixAutoUpdate = false;
         grp.visible = false;
         game.engine.scene.add(grp);
@@ -154,6 +166,7 @@ export class Drones {
     const h = new THREE.Vector3().crossVectors(T.pos, T.vel).normalize();
     d.vel.crossVectors(h, d.pos).normalize().multiplyScalar(Math.sqrt(MU_EARTH / r));
     d.alive = true; d.hp = 1; d.state = 'patrol'; d.t = 0; d.burst = 0; d.cool = rand(1, 3); d.run = null; d.evadeT = 0;
+    d.own.strikes.clear();
     d.ammo = AMMO_N; d.reloadT = 0; d.search = rand(800e3, 1400e3); d.wp = null; d.wpT = 0;
     this.grade(d, pickStars());
     d.q.setFromUnitVectors(Z, d.vel.clone().normalize());
@@ -380,14 +393,47 @@ export class Drones {
     } else d.burst = 0;
   }
 
+  /**
+   * where a round really struck the drone (its own frame): along the round's path through the
+   * sphere round it, the body itself — or, where the path ran between the pods, the body nearest it
+   */
+  surfaceHit(d, hit, r) {
+    const qi = _q.copy(d.q).invert();
+    const pL = hit.point.clone().applyQuaternion(qi);
+    const dirL = (r ? r.vel.clone().sub(d.vel) : hit.n.clone().negate()).normalize().applyQuaternion(qi);
+    this.ray.set(pL.clone().addScaledVector(dirL, -0.3), dirL);
+    this.ray.far = 4;
+    let h = this.ray.intersectObject(this.hitModel, true)[0];
+    if (!h) {
+      this.ray.set(pL, pL.clone().negate().normalize());
+      this.ray.far = 2;
+      h = this.ray.intersectObject(this.hitModel, true)[0];
+    }
+    if (!h || !h.face) return null;
+    const n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
+    if (n.dot(dirL) > 0) n.negate();
+    return { p: h.point.clone(), n, dir: dirL };
+  }
+
   /** hit by something: sparks, smoke when it is hurt, gone when it is done */
   damage(d, amount, hit, r) {
     if (!d.alive) return;
     d.hp -= amount;
     const C = this.combat;
     const A = C.anchorAt(d.pos, d.vel);
-    A.P.burst('spark', hit.point.clone(), hit.n, 24, { speed: 18, spread: 1.4, size: 10 });
-    A.P.burst('debris', hit.point.clone(), hit.n, 8, { speed: 6, spread: 1.2, size: 10 });
+    A.P.burst('spark', hit.point.clone(), hit.n, 24, { speed: 18, spread: 1.4, size: 2.5 });
+    A.P.burst('debris', hit.point.clone(), hit.n, 8, { speed: 6, spread: 1.2, size: 1.5 });
+    // the strike engine: the spot it struck one stage deeper (the paint, the plate, holed), its
+    // pieces flying off on their own paths, sparks (in the drone's frame: turned into the anchor's)
+    const sh = this.surfaceHit(d, hit, r);
+    if (sh) {
+      const E = r && r.R ? r.R.E : 1.6e5;
+      const res = d.own.strikes.hit(sh.p, sh.n, sh.dir, E);
+      const q = d.q.clone();
+      // (a little larger than life: they are seen from a long way off, through the zoom)
+      const fx = { burst: (k, p, dir, n, o = {}) => A.P.burst(k, p.clone().applyQuaternion(q), dir.clone().applyQuaternion(q), n, Object.assign({}, o, { size: 1.6 * (o.size || 1) })) };
+      strikeDebris({ kind: 'drone', combat: C, fx, pos: d.pos, quat: q, vel: d.vel }, res, sh.p.clone().addScaledVector(sh.n, 0.005), sh.n, sh.dir, E);
+    }
     if (d.hp < 0.35 && d.state !== 'evade' && d.hp > 0) { d.state = 'evade'; d.evadeT = rand(40, 80); d.run = null; }
     if (d.hp <= 0) this.kill(d, r);
     else if (r && r.byPlayer && this.g.h8) this.g.h8.say('hachi_drone_hit', { id: d.id }, { minGap: 6, force: false });
@@ -484,6 +530,7 @@ export class Drones {
     for (const d of this.list) {
       const i = d.i;
       if (!d.alive) { this.showLod(d, null); d.plume.mesh.visible = false; this.ptPos.set([1e15, 0, 0], i * 3); this.ptK[i] = 0; continue; }
+      if (d.own.strikes.sites.length) d.own.strikes.update(dt);
       const rel = d.pos.clone().sub(origin);
       const dist = rel.distanceTo(camWorld);
       const eff = dist * zoomK;

@@ -94,7 +94,9 @@ export class H8Vessel {
     createH8InteriorMaterials(M);
     shelterMaterials(M);
     this.intKeys = new Set(Object.keys(M).filter((k) => !extKeys.has(k)));
-    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k), ON_TILES.has(k));
+    // (the strike engine: craters down through the plates; the fittings burned; the stencils go
+    // with the paint)
+    for (const k of extKeys) if (!NO_DENT.has(k) && M[k].isMeshStandardMaterial) dentify(M[k], PLATES.has(k), ON_TILES.has(k), k === 'decal' ? 'cut1' : PLATES.has(k) ? 'deep' : 'surface');
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
