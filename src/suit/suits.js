@@ -185,6 +185,9 @@ export class Suits {
       if (S.kind === 'h8') this.g.h8 && this.g.h8.say('hachi_suit_off', {}, { force: true });
       else g.asphalt.say('suit_off', {}, { force: true });
     }
+    // (this very frame's eye and look already where the sequence left them: no flash of the view
+    // from before it)
+    if (S.kind === 'b29') { pl.eyeLocal.copy(pose.pos); pl.viewQuat(pl.lookQuat); }
     if (R.onEnd) R.onEnd(S.on);
   }
 
