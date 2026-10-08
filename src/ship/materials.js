@@ -835,7 +835,8 @@ export function createMaterials() {
   M.nozzle = patchShipMaterial(std(0x55504a, 0.4, 0.95, { emissive: new THREE.Color(1.0, 0.35, 0.1), emissiveIntensity: 0.0 }), { wear: 0.9, grime: 0.6, heat: true });
   M.solar = std(0x1a2a55, 0.25, 0.6);
   // the nose's sensor band (where the canopy was): dark armoured glass, a hard clear coat
-  M.sensorGlass = new THREE.MeshPhysicalMaterial({ color: 0x06090d, roughness: 0.12, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.05 });
+  // (a little rough: a mirror finish showed the reflection map's own pixels)
+  M.sensorGlass = new THREE.MeshPhysicalMaterial({ color: 0x06090d, roughness: 0.2, metalness: 0.35, clearcoat: 1, clearcoatRoughness: 0.14 });
   if (!M.lens) M.lens = new THREE.MeshPhysicalMaterial({ color: 0x0a1018, roughness: 0.04, metalness: 0.6, clearcoat: 1, iridescence: 0.6 });
   // ---- interior ----
   M.wall = patchShipMaterial(std(0xb4b9bc, 0.62, 0.12), { dentable: true, openings: true, wear: 0.55, grime: 0.4, detail: 'panel', detailDepth: 0.005, wainscot: true });

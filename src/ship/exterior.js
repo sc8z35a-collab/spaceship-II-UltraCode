@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { QUALITY } from '../core/quality.js';
 import { Builder, roundedRectShape, rng, fixNormals } from './geom.js';
-import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, inCanopy } from './hullShape.js';
+import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, inCanopy, canopyZ } from './hullShape.js';
 import { createGlassMaterial } from './glass.js';
 import { buildPortExterior, PORT } from '../h8/b29Port.js';
 
@@ -489,27 +489,33 @@ function hullGreebles(b) {
  * each side, one low under the chin
  */
 function noseCameras(b) {
-  // the band: the old canopy's outline, just proud of the skin
-  const rings = 70, segs = 110, z0 = HULL.zTip + 0.001, z1 = -10.6;
-  const P = [];
-  for (let i = 0; i <= rings; i++) {
-    const z = z0 + (z1 - z0) * (i / rings), row = [];
-    for (let j = 0; j <= segs; j++) row.push(sectionPoint(z, (j / segs) * Math.PI * 2 - Math.PI / 2, -0.012));
-    P.push(row);
+  // the band: the old canopy's outline, just proud of the skin. Laid out along its own edge — for
+  // each way round the nose, from the tip back to where the canopy's plane cuts the skin — so its
+  // edge is the clean curve of that cut, with a dark metal lip along it
+  const rings = 40, segs = 140, z0 = HULL.zTip + 0.001, lift = -0.012;
+  const cols = [];
+  for (let j = 0; j <= segs; j++) {
+    const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
+    const zc = canopyZ(t, lift);
+    cols.push(zc === null ? null : { t, zc });
   }
   const pos = [];
-  for (let i = 0; i < rings; i++) for (let j = 0; j < segs; j++) {
-    const A = P[i][j], B = P[i][j + 1], C = P[i + 1][j], D = P[i + 1][j + 1];
-    // (wound to face out of the hull)
-    for (const tri of [[A, D, C], [A, B, D]]) {
-      if (!tri.every((p) => inCanopy(p))) continue;
-      for (const p of tri) pos.push(p.x, p.y, p.z);
+  const at = (c, i) => sectionPoint(z0 + (c.zc - z0) * (i / rings), c.t, lift);
+  for (let j = 0; j < segs; j++) {
+    const c0 = cols[j], c1 = cols[j + 1];
+    if (!c0 || !c1) continue;
+    for (let i = 0; i < rings; i++) {
+      const A = at(c0, i), B = at(c1, i), C = at(c0, i + 1), D = at(c1, i + 1);
+      // (wound to face out of the hull)
+      for (const tri of [[A, D, C], [A, B, D]]) for (const p of tri) pos.push(p.x, p.y, p.z);
     }
   }
   const band = new THREE.BufferGeometry();
   band.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
   band.computeVertexNormals();
   b.add(band, 'sensorGlass');
+  const lip = cols.filter(Boolean).map((c) => sectionPoint(c.zc, c.t, lift - 0.004));
+  if (lip.length > 3) b.tube(lip, 0.014, 'metalDark', { radial: 6, seg: lip.length * 2, tension: 0.2 });
   // the lenses: a dark eye in a bright rim, a status lamp beside it
   const m = new THREE.Matrix4();
   const lens = (z, t, r) => {
