@@ -271,6 +271,7 @@ const HACHI = {
   hachi_hit: ['被弾。外部装甲{pct}%。'],
   hachi_hit_hard: ['被弾。外部装甲{pct}%。'],
   hachi_leak: ['内部装甲を抜かれた。減圧する。'],
+  hachi_alarm_off: ['警報を止めた。状況は変わっていない。'],
   hachi_bump: ['接触した。'],
   hachi_enter: ['ようこそ、カイト。'],
   hachi_no_link: ['B-29と通信できない。'],
@@ -492,9 +493,16 @@ export class Asphalt {
     if (this.speaking || !this.queue.length) return;
     const { text, who } = this.queue.shift();
     const hachi = who === 'hachi';
+    // does it reach Kaito at all, and how: said in the room he is in, or over a radio (his suit's,
+    // H8's link) — nothing carries a voice to someone in vacuum without a suit, or out cold
+    const gp = this.g.gameplay;
+    const route = gp && gp.voiceRoute ? gp.voiceRoute(who) : 'air';
+    if (!route) { setTimeout(() => this._next(), 50); return; }
+    const A = this.g.audio;
+    if (route === 'radio' && A.radio) A.radio();
     // HACHI announces itself with two short digital pips instead of Asphalt's chime
-    if (hachi) { const A = this.g.audio; if (A.beep) { A.beep(1760, 0.05, 0.05, { direct: true }); A.beep(2350, 0.06, 0.05, { direct: true, when: 0.08 }); } }
-    else this.g.audio.chime && this.g.audio.chime();
+    if (hachi) { if (A.beep) { A.beep(1760, 0.05, 0.05, { direct: true, when: route === 'radio' ? 0.12 : 0 }); A.beep(2350, 0.06, 0.05, { direct: true, when: route === 'radio' ? 0.2 : 0.08 }); } }
+    else A.chime && A.chime();
     if (!this.voiceOn || !('speechSynthesis' in window)) { this.speaking = true; setTimeout(() => { this.speaking = false; this._next(); }, 1200); return; }
     this.speaking = true;
     setTimeout(() => {
@@ -506,8 +514,8 @@ export class Asphalt {
         const sv = this.g.damage ? this.g.damage.health.servers : 1;
         u.rate = hachi ? 1.15 : sv < 0.5 ? 0.88 : 1.08;
         u.pitch = hachi ? (this.voiceH ? 0.85 : 0.55) : sv < 0.5 ? 0.7 : 1.08;
-        u.volume = 0.9;
-        u.onend = u.onerror = () => { this.speaking = false; setTimeout(() => this._next(), 200); };
+        u.volume = route === 'radio' ? 0.75 : 0.9;
+        u.onend = u.onerror = () => { if (route === 'radio' && A.radio) A.radio(true); this.speaking = false; setTimeout(() => this._next(), 200); };
         speechSynthesis.speak(u);
         // safety timeout
         setTimeout(() => { if (this.speaking) { this.speaking = false; this._next(); } }, 12000);

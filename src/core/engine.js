@@ -261,6 +261,7 @@ uniform float uHeat;
 uniform float uDesat;
 uniform float uBlur;
 uniform float uPixel;
+uniform float uFog;
 uniform vec3 uTint;
 
 vec3 agxDefault(vec3 color){
@@ -299,16 +300,23 @@ void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor
   if (uHeat > 0.0){
     suv += vec2(sin(uv.y * 60.0 + uTime * 9.0), cos(uv.x * 50.0 + uTime * 7.0)) * 0.0025 * uHeat;
   }
+  // the eyes' own film boiling away in vacuum: the picture swims
+  if (uFog > 0.0){
+    suv += vec2(sin(uv.y * 23.0 + uTime * 5.3) + sin(uv.x * 41.0 - uTime * 3.1), cos(uv.x * 19.0 + uTime * 4.1) + cos(uv.y * 37.0 + uTime * 2.3)) * 0.0045 * uFog;
+  }
   vec3 base = texture2D(inputBuffer, uv).rgb;
   vec2 off = dc * (uCA * (0.4 + r2 * 3.0));
   vec3 col = vec3(texture2D(inputBuffer, suv + off).r, texture2D(inputBuffer, suv).g, texture2D(inputBuffer, suv - off).b);
   if (uBlur > 0.0){
+    // two rings of taps; past the first half the radius opens up (a really blurred eye)
     vec3 b = vec3(0.0);
+    float rad = 0.006 * uBlur + 0.016 * max(0.0, uBlur - 0.5) * 2.0;
     for (int i = 0; i < 6; i++){
       float a = float(i) * 1.0472 + uTime;
-      b += texture2D(inputBuffer, suv + vec2(cos(a), sin(a)) * 0.006 * uBlur).rgb;
+      b += texture2D(inputBuffer, suv + vec2(cos(a), sin(a)) * rad).rgb;
+      b += texture2D(inputBuffer, suv + vec2(cos(a + 0.52), sin(a + 0.52)) * rad * 0.5).rgb;
     }
-    col = mix(col, b / 6.0, clamp(uBlur, 0.0, 1.0));
+    col = mix(col, b / 12.0, clamp(uBlur, 0.0, 1.0));
   }
   col += (uPixel > 1.01 ? vec3(0.0) : inputColor.rgb - base); // keep bloom from earlier effects
   float avg = texture2D(tLum, vec2(0.5)).r;
@@ -321,6 +329,8 @@ void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor
   col = mix(col, col * vec3(0.94, 0.98, 1.06), (1.0 - smoothstep(0.0, 0.4, l)) * 0.6);
   col = mix(col, vec3(l), uDesat);
   col *= uTint;
+  // (and clouds over: a milky veil)
+  if (uFog > 0.0) col = mix(col, vec3(0.5, 0.52, 0.56) * (0.45 + 0.55 * l), clamp(uFog, 0.0, 1.0) * 0.38);
   // alarm: pulsing red edges + red wash
   if (uAlarm > 0.0){
     float edge = smoothstep(0.08, 0.42, r2);
@@ -373,6 +383,7 @@ export class GradeEffect extends Effect {
         ['uDesat', new THREE.Uniform(0)],
         ['uBlur', new THREE.Uniform(0)],
         ['uPixel', new THREE.Uniform(1)],
+        ['uFog', new THREE.Uniform(0)],
         ['uTint', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
       ]),
     });

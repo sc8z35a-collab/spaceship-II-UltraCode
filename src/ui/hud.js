@@ -105,7 +105,15 @@ export class Hud {
     const gr = g.engine.grade;
     const al = g.systems.alarm;
     const t = performance.now() / 1000;
-    const pulse = al.active && !al.silenced ? (0.55 + 0.45 * Math.sin(t * 7.5)) * al.level : 0;
+    // (red at the edges of the view only where that ship's alarm is: aboard B-29 for B-29's, in H8
+    // for H8's)
+    const gp = g.gameplay;
+    const place = gp && gp.playerPlace ? gp.playerPlace() : 'b29';
+    const b29On = al.active && !al.silenced && (!gp || !gp.hearsB29 || gp.hearsB29());
+    const ha = g.h8 && g.h8.alarm;
+    const h8On = !!(ha && ha.active && !ha.silenced && place === 'h8');
+    const lvl = Math.max(b29On ? al.level : 0, h8On ? ha.level : 0);
+    const pulse = lvl > 0 && !(gp && gp.unconscious) ? (0.55 + 0.45 * Math.sin(t * (h8On && !b29On ? 10.5 : 7.5))) * lvl : 0;
     gr.set('uAlarm', pulse);
     if (!this.el.alarm) this.el.alarm = document.getElementById('fx-alarm');
     this.setOverlay('alarm', pulse * 0.42);

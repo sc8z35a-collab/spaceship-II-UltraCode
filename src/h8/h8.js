@@ -158,6 +158,8 @@ export class H8Vessel {
     this.wakeTarget = 0;
     this.power = { reactor: 0.12, smes: H8.smesMJ * 0.85, feedOn: true, feed: false, feedMW: 0, loadMW: 2, driveMW: 0, boost: true };
     this.armour = { outer: 1, inner: 1 };
+    // H8's own master alarm (its own siren, heard in H8: gameplay.js)
+    this.alarm = { active: false, silenced: false, level: 0, t: 0 };
     this.neckOpen = 0;
     this.neckTarget = 0;
     this.radFold = 0;
@@ -1334,6 +1336,7 @@ export class H8Vessel {
     // ---- hatches, air, umbilical
     this.updateHatches(sdt);
     this.updateAir(sdt);
+    this.updateAlarm(sdt);
     const umb0 = this.umb;
     this.umb += (((this.umbTarget || 0) > 0.5 && this.mode === 'docked' ? 1 : 0) - this.umb > 0 ? 1 : -1) * sdt / 3.5;
     this.umb = Math.max(0, Math.min(1, this.umb));
@@ -1759,6 +1762,37 @@ export class H8Vessel {
    * leak (its own hole, or B-29's through the open port); docked with the umbilical on, they fill
    * from B-29's reserves.
    */
+  raiseAlarm(level) {
+    const al = this.alarm;
+    if (!al.active) al.silenced = false;
+    al.active = true;
+    al.level = Math.max(al.level || 0, level);
+    al.t = 0;
+  }
+
+  silenceAlarm() { if (this.alarm.active) { this.alarm.silenced = true; this.say('hachi_alarm_off', {}, { minGap: 5 }); } }
+
+  /** H8's own alarm: its cabin air, its armour and frame, a collision course; it rings on for a
+   * while after the last blow */
+  updateAlarm(dt) {
+    const al = this.alarm, ls = this.g.lifeSupport;
+    if (this.mode === 'parked') { al.active = false; return; }
+    const hz = [];
+    const z = ls.z.h8;
+    if (z) {
+      const p = z.n2 + z.o2 + z.co2;
+      if (p < 75) hz.push(1);
+      if (z.o2 < 17) hz.push(0.8);
+      if (z.co2 > 1.5) hz.push(0.5);
+    }
+    if (this.structure < 0.6) hz.push(1);
+    if (this.armour.inner < 0.15) hz.push(0.9);
+    if (this.cands && this.cands.some((c) => c.threat && c.kind !== 'drone' && c.tca < 20)) hz.push(0.9);
+    if (hz.length) { const h = Math.max(...hz); if (!al.active || h > al.level + 0.05) this.raiseAlarm(h); }
+    al.t += dt;
+    if (!hz.length && al.t > 15) { al.active = false; al.level = 0; }
+  }
+
   updateAir(dt) {
     const ls = this.g.lifeSupport;
     const T = this.air || (this.air = { o2: 650, n2: 1500 });     // kPa*m^3
@@ -1913,6 +1947,7 @@ export class H8Vessel {
    * H8's centre toward the point hit (H8-local) */
   armourHit(E, dirLocal, opts = {}) {
     const A = this.armour, g = this.g;
+    this.raiseAlarm(E > 2e6 || A.outer < 0.3 ? 1 : 0.7);
     const k = E / 4.0e7;
     const outerBefore = A.outer;
     const outer = Math.min(A.outer, k);

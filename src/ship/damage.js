@@ -123,6 +123,8 @@ export class Damage {
       this.addDent(pLocal, push, r, depth, { sharp: E < 2e6 ? 0.4 : 0.15, heat: Math.min(1, 0.3 + E / 4e6) });
       this.addScorch(pLocal, r * 0.8);
     }
+    // the fittings on the skin there: struck ones knocked clean off, the shock shearing others
+    if (!opts.noMounts) this.knockMounts(pLocal, inward, nOut, E, !!opts.shot);
     // the skin's panels (the belly's tiles) round it: loosened, torn half off, torn away (a big
     // blow; a gun round's work is the strike engine's)
     if (!opts.noPanels && !gunRound) this.panelBlow(pLocal, nOut, inward, E, r);
@@ -172,13 +174,18 @@ export class Damage {
       const n = E > 2e6 ? 2 : 1;
       for (let k = 0; k < n; k++) this.addFracture(pLocal, null, Math.min(0.6, 0.06 + E / 5e6), 0.4 + Math.min(1.2, E / 3e6));
     }
-    // loose items fly, ship kicks, shake
+    // loose items fly, ship kicks, shake (felt by Kaito only aboard B-29 — out on a walk or away in
+    // H8 the blow does not reach him)
     const kick = inward.clone().multiplyScalar(Math.min(4, Math.sqrt(E) / 900));
     g.phys.kick(kick, Math.min(6, Math.sqrt(E) / 400), pLocal, Math.min(0.9, E / 2e6));
+    const feel = !g.gameplay || !g.gameplay.hearsB29 || g.gameplay.hearsB29();
+    const onHull = !feel && g.player.outside && !(g.h8 && g.h8.solo) && (g.player.state === 'evaWalk' || g.player._nearRail);
     // gunfire: many small blows — each one a hard knock, but they do not pile up into an earthquake
-    g.player.vel.addScaledVector(kick, opts.shot ? -0.3 : -0.9);
-    if (opts.shot) g.shake = Math.min(3, Math.max(g.shake, 0.3 + Math.log10(E) * 0.12));
-    else g.shake = Math.min(3, g.shake + 0.4 + Math.log10(E) * 0.25);
+    if (feel) {
+      g.player.vel.addScaledVector(kick, opts.shot ? -0.3 : -0.9);
+      if (opts.shot) g.shake = Math.min(3, Math.max(g.shake, 0.3 + Math.log10(E) * 0.12));
+      else g.shake = Math.min(3, g.shake + 0.4 + Math.log10(E) * 0.25);
+    } else if (onHull) g.shake = Math.min(1.2, Math.max(g.shake, 0.15 + Math.log10(E) * 0.05));
     if (g.flight) {
       const dvShip = inward.clone().applyQuaternion(g.flight.quat).multiplyScalar(Math.sqrt(E * 2 * 1) / Math.sqrt(42000 * 42000) * 2);
       g.flight.vel.add(dvShip);
@@ -191,10 +198,12 @@ export class Damage {
       fx.burst('debris', pLocal, inward.clone().negate(), 10 + Math.min(80, E / 20000), { speed: 2.5, spread: 1.2 });
       if (breach) fx.burst('ice', pLocal, inward.clone().negate(), 40, { speed: 6 });
     }
-    g.audio.impact(pLocal, Math.min(1, Math.log10(E) / 7) * (opts.shot ? 0.6 : 1));
-    g.systems.flicker = Math.min(0.5, 0.15 + E / 2e6);
-    setTimeout(() => { g.systems.flicker = 0; }, 900 + Math.min(4000, E / 500));
-    g.engine.grade.set('uFlash', Math.min(0.6, E / 3e6));
+    if (feel || onHull) g.audio.impact(pLocal, Math.min(1, Math.log10(E) / 7) * (opts.shot ? 0.6 : 1));
+    if (feel) {
+      g.systems.flicker = Math.min(0.5, 0.15 + E / 2e6);
+      setTimeout(() => { g.systems.flicker = 0; }, 900 + Math.min(4000, E / 500));
+      g.engine.grade.set('uFlash', Math.min(0.6, E / 3e6));
+    }
     this.events.push({ type: 'impact', E, breach: !!breach, zone, pos: pLocal.clone(), shot: !!opts.shot });
     this.stress += E / 1e6;
     this.fatigue = (this.fatigue || 0) + E / 4e8;
@@ -216,22 +225,93 @@ export class Damage {
     list.forEach((m, id) => {
       if (m.gone || m.n.dot(n) < 0.4) return;
       if (key ? this.panelAt(m.p, m.n).key !== key : m.p.distanceTo(p) > r) return;
-      m.gone = true;
-      const got = [];
-      for (const R of m.ranges) {
-        const A = R.mesh.geometry.attributes.position, a = A.array;
-        if (!R.saved) R.saved = a.slice(R.start * 3, (R.start + R.count) * 3);
-        got.push(R);
-        const x = a[R.start * 3], y = a[R.start * 3 + 1], z = a[R.start * 3 + 2];
-        for (let i = R.start; i < R.start + R.count; i++) { a[i * 3] = x; a[i * 3 + 1] = y; a[i * 3 + 2] = z; }
-        A.needsUpdate = true;
-      }
+      const got = this.takeMount(m);
       if (!quiet && !this.catchingUp) this.flingMount(m, got, travel);
     });
   }
 
-  /** a mounted thing torn off: its own pieces (from what the merged meshes held), tumbling away */
-  flingMount(m, ranges, travel) {
+  /** a fitting gone from the skin: its vertices folded out of the hull's merged meshes (kept) */
+  takeMount(m) {
+    m.gone = true;
+    const got = [];
+    for (const R of m.ranges) {
+      const A = R.mesh.geometry.attributes.position, a = A.array;
+      if (!R.saved) R.saved = a.slice(R.start * 3, (R.start + R.count) * 3);
+      got.push(R);
+      const x = a[R.start * 3], y = a[R.start * 3 + 1], z = a[R.start * 3 + 2];
+      for (let i = R.start; i < R.start + R.count; i++) { a[i * 3] = x; a[i * 3 + 1] = y; a[i * 3 + 2] = z; }
+      A.needsUpdate = true;
+    }
+    return got;
+  }
+
+  /**
+   * The fittings round a blow (sensor domes, boxes, canisters, star trackers, camera masts): a round
+   * whose path runs through one on its way in knocks it clean off — the round's push in it, glancing
+   * off the skin the way the round was going, spinning — and the shock of a blow shears the bolts of
+   * those standing close by (further the heavier the blow; light ones go first). Flush covers only go
+   * when they are struck themselves.
+   */
+  knockMounts(p, inward, nOut, E, shot) {
+    const g = this.g, list = g.shipVis && g.shipVis.mounts;
+    if (!list || !list.length || this.catchingUp) return;
+    const reach = shot ? 1.1 : Math.min(7, 0.8 + 0.3 * Math.cbrt(E / 1e4));
+    // (the round itself: about 0.4 kg; the push it leaves in what it passes through, a third of its
+    // momentum)
+    const J = 0.33 * Math.sqrt(2 * 0.4 * E);
+    const a = p.clone().addScaledVector(inward, -3), c = new THREE.Vector3(), q = new THREE.Vector3();
+    for (const m of list) {
+      if (m.gone || m.n.dot(nOut) < 0.2) continue;
+      const d = m.p.distanceTo(p);
+      if (d > reach + m.r) continue;
+      c.copy(m.p).addScaledVector(m.n, m.h * 0.5);
+      let direct = false;
+      if (shot) {
+        // the nearest the round's last 3 m pass the fitting's middle (and above the skin there)
+        const t = Math.min(3, Math.max(0, c.clone().sub(a).dot(inward)));
+        q.copy(a).addScaledVector(inward, t);
+        const up = q.clone().sub(m.p).dot(m.n);
+        direct = q.distanceTo(c) < m.r * 0.85 + 0.015 && up > -0.01 && up < m.h + 0.03;
+        if (direct && m.flush && Math.random() < 0.5) direct = false;
+      }
+      if (!direct) {
+        if (m.flush) continue;
+        // the shock: falls off with distance; heavy and low ones hold better
+        const s = (shot ? 0.35 * E / 2.4e5 : E / 1.5e6) / ((1 + (d / (shot ? 0.25 : 0.8)) ** 2) * Math.sqrt(m.mass) * (m.low ? 2 : 1));
+        if (Math.random() > s) continue;
+      }
+      const got = this.takeMount(m);
+      let v, spin;
+      if (direct) {
+        // the round's push, the part of it into the skin bounced back out off it
+        const dv = Math.min(40, Math.max(6, J / m.mass)) * (0.75 + 0.5 * Math.random());
+        v = inward.clone();
+        const into = v.dot(m.n);
+        if (into < 0) v.addScaledVector(m.n, -1.35 * into);
+        v.normalize().multiplyScalar(dv).add(new THREE.Vector3().randomDirection().multiplyScalar(dv * 0.15));
+        spin = Math.min(22, 3 + dv * (0.3 + 0.4 * Math.random()));
+        if (g.fx) {
+          g.fx.burst('spark', c, v.clone().normalize(), 26, { speed: 6 });
+          g.fx.burst('debris', c, m.n, 8, { speed: 3, spread: 1.3 });
+        }
+        if (g.audio.ready) g.audio._burst(c, { dur: 0.14, freq: 3400, q: 9, gain: 0.09, type: 'white', filter: 'bandpass', sweep: -0.3 });
+      } else {
+        // sheared off: up off the skin and away from the blow
+        const k = Math.min(3, Math.sqrt(E / (shot ? 2.4e5 : 1e6)));
+        v = m.n.clone().multiplyScalar((1.2 + 2.5 * Math.random()) * k)
+          .add(m.p.clone().sub(p).normalize().multiplyScalar((0.5 + 1.5 * Math.random()) * k))
+          .add(new THREE.Vector3().randomDirection().multiplyScalar(0.5));
+        spin = 0.8 + 3.5 * Math.random();
+        if (g.audio.ready) g.audio._burst(c, { dur: 0.1, freq: 1800, q: 4, gain: 0.05, type: 'white', filter: 'bandpass', sweep: -0.4 });
+      }
+      this.flingMount(m, got, null, v, spin);
+      this.events.push({ type: 'mount', pos: m.p.clone(), direct });
+    }
+  }
+
+  /** a mounted thing torn off: its own pieces (from what the merged meshes held), tumbling away
+   * (vRel: its velocity off the ship, ship frame; spin rad/s) */
+  flingMount(m, ranges, travel, vRel = null, spin = null) {
     const g = this.g, f = g.flight;
     if (!g.combat || !f) return;
     const grp = new THREE.Group();
@@ -250,12 +330,15 @@ export class Damage {
       if (!mat) { mat = new THREE.MeshStandardMaterial({ color: sm.color ? sm.color.clone() : 0x888888, roughness: sm.roughness ?? 0.5, metalness: sm.metalness ?? 0.3 }); mats.set(sm, mat); }
       grp.add(new THREE.Mesh(geo, mat));
     }
-    const out = m.n.clone().multiplyScalar(1.5 + Math.random() * 4);
-    if (travel) out.addScaledVector(travel, -0.8);
-    out.add(new THREE.Vector3().randomDirection().multiplyScalar(0.7));
-    g.combat.addWreck(grp, m.p.clone().applyQuaternion(f.quat).add(f.pos), f.vel.clone().add(out.applyQuaternion(f.quat)), 40, 0.8);
+    let out = vRel;
+    if (!out) {
+      out = m.n.clone().multiplyScalar(1.5 + Math.random() * 4);
+      if (travel) out.addScaledVector(travel, -0.8);
+      out.add(new THREE.Vector3().randomDirection().multiplyScalar(0.7));
+    }
+    g.combat.addWreck(grp, m.p.clone().applyQuaternion(f.quat).add(f.pos), f.vel.clone().add(out.clone().applyQuaternion(f.quat)), 40, 0.8);
     const w = g.combat.wrecks[g.combat.wrecks.length - 1];
-    if (w) { w.q.copy(f.quat); w.spin = 0.6 + Math.random() * 2.5; }
+    if (w) { w.q.copy(f.quat); w.spin = spin ?? 0.6 + Math.random() * 2.5; }
   }
 
   /** the repair dock: everything mounted on the skin put back */

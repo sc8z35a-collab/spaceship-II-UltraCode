@@ -148,6 +148,16 @@ export class VisorHud {
     else if (this.bootT < 0) { this.on = Math.max(0, this.on - dt * 2); if (this.on <= 0) this.bootT = 0; }
     else if (pl.suit && !s.seq && this.on < 1) this.on = Math.min(1, this.on + dt * 2);
     if (!pl.suit && !s.seq) this.on = 0;
+    // the suit's own caution tone in the helmet: oxygen low (on the reserve: faster), battery low
+    if (pl.suit && S && this.on > 0.5 && pl.state !== 'dead') {
+      const o2low = pl.suitO2 < 0.15, batLow = S.battery < 0.1 && !(S.spares || []).some((x) => x > 0.02);
+      this.cwT = (this.cwT || 0) - dt;
+      if ((o2low || batLow) && this.cwT <= 0) {
+        this.cwT = S.o2 <= 0 ? 1.6 : 3.5;
+        g.audio.beep(1250, 0.12, 0.05, { direct: true, type: 'square' });
+        g.audio.beep(950, 0.16, 0.05, { direct: true, type: 'square', when: 0.16 });
+      }
+    }
     const show = (wearing && this.on > 0.01 || this.frameK > 0.01 || this.darkK > 0.01) && g.mode !== 'camera' && pl.state !== 'dead';
     this.el.classList.toggle('on', show);
     this.el.classList.toggle('busy', !!s.seq);

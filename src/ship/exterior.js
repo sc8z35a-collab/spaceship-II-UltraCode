@@ -425,17 +425,22 @@ function hullGreebles(b) {
     if (!clear(z, t, 0.22)) continue;
     const { p, n, e } = frame(z, t);
     b.mount = mounts.length;
-    mounts.push({ p: p.clone(), n: n.clone(), ranges: [] });
+    // (with its footprint's radius, its height and its mass: what a round passing through it, or
+    // the shock of a blow beside it, needs to know to knock it off: damage.js)
+    const M = { p: p.clone(), n: n.clone(), ranges: [], r: 0.1, h: 0.08, mass: 3 };
+    mounts.push(M);
     b.push(p.toArray(), [e.x, e.y, e.z]);
     const k = R();
     if (k < 0.34) {                                                   // equipment box with a lid line
       const w = 0.16 + R() * 0.34, h = 0.05 + R() * 0.1, d = 0.14 + R() * 0.38;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h, mass: 2 + w * h * d * 900 });
       const key = keys[Math.floor(R() * keys.length)];
       b.box(w, h, d, key, [0, h / 2 - 0.01, 0], null, Math.min(0.02, h * 0.3), 2);
       b.box(w * 0.8, 0.006, d * 0.04, 'metalDark', [0, h - 0.005, d * 0.3], null, 0);
       if (R() < 0.5) for (const sx of [-1, 1]) b.cyl(0.008, 0.008, 0.012, 'steel', [sx * w * 0.4, h, -d * 0.4], null, 6);
     } else if (k < 0.5) {                                            // canister pair on a cradle
       const r = 0.04 + R() * 0.06, l = 0.25 + R() * 0.35;
+      Object.assign(M, { r: Math.hypot(r * 2.5, l / 2), h: r * 2 + 0.04, mass: 1.5 + r * r * l * 2600 });
       b.box(r * 5, 0.025, l * 0.6, 'metalDark', [0, 0.012, 0], null, 0.005);
       for (const sx of [-1, 1]) {
         b.cyl(r, r, l, R() < 0.5 ? 'hull' : 'mli', [sx * r * 1.15, r + 0.03, 0], [Math.PI / 2, 0, 0], 12);
@@ -444,21 +449,26 @@ function hullGreebles(b) {
       for (const zz of [-l * 0.3, l * 0.3]) b.box(r * 5, 0.018, 0.025, 'steel', [0, r * 2 + 0.035, zz], null, 0.004);
     } else if (k < 0.62) {                                           // vent grille
       const w = 0.2 + R() * 0.25, d = 0.12 + R() * 0.2;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h: 0.04, mass: 1.6, low: true });
       b.box(w, 0.03, d, 'metalDark', [0, 0.012, 0], null, 0.008);
       for (let i = 0; i < 6; i++) b.box(w * 0.85, 0.012, 0.012, 'black', [0, 0.03, -d * 0.4 + i * d * 0.16], null, 0);
     } else if (k < 0.72) {                                           // sensor dome on a base
+      Object.assign(M, { r: 0.09, h: 0.11, mass: 1.1, round: true });
       b.cyl(0.07, 0.09, 0.05, 'hullDark', [0, 0.025, 0], null, 14);
       b.sphere(0.06, R() < 0.5 ? 'black' : 'plasticW', [0, 0.06, 0], 14, [1, 0.8, 1]);
     } else if (k < 0.8) {                                            // star tracker: baffle tube
+      Object.assign(M, { r: 0.1, h: 0.25, mass: 2.4 });
       b.box(0.14, 0.08, 0.14, 'hullDark', [0, 0.04, 0], null, 0.01);
       b.cyl(0.045, 0.055, 0.18, 'black', [0, 0.14, 0.03], [0.5, 0, 0], 14, true);
       b.torus(0.05, 0.008, 'metal', [0, 0.22, 0.075], [0.5 + Math.PI / 2, 0, 0], 14);
     } else if (k < 0.88) {                                           // camera on a short mast
+      Object.assign(M, { r: 0.07, h: 0.24, mass: 1.3 });
       b.cyl(0.015, 0.02, 0.18, 'metal', [0, 0.09, 0], null, 8);
       b.box(0.07, 0.06, 0.12, 'plasticW', [0, 0.2, 0.02], null, 0.012);
       b.cyl(0.022, 0.022, 0.02, 'black', [0, 0.2, 0.085], [Math.PI / 2, 0, 0], 12);
     } else {                                                         // flush panel cover with fasteners
       const w = 0.3 + R() * 0.4, d = 0.2 + R() * 0.35;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h: 0.016, mass: 1.2, flush: true });
       b.box(w, 0.012, d, R() < 0.5 ? 'hull' : 'hullDark', [0, 0.004, 0], null, 0.004);
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.01, 0.01, 0.008, 'steel', [sx * (w / 2 - 0.025), 0.012, sz * (d / 2 - 0.025)], null, 6);
     }

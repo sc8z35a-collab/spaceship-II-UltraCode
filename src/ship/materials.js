@@ -42,6 +42,11 @@ export const shipUniforms = {
   uScorch: { value: Array.from({ length: 8 }, () => new THREE.Vector4(0, 0, 0, 0)) },
   tNoise3D: noiseTex,
   uCanopy: { value: new THREE.Vector4(0, 0, 0, -1e9) },
+  // the master alarm, room by room (systems.js): how strong (0 off), each room's rotating beacon
+  // (xyz ship frame, w its room; w < 0: none) and where its beam points now
+  uAlarmK: { value: 0 },
+  uAlarmB: { value: Array.from({ length: 12 }, () => new THREE.Vector4(0, 0, 0, -1)) },
+  uAlarmD: { value: Array.from({ length: 12 }, () => new THREE.Vector4(0, -1, 0, 0)) },
 };
 
 // a dent's depth profile at s = distance / radius: a smooth bowl for a broad blow (sharp 0) with
@@ -97,10 +102,24 @@ uniform vec3 uHeatDir;
 uniform float uTime;
 uniform vec4 uScorch[8];
 uniform mat4 uWorldToShip;
+uniform float uAlarmK;
+uniform vec4 uAlarmB[12];
+uniform vec4 uAlarmD[12];
 varying vec3 vShipPos;
 varying vec3 vShipNrm;
 varying float vDent;
 uniform highp sampler3D tNoise3D;
+// which of B-29's rooms a point is in (the same walls as lifeSupport.zoneAt): 0 cockpit, 1 living,
+// 2 bath, 3 corridor, 4 airlock, 5 life support, 6 store, 7 engineering, 8 under the deck
+int shipRoom(vec3 p){
+  if (p.y > 2.8 || abs(p.x) > 3.4 || p.z < -12.5 || p.z > 9.7) return -1;
+  if (p.y < -0.1) return 8;
+  if (p.z < -8.4) return 0;
+  if (p.z > 5.6) return 7;
+  if (abs(p.x) <= 0.7) return 3;
+  if (p.x < 0.0) { if (p.z < -3.0) return 1; if (p.z < 0.4) return 3; return 6; }
+  if (p.z < -4.6) return 2; if (p.z < -2.6) return 3; if (p.z < 0.6) return 4; return 5;
+}
 vec4 nz(vec3 p){ return texture(tNoise3D, p); }
 float sn(vec3 p){ return texture(tNoise3D, p).g * 2.0 - 1.0; }
 float hash12(vec2 p){ vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -782,6 +801,29 @@ export function patchShipMaterial(mat, opts = {}) {
           reflectedLight.indirectSpecular *= mix(1.0, _ao, 0.75);
           reflectedLight.directDiffuse *= mix(1.0, _ao, 0.6);
           reflectedLight.directSpecular *= mix(1.0, _ao, 0.45);
+        }
+        // the master alarm: each room's rotating red beacon lights what is in that room only (its
+        // walls stop it — no red sweeping through them from next door), its beam glinting off
+        // whatever is glossy as it goes round
+        if (uAlarmK > 0.001) {
+          vec3 _nS = normalize(vShipNrm);
+          int _room = shipRoom(vShipPos + _nS * 0.06);
+          mat3 _s2w = transpose(mat3(uWorldToShip));
+          for (int i = 0; i < 12; i++) {
+            vec4 B = uAlarmB[i];
+            if (B.w < -0.5 || int(B.w + 0.5) != _room) continue;
+            vec3 Ls = B.xyz - vShipPos;
+            float d = length(Ls);
+            vec3 l = Ls / max(d, 1e-3);
+            float c = dot(-l, uAlarmD[i].xyz);
+            float beam = smoothstep(0.76, 0.93, c);
+            float I = uAlarmK * (beam * 7.0 + 0.16) / (1.0 + d * d * 0.32);
+            IncidentLight _al;
+            _al.direction = normalize(mat3(viewMatrix) * (_s2w * l));
+            _al.color = vec3(1.0, 0.07, 0.03) * I;
+            _al.visible = true;
+            RE_Direct(_al, geometryPosition, geometryNormal, geometryViewDir, geometryClearcoatNormal, material, reflectedLight);
+          }
         }` : ''}`)
       .replace('#include <emissivemap_fragment>', `#include <emissivemap_fragment>
         ${o.heat ? `

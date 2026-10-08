@@ -567,32 +567,81 @@ export class Gameplay {
     setTimeout(() => g.asphalt.say('lockdown', {}, { minGap: 10 }), 4000);
   }
 
+  /** where Kaito is: 'b29' (in B-29's cabin), 'h8' (H8's cockpit, its shaft or its shelter),
+   * 'station' (a station's lobby or ring), 'outside' */
+  playerPlace() {
+    const g = this.g, pl = g.player, ls = g.lifeSupport;
+    if (pl.outside) return 'outside';
+    if (ls.inStation) return 'station';
+    const z = ls.zoneOfPlayer;
+    if (z === 'h8' || z === 'h8shaft' || z === 'h8shelter') return 'h8';
+    return g.h8 && g.h8.solo ? 'h8' : 'b29';
+  }
+
+  /** B-29's own alarm reaches him only aboard it (or in H8 while it sits docked on top of it) */
+  hearsB29() {
+    const place = this.playerPlace();
+    return place === 'b29' || (place === 'h8' && !!(this.g.h8 && this.g.h8.docked));
+  }
+
+  /**
+   * whether (and how) a voice can reach him now: 'air' (said in the room he is in), 'radio' (his
+   * suit's radio, H8's link), or null (nothing carries it: vacuum on his ears, out cold, out of reach)
+   */
+  voiceRoute(who) {
+    const g = this.g, pl = g.player, h8 = g.h8;
+    if (pl.state === 'dead' || this.unconscious || (this.exposed || 0) > 0.3) return null;
+    const place = this.playerPlace();
+    const linked = !!(h8 && (h8.docked || (h8.link && h8.link.ok)));
+    if (place === 'outside') return pl.suit ? 'radio' : null;
+    if (who === 'hachi') {
+      if (place === 'h8') return 'air';
+      return linked ? (h8.docked && place === 'b29' ? 'air' : 'radio') : null;
+    }
+    if (place === 'b29') return 'air';
+    if (place === 'h8') return h8 && h8.docked ? 'air' : linked ? 'radio' : null;
+    return 'radio';
+  }
+
   updateAlarm(dt) {
     const g = this.g, al = g.systems.alarm, ls = g.lifeSupport;
     const br = ls.breathing();
+    const place = this.playerPlace();
     const hazards = [];
-    if (br.p < 75 && !br.suit) hazards.push(1);
-    if (br.o2 < 17) hazards.push(0.8);
-    if (br.co2 > 1.5) hazards.push(0.5);
+    // the cabin air counts where Kaito breathes it aboard B-29 (a suit does not make a holed cabin
+    // safe; the airlock pumped down on purpose is not an alarm). H8, the stations, the suit and the
+    // outside have warnings of their own.
+    if (place === 'b29' && ls.z[ls.zoneOfPlayer]) {
+      const z = ls.z[ls.zoneOfPlayer], p = z.n2 + z.o2 + z.co2;
+      const cycling = ls.zoneOfPlayer === 'airlock' && ((g.airlockMode && g.airlockMode !== 'idle') || (g.hatch && !g.hatch.sealed) || br.suit);
+      if (p < 75 && !cycling) hazards.push(1);
+      if (z.o2 < 17 && !br.suit && !cycling) hazards.push(0.8);
+      if (z.co2 > 1.5) hazards.push(0.5);
+    }
     if ((g.damage.reactorTemp || 0) > 820) hazards.push(0.7);
     if (g.flight.hullTemp > 1300) hazards.push(1);
-    if (g.player.suit && g.player.suitO2 < 0.15) hazards.push(0.7);
     for (const a of this.watched) if (!a.hit && !a.dead && a.dist < 3500) hazards.push(0.9);
     if (hazards.length) { const h = Math.max(...hazards); if (!al.active || h > al.level + 0.05) this.raise(h); }
     al.t += dt;
     // events ring for a while; ongoing hazards keep it going (lasting damage alone does not)
     if (!hazards.length && al.t > 25) { al.active = false; al.level = 0; }
-    const on = al.active && !al.silenced;
+    // (the siren is B-29's: heard aboard it, through its air)
+    const on = al.active && !al.silenced && this.hearsB29();
     if (on) {
-      g.audio.alarm(true);
+      g.audio.alarm(true, 'b29');
       this.flashT += dt;
       if (this.flashT > 0.9) { this.flashT = 0; g.engine.grade.set('uFlash', Math.max(g.engine.grade.get('uFlash'), 0.07 * al.level)); }
-    } else g.audio.alarm(false);
+    } else g.audio.alarm(false, 'b29');
+    // H8's own siren, for H8's own trouble, heard in H8
+    const h8 = g.h8, ha = h8 && h8.alarm;
+    g.audio.alarm(!!(ha && ha.active && !ha.silenced && place === 'h8' && !this.unconscious), 'h8');
     g.engine.grade.set('uFlash', g.engine.grade.get('uFlash') * Math.exp(-dt * 7));
-    // spoken warnings
-    if (br.o2 < 17 && br.p > 30) g.asphalt.say('o2_low', {}, { minGap: 60 });
-    if (br.co2 > 1.5) g.asphalt.say('co2_high', {}, { minGap: 90 });
-    if (!br.suit && br.p < 50 && !g.player.outside) g.asphalt.say('pressure_low', {}, { minGap: 25 });
+    // spoken warnings (B-29's cabin, said aboard B-29)
+    if (place === 'b29') {
+      if (br.o2 < 17 && br.p > 30) g.asphalt.say('o2_low', {}, { minGap: 60 });
+      if (br.co2 > 1.5) g.asphalt.say('co2_high', {}, { minGap: 90 });
+      if (!br.suit && br.p < 50) g.asphalt.say('pressure_low', {}, { minGap: 25 });
+    }
     if ((g.damage.reactorTemp || 0) > 820) g.asphalt.say('reactor_hot', {}, { minGap: 120 });
     if ((g.systems.power ?? 1) < 0.5) g.asphalt.say('low_power', {}, { minGap: 300 });
   }
@@ -642,7 +691,22 @@ export class Gameplay {
     const br = ls.breathing();
     let hurt = 0, blur = 0;
     let hyp = Math.max(0, Math.min(1, (17 - br.o2) / 9));
-    if (!br.suit && br.p < 20) { hurt += dt / 45; hyp = 1; }       // ebullism / no air
+    // vacuum on the skin (no suit, below the Armstrong limit): the breath torn out of him, the
+    // moisture of his eyes and tongue boiling, ebullism. Useful consciousness lasts ten seconds or
+    // so, then he blacks out; half a minute of it and his heart stops. Back in air before that, he
+    // comes round (hurt).
+    const vac = !br.suit && br.p < 6.3 && pl.state !== 'dead';
+    if (vac && !(this.vacT > 0)) { g.audio.gasp && g.audio.gasp(); g.shake = Math.max(g.shake, 0.6); }
+    if (vac) this.vacT = (this.vacT || 0) + dt;
+    else if (!this.unconscious) this.vacT = Math.max(0, (this.vacT || 0) - dt * 0.6);
+    const v = this.vacT || 0;
+    if (vac && v >= 12 && !this.unconscious) { this.unconscious = true; this.wakeT = 0; }
+    if (this.unconscious) {
+      if (!vac && br.p > 40) { this.wakeT += dt; if (this.wakeT > 6) { this.unconscious = false; this.vacT = 7; g.shake = Math.max(g.shake, 0.4); } }
+      else this.wakeT = 0;
+    }
+    if (vac) { hurt += dt / 30; hyp = 1; }
+    else if (!br.suit && br.p < 20) { hurt += dt / 45; hyp = 1; }       // too thin to live on
     else if (br.o2 < 8) hurt += dt / 120;
     if (br.co2 > 2) blur = Math.min(1, (br.co2 - 2) / 4);
     if (br.co2 > 6) hurt += dt / 300;
@@ -651,16 +715,30 @@ export class Gameplay {
     const gload = g.gLocal.length() / 9.81;
     if (gload > 4 && pl.state !== 'seated') hurt += dt * (gload - 4) / 20;
     if (pl.bump) { hurt += pl.bump * 0.08; g.shake = Math.max(g.shake, pl.bump * 1.5); g.audio.impact(pl.pos, 0.12 * pl.bump); pl.bump = 0; }
-    pl.health = Math.max(0, Math.min(1, pl.health - hurt + (hurt === 0 && hyp === 0 ? dt / 900 : 0)));
+    pl.health = Math.max(0, Math.min(1, pl.health - hurt + (hurt === 0 && hyp === 0 && !this.unconscious ? dt / 900 : 0)));
     const gr = g.engine.grade;
-    gr.set('uHypoxia', Math.max(hyp * 0.85, pl.health < 0.5 ? (0.5 - pl.health) * 1.6 : 0));
+    // what vacuum does to the eyes: within seconds the picture swims and clouds over, the edges
+    // close in, then it goes dark
+    const sm = (a, b, x) => { const t = Math.max(0, Math.min(1, (x - a) / (b - a))); return t * t * (3 - 2 * t); };
+    const fog = Math.min(1, v / 4);
+    const tunnel = sm(2, 11, v);
+    gr.set('uFog', fog);
+    gr.set('uFade', this.unconscious ? 1 : sm(9, 12, v));
+    if (vac && v > 3) g.shake = Math.max(g.shake, 0.22 * sm(3, 11, v));
+    gr.set('uHypoxia', Math.max(hyp * 0.85, tunnel, pl.health < 0.5 ? (0.5 - pl.health) * 1.6 : 0));
     const wet = (g.machines && g.machines.shower && g.machines.shower.wet) || 0;   // in the shower
-    gr.set('uBlur', Math.max(blur * 0.6, hyp * 0.4, this.underwater * 0.7, wet * 0.32));
-    gr.set('uDesat', Math.min(0.8, (1 - pl.health) * 0.8));
+    gr.set('uBlur', Math.max(blur * 0.6, hyp * 0.4, Math.min(1, v / 5), this.underwater * 0.7, wet * 0.32));
+    gr.set('uDesat', Math.min(0.85, (1 - pl.health) * 0.8 + tunnel * 0.3));
     gr.get('uTint').set(1 - this.underwater * 0.55 + wet * 0.05, 1 - this.underwater * 0.25 + wet * 0.02, 1 - this.underwater * 0.05 - wet * 0.03);
-    if (hyp > 0.3 || pl.health < 0.6) g.audio.heartbeat(70 + 70 * Math.max(hyp, 1 - pl.health));
-    // what the ears hear: cabin air, suit, or outside air
-    g.audio.setAir(this.herePressure, pl.suit);
+    // the heart: racing in vacuum, then (out cold) slowing toward the end; loud, the only sound left
+    g.audio.hbGain = vac || this.unconscious ? 1.7 : 1;
+    if (vac || this.unconscious) g.audio.heartbeat(v < 12 ? 110 + 5 * v : Math.max(30, 172 - (v - 12) * 7));
+    else if (hyp > 0.3 || pl.health < 0.6) g.audio.heartbeat(70 + 70 * Math.max(hyp, 1 - pl.health));
+    // what the ears hear: cabin air, suit, or nothing at all (vacuum on the skin)
+    const exposed = vac ? 1 : !br.suit && br.p < 20 ? (20 - br.p) / 13.7 : 0;
+    this.exposed = Math.max(this.unconscious ? 1 : 0, exposed);
+    const contact = pl.outside ? (pl.state === 'evaWalk' || pl._nearRail ? 1 : 0) : 1;
+    g.audio.setAir(this.herePressure, pl.suit, { contact, exposed: this.exposed, outside: pl.outside });
     if (pl.health <= 0 && pl.state !== 'dead') this.die();
   }
 
@@ -825,7 +903,8 @@ export class Gameplay {
     if (this.sleeping) { this.sleeping = false; g.timeScale = 1; }
     g.asphalt.say('dying', {}, { force: true });
     g.hud.setFade(1);
-    g.audio.alarm(false);
+    g.audio.alarm(false, 'b29'); g.audio.alarm(false, 'h8');
+    this.unconscious = false;
     g.save.save();
     g.save.enabled = false;
     setTimeout(() => {

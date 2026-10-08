@@ -421,9 +421,14 @@ export class H8Tabs {
     y = this.chips(K, y, CAMERAS.map((c, i) => { const h = v.hull.cams[i]; return { label: c.name.split(' ')[0], txt: h < CAM_DEAD ? '喪失' : `${Math.round(h * 100)}%`, bad: h < CAM_DEAD }; }));
     const broken = v.display.panelHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0) + v.display.floorHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0);
     if (broken && y < H - 70) K.text(`表示パネル 破損 ${broken} 枚`, 14, y + 12, { size: 14, color: '#ff8a7a' });
+    // (undocked, the shaft is the airlock: pumped down, the lower hatch opens to space)
+    const A = v.airlock || { mode: 'idle' };
+    const lockLabel = A.mode === 'dep' ? '減圧中…' : A.mode === 'open' ? 'エアロック 閉・加圧' : A.mode === 'rep' ? '加圧中…' : 'エアロック 減圧';
+    const al = v.alarm;
     this.buttons(K, H, [
-      ['H8 状況報告', () => v.reportH8()],
-      [docked ? (v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開') : '下ハッチ', () => (docked ? v.portTapped() : null), docked ? 'normal' : 'disabled'],
+      al && al.active && !al.silenced ? ['警報停止', () => v.silenceAlarm(), 'danger'] : ['H8 状況報告', () => v.reportH8()],
+      docked ? [v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開', () => v.portTapped(), 'normal']
+        : [lockLabel, () => v.lockTapped(), v.crew ? (A.mode === 'open' ? 'warn' : A.mode === 'idle' ? 'normal' : 'on') : 'disabled'],
       ['HACHI 診断', () => v.mind && v.mind.ask('sitrep')],
     ]);
   }

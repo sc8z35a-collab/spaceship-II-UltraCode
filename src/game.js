@@ -260,16 +260,18 @@ export class Game {
     this.lastInput = inp;
     const pl = this.player;
     const dead = pl.state === 'dead';
+    // (out cold — vacuum on the skin, no air — he does nothing at all)
+    const limp = dead || !!(this.gameplay && this.gameplay.unconscious);
     // ---- mode routing
     let flightIn = null;
     // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
     const focused = !!(F && !F.out) || !!this.cine;
-    if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
+    if (!limp && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
     this.lastFlightIn = flightIn;
-    if (!dead) {
+    if (!limp) {
       if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
@@ -313,7 +315,7 @@ export class Game {
     this.damage.update(sdt);
     this.asteroids.update(sdt, dt);
     if (this.drones) this.drones.update(sdt);
-    if (this.weapons) this.weapons.update(sdt, dead ? null : inp);
+    if (this.weapons) this.weapons.update(sdt, limp ? null : inp);
     if (this.combat) this.combat.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
@@ -332,13 +334,14 @@ export class Game {
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
+    if (limp && !dead) lookInp = Object.assign({}, lookInp, { lookDX: 0, lookDY: 0, moveX: 0, moveY: 0, up: 0, rx: 0, ry: 0 });
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     if (this.suits) this.suits.update(sdt, Math.min(dt, 0.1));
     // ---- taps
-    if (this.h8 && !dead) this.h8.hudHolds(inp.holds);
+    if (this.h8 && !limp) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
-      if (this.mode === 'camera' || dead || this.cine) continue;
+      if (this.mode === 'camera' || limp || this.cine) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
       // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
       if (this.h8 && this.h8.hudTap(tap)) continue;
