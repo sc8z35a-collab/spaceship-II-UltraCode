@@ -724,6 +724,7 @@ export class Game {
     if (this.drones) this.drones.updateVisual(dt, origin, this.camWorld);
     const eyePF = this.debugCam || wreck || podCam || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
+    if (this.suits && this.suits.rescuer) this.suits.rescuer.updateVisual(dt, origin, this.camWorld);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);

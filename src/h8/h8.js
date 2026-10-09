@@ -2713,17 +2713,29 @@ export class H8Vessel {
     this.say('hachi_goto', { name: c.name }, { minGap: 2 });
   }
 
-  /** Kaito out in his suit calls H8 over: it casts off if it must and comes to hold by him */
-  callToKaito() {
+  /** Kaito out in his suit calls H8 over: it casts off if it must and comes to hold by him
+   * (standoff m; onArrive: told when it holds there) */
+  callToKaito(standoff, onArrive = null) {
     const g = this.g;
     if (!g.suits) return;
+    // (called again once it has cast off: the first call's wishes stand)
+    if (standoff !== undefined || onArrive || !this._kaitoCall) this._kaitoCall = { standoff: standoff ?? 16, onArrive };
     const c = { kind: 'kaito', name: 'カイト' };
     if (this.mode === 'docked') { this.release({ goto: c }); return; }
     if (this.berthAt) { this.unberth({ goto: c }); return; }
     this.wake();
-    this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.playerEci(pos); if (vel) vel.copy(g.flight.vel); return pos; }, standoff: 25, onArrive: () => this.say('hachi_kaito_here', {}, { force: true }) });
+    const K = this._kaitoCall || {};
+    this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.kaitoEci(pos, vel || null); return pos; }, standoff: K.standoff || 16, onArrive: () => { if (K.onArrive) K.onArrive(); else this.say('hachi_kaito_here', {}, { force: true }); } });
     this.goalKind = 'kaito';
   }
+
+  /** the way in from space while H8 flies alone: its neck hatch (physics frame) */
+  neckPF(out = new THREE.Vector3()) { return out.copy(NECK_HATCH).add(DOCK); }
+
+  /** H8's middle in the physics frame (alone: its own frame, shifted by the docking offset) */
+  centerPF(out = new THREE.Vector3()) { return out.copy(DOCK); }
+
+  hullR() { return H8.R; }
 
   /** a lock as a target B-29's autopilot can fly to (it moves: followed as it goes) */
   targetObj(c) {

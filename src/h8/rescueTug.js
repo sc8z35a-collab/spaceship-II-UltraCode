@@ -14,6 +14,7 @@ import { EnginePlume, plumeAir } from '../fx/enginePlume.js';
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const _tl = new THREE.Vector3(), _tq = new THREE.Quaternion();
 const NOSE = 5.5;                                    // tug origin to the face of its collar
+export const TUG_NOSE = NOSE;
 // latched: the tug's origin in the shelter's (H8's) frame, the tug in the same attitude, its nose
 // (-z) against the back plate
 const LATCH = V(0, SHELTER.center.y, SHELTER.z1 + 0.14 + NOSE);
@@ -37,7 +38,7 @@ function mats() {
   return MATS;
 }
 
-function tugModel() {
+export function tugModel() {
   const M = mats();
   const b = new Builder();
   b.plainUpTo = 0.06;

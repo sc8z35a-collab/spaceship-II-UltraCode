@@ -214,3 +214,6 @@ html, body {
 #visor button.shoot { width: 8vh; height: 8vh; border-radius: 50%; padding: 0; background: rgba(255, 255, 255, 0.75); border: 0.6vh solid rgba(255, 255, 255, 0.35); }
 #visor .vz-hatch { display: none; position: absolute; left: 50%; top: 58vh; transform: translateX(-50%); pointer-events: auto; font-size: clamp(12px, 2.8vh, 16px) !important; padding: 1.4vh 3vh !important; background: rgba(30, 110, 60, 0.55) !important; border-color: rgba(140, 255, 170, 0.6) !important; }
 #visor.hatch .vz-hatch { display: block; }
+#visor .vz-board { display: none; position: absolute; left: 50%; top: 60vh; transform: translateX(-50%); pointer-events: auto; font-size: clamp(12px, 2.8vh, 16px) !important; padding: 1.4vh 3.2vh !important; background: rgba(20, 90, 140, 0.6) !important; border-color: rgba(140, 220, 255, 0.7) !important; }
+#visor.board .vz-board { display: block; }
+#visor .vz-bar button.act { background: rgba(110, 180, 255, 0.42); border-color: rgba(190, 230, 255, 0.85); }

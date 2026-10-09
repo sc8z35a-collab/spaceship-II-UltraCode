@@ -8,6 +8,7 @@
 // the crew as blocks), +z aft, -z forward (the nose), +y up.
 import * as THREE from 'three';
 import { Builder } from '../ship/geom.js';
+import { buildPerson, randomLook, BONE } from './humanModel.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -95,139 +96,6 @@ function profile(G) {
   return pts;
 }
 
-const CREW = new Map();
-/** one seated crew member: { root, torso, head, armL, armR, foreL, foreR } (+z behind them); the
- * four looks (suit colour, headset) are built once per level and copied (their shapes shared) */
-function crewMember(M, level, k) {
-  const key = `${level}:${k % 3 === 2 ? 1 : 0}:${k % 2 === 0 ? 1 : 0}`;
-  if (!CREW.has(key)) CREW.set(key, crewShape(M, level, k).root);
-  const root = CREW.get(key).clone(true);
-  const by = (n) => root.getObjectByName(n);
-  return { root, torso: by('torso'), head: by('head'), armL: by('armL'), armR: by('armR'), foreL: by('foreL'), foreR: by('foreR'), k, ph: Math.random() * 10, pilot: false };
-}
-
-function crewShape(M, level, k) {
-  const lo2 = level === 'low2';
-  if (!lo2) return crewShapeFull(M, level, k);
-  const suit = k % 3 === 2 ? 'suit2' : 'suit';
-  const root = new THREE.Group();
-  const mk = (b) => { const g = b.build(M, { castShadow: false, receiveShadow: false }); return g; };
-  // the seat's frame: hips at the origin, thighs forward (-z), shins down
-  const legs = new Builder();
-  legs.box(0.36, 0.14, 0.44, suit, [0, 0, -0.2], null, lo2 ? 0 : 0.05, 1);
-  legs.box(0.3, 0.42, 0.13, suit, [0, -0.22, -0.42], null, lo2 ? 0 : 0.05, 1);
-  root.add(mk(legs));
-  const torso = new THREE.Group(); torso.name = 'torso'; root.add(torso);
-  const tb = new Builder();
-  tb.box(0.38, 0.5, 0.22, suit, [0, 0.27, 0.0], null, lo2 ? 0 : 0.08, lo2 ? 1 : 2);
-  if (!lo2) tb.box(0.3, 0.06, 0.02, 'strip', [0, 0.42, -0.115], null, 0, 1);      // a reflective band
-  torso.add(mk(tb));
-  const head = new THREE.Group(); head.name = 'head'; head.position.y = 0.56; torso.add(head);
-  const hb = new Builder();
-  hb.sphere(1, 'skin', [0, 0.11, 0], lo2 ? 8 : 14, [0.095, 0.115, 0.105]);
-  if (!lo2) {
-    hb.add(new THREE.SphereGeometry(1, 14, 8, 0, Math.PI * 2, 0, 1.6), 'hair', [0, 0.125, 0.01], [-0.25, 0, 0], [0.1, 0.11, 0.11]);
-    if (k % 2 === 0) { hb.torus(0.105, 0.012, 'headset', [0, 0.14, 0], [0, 0, Math.PI / 2], 16, Math.PI); hb.cyl(0.03, 0.03, 0.03, 'headset', [0.1, 0.1, 0], [0, 0, Math.PI / 2], 10); }
-    hb.box(0.04, 0.012, 0.01, 'hair', [-0.035, 0.14, -0.095], null, 0, 1);
-    hb.box(0.04, 0.012, 0.01, 'hair', [0.035, 0.14, -0.095], null, 0, 1);
-  }
-  head.add(mk(hb));
-  const arms = {};
-  for (const s of [-1, 1]) {
-    const k2 = s < 0 ? 'L' : 'R';
-    const sh = new THREE.Group(); sh.name = 'arm' + k2; sh.position.set(s * 0.23, 0.48, 0); torso.add(sh);
-    const ub = new Builder();
-    ub.box(0.1, 0.3, 0.1, suit, [0, -0.15, 0], null, lo2 ? 0 : 0.04, 1);
-    sh.add(mk(ub));
-    const fo = new THREE.Group(); fo.name = 'fore' + k2; fo.position.y = -0.3; sh.add(fo);
-    const fb = new Builder();
-    fb.box(0.085, 0.27, 0.085, suit, [0, -0.135, 0], null, lo2 ? 0 : 0.035, 1);
-    fb.sphere(0.05, 'skin', [0, -0.29, 0], lo2 ? 6 : 10);
-    fo.add(mk(fb));
-    arms[k2] = { sh, fo };
-  }
-  return { root };
-}
-
-/** a capsule from a to b (radius r) into a builder */
-function capsule(b, a, c, r, key, seg = 10) {
-  const A = V(...a), B = V(...c), d = B.clone().sub(A);
-  const g = new THREE.CapsuleGeometry(r, Math.max(1e-3, d.length()), 3, seg);
-  const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize());
-  g.applyMatrix4(new THREE.Matrix4().compose(A.clone().lerp(B, 0.5), q, V(1, 1, 1)));
-  b.add(g, key);
-}
-
-/**
- * a crew member as seen close up (a stolen pod's camera turned round to them, or through the glass
- * from near by): a flight suit with its collar and the seat's harness over it, rounded limbs,
- * hands, boots; a face — eyes wide, brows up, the mouth open — ears, hair, and on some a headset
- * with its boom mic. Same joints as the plain one: hips at the origin, the torso, the head, each
- * arm's shoulder and elbow (+z behind them)
- */
-function crewShapeFull(M, level, k) {
-  const lo = level !== 'high';
-  const suit = k % 3 === 2 ? 'suit2' : 'suit';
-  const sg = lo ? 7 : 12;
-  const root = new THREE.Group();
-  const mk = (b) => b.build(M, { castShadow: false, receiveShadow: false });
-  // legs: thighs forward along the seat, shins down, boots
-  const legs = new Builder();
-  for (const s of [-1, 1]) {
-    const x = s * 0.095;
-    capsule(legs, [x, 0.0, -0.02], [x, 0.01, -0.4], 0.078, suit, sg);
-    capsule(legs, [x, 0.0, -0.42], [x, -0.36, -0.45], 0.06, suit, sg);
-    legs.box(0.1, 0.085, 0.21, 'boot', [x, -0.43, -0.5], null, 0.03, 2);
-  }
-  // (the lap belt across the hips)
-  legs.box(0.36, 0.05, 0.03, 'strap', [0, 0.06, -0.1], null, 0.01, 1);
-  root.add(mk(legs));
-  const torso = new THREE.Group(); torso.name = 'torso'; root.add(torso);
-  const tb = new Builder();
-  tb.push([0, 0, 0], [0, 0, 0], [1, 1, 0.64]);
-  tb.lathe([[0.0, 0.0], [0.15, 0.01], [0.168, 0.1], [0.182, 0.26], [0.192, 0.4], [0.17, 0.48], [0.11, 0.53], [0.0, 0.545]], suit, [0, 0, 0], null, lo ? 12 : 20);
-  tb.pop();
-  // the collar, the reflective band, the harness's shoulder straps down to its buckle
-  tb.torus(0.058, 0.016, suit, [0, 0.53, 0], [Math.PI / 2, 0, 0], 14);
-  tb.box(0.3, 0.045, 0.02, 'strip', [0, 0.42, -0.118], null, 0, 1);
-  for (const s of [-1, 1]) tb.tube([V(s * 0.1, 0.52, 0.06), V(s * 0.1, 0.5, -0.09), V(s * 0.075, 0.36, -0.125), V(s * 0.02, 0.17, -0.13)], 0.017, 'strap', { radial: 5, seg: 10 });
-  tb.cyl(0.036, 0.036, 0.014, 'metal', [0, 0.16, -0.132], [Math.PI / 2, 0, 0], 14);
-  tb.cyl(0.042, 0.048, 0.08, 'skin', [0, 0.56, 0], null, 10);
-  torso.add(mk(tb));
-  const head = new THREE.Group(); head.name = 'head'; head.position.y = 0.56; torso.add(head);
-  const hb = new Builder();
-  hb.sphere(1, 'skin', [0, 0.11, 0], lo ? 12 : 18, [0.09, 0.112, 0.102]);
-  hb.add(new THREE.SphereGeometry(1, lo ? 10 : 16, 8, 0, Math.PI * 2, 0, 1.55), 'hair', [0, 0.126, 0.012], [-0.3, 0, 0], [0.096, 0.108, 0.106]);
-  for (const s of [-1, 1]) {
-    hb.sphere(0.024, 'skin', [s * 0.088, 0.105, 0.006], 8, [0.45, 1, 0.75]);                    // ears
-    hb.sphere(0.0145, 'eye', [s * 0.033, 0.127, -0.087], 10);                                    // eyes, wide
-    hb.sphere(0.0072, 'hair', [s * 0.033, 0.127, -0.1005], 8);
-    hb.box(0.036, 0.009, 0.01, 'hair', [s * 0.035, 0.153, -0.094], [0, 0, s * 0.28], 0, 1);      // brows up
-  }
-  hb.sphere(0.017, 'skin', [0, 0.1, -0.103], 8, [0.75, 1, 1.15]);                                 // nose
-  hb.sphere(0.021, 'mouth', [0, 0.062, -0.091], 10, [1.15, 0.85, 0.45]);                          // open
-  if (k % 2 === 0) {
-    hb.torus(0.103, 0.011, 'headset', [0, 0.13, 0.0], [0, 0, Math.PI / 2], 16, Math.PI);
-    for (const s of [-1, 1]) hb.cyl(0.032, 0.032, 0.03, 'headset', [s * 0.1, 0.1, 0], [0, 0, Math.PI / 2], 12);
-    hb.tube([V(0.11, 0.09, -0.01), V(0.095, 0.06, -0.07), V(0.035, 0.055, -0.105)], 0.005, 'headset', { radial: 4, seg: 8 });
-    hb.sphere(0.011, 'headset', [0.03, 0.055, -0.106], 6);
-  }
-  head.add(mk(hb));
-  for (const s of [-1, 1]) {
-    const k2 = s < 0 ? 'L' : 'R';
-    const sh = new THREE.Group(); sh.name = 'arm' + k2; sh.position.set(s * 0.2, 0.47, 0); torso.add(sh);
-    const ub = new Builder();
-    capsule(ub, [0, 0.0, 0], [0, -0.27, 0], 0.055, suit, sg);
-    sh.add(mk(ub));
-    const fo = new THREE.Group(); fo.name = 'fore' + k2; fo.position.y = -0.29; sh.add(fo);
-    const fb = new Builder();
-    capsule(fb, [0, 0.0, 0], [0, -0.23, 0], 0.046, suit, sg);
-    fb.sphere(0.042, 'skin', [0, -0.3, 0], 10, [0.85, 1.25, 0.62]);
-    fb.box(0.03, 0.06, 0.03, 'skin', [s * -0.035, -0.29, -0.02], [0, 0, s * 0.5], 0.012, 1);      // thumb
-    fo.add(mk(fb));
-  }
-  return { root };
-}
 
 /**
  * a strip of the hull's skin (for the markings): a patch of the cylinder of radius r round the pod's
@@ -409,9 +277,9 @@ function template(grade, armed, level) {
     group.add(glass);
   }
   const tpl = {
-    // (the cockpit camera: on top of the console, between the pilots' hands, looking out through
-    // the canopy; turned round, it looks back at the crew)
-    group, seats, zFront, fy, gunAt, cam: V(0, fy + 0.92, zFront - 0.02), exit: V(0, 0, L / 2 + 0.1), R, L,
+    // (the cockpit camera: between the two pilots' heads, at their eyes' height, looking out through
+    // the canopy past their shoulders; turned round, it looks back down the cabin at the crew)
+    group, seats, zFront, fy, gunAt, cam: V(0, seats[0].y + 0.7, seats[0].z - 0.03), exit: V(0, 0, L / 2 + 0.1), R, L,
     marks: marksLayout(zDome, zCan, frontBand, zBand2, hz),
     rcs: [0, 1, 2, 3].map((i) => { const a = Math.PI / 4 + i * Math.PI / 2; return V(Math.cos(a) * R * 1.02, Math.sin(a) * R * 1.02, L / 2 - 0.65); }),
   };
@@ -454,14 +322,15 @@ export function buildPod(grade, armed, level, label, station) {
   nav(L.green, V(G.R * 1.0, 0, G.len / 2 - 1.0));
   const strobe = nav(L.strobe, V(0, G.R * 1.0, -0.2));
   const beacon = nav(L.beacon, V(0, -G.R * 1.0, 0.4));
-  // the crew in their seats (the front two at the controls)
+  // the crew in their seats (the front two at the controls): real people (humanModel.js), each made
+  // the first time the pod is near enough to be seen into
   const crew = [];
+  const seed0 = Math.floor(Math.random() * 1e6);
   T.seats.forEach((p, i) => {
-    const c = crewMember(M, level, i);
-    c.root.position.copy(p);
-    c.pilot = i < 2;
-    root.add(c.root);
-    crew.push(c);
+    const holder = new THREE.Group();
+    holder.position.copy(p);
+    root.add(holder);
+    crew.push({ root: holder, person: null, seed: seed0 + i * 7919, k: i, ph: Math.random() * 10, pilot: i < 2, seat: p });
   });
   const ph0 = Math.random() * 10;
   const api = {
@@ -483,26 +352,45 @@ export function buildPod(grade, armed, level, label, station) {
       // of it), heads snapping round, the pilots fighting the controls. (A joint's +x turn swings
       // a hanging limb forward; a torso's +x leans it back; +z swings a left arm in, a right out.)
       const ax = accel ? accel.x : 0, az = accel ? accel.z : 0;
+      const Rl = T.R * 0.93;
       for (const c of crew) {
-        const p = c.ph + t * (1 + panic * 1.8);
+        if (!c.person) {
+          // (as tall as the cabin allows over that seat: the liner's height there, the head's room)
+          c.person = buildPerson(randomLook(c.seed, 'pod'));
+          const room = Math.sqrt(Math.max(0.05, Rl * Rl - c.seat.x * c.seat.x)) - c.seat.y - 0.05;
+          const k = Math.min(c.person.k, room / 0.86);
+          c.person.root.scale.setScalar(k);
+          c.person.root.position.set(0, -0.95 * k, 0.03);
+          c.root.add(c.person.root);
+        }
+        const p = c.ph + t * (1 + panic * 1.6);
         const n = (a, b) => Math.sin(p * a + b) * 0.6 + Math.sin(p * a * 1.7 + b * 2.3) * 0.4;
-        c.torso.rotation.x = -0.1 + Math.max(-0.3, Math.min(0.45, -az * 0.012)) + panic * 0.12 * n(1.3, c.k);
-        c.torso.rotation.z = Math.max(-0.35, Math.min(0.35, ax * 0.01)) + panic * 0.1 * n(0.9, c.k + 1);
-        c.head.rotation.y = panic * 0.85 * n(2.1, c.k * 3) + (c.pilot ? 0 : 0.2 * Math.sin(p * 0.4));
-        c.head.rotation.x = -0.08 + panic * 0.3 * n(1.7, c.k + 4);
+        const P = c.pose || (c.pose = { mode: 'sit' });
+        // pressed back into the seat by the push (thrown sideways by a turn of it), heads turning
+        // round, the pilots at the controls; slumped once the pod is dead
+        const back = -0.05 + Math.max(-0.3, Math.min(0.45, -az * 0.012)) + panic * 0.08 * n(1.3, c.k);
+        P.lean = dead ? 0.35 : -back;
+        P.tilt = dead ? 0.15 * Math.sin(c.k * 2.1) : Math.max(-0.3, Math.min(0.3, ax * 0.01)) + panic * 0.06 * n(0.9, c.k + 1);
+        P.lookYaw = dead ? 0.4 * Math.sin(c.k * 1.7) : panic * 0.75 * n(2.1, c.k * 3) + (c.pilot ? 0 : 0.2 * Math.sin(p * 0.4));
+        P.lookPitch = dead ? -0.6 : -0.05 + panic * 0.2 * n(1.7, c.k + 4);
+        P.reach = c.pilot && !dead ? 0.8 + 0.12 * panic * n(3.1, 1) : 0;
+        c.person.pose(P, t);
+        const b = c.person.bones;
         if (c.pilot && !dead) {
           // hands out on the console, jerking at it
-          c.armL.rotation.x = 1.0 + 0.22 * panic * n(3.1, 1); c.foreL.rotation.x = 0.35 + 0.3 * panic * n(4.3, 2);
-          c.armR.rotation.x = 0.95 + 0.22 * panic * n(2.7, 3); c.foreR.rotation.x = 0.4 + 0.3 * panic * n(3.9, 4);
-          c.armL.rotation.z = 0.12; c.armR.rotation.z = -0.12;
-        } else {
-          // passengers: hands clutching the harness at their chests, now and then an arm flung up
+          b[BONE.shoulderR].rotation.x += 0.15 * panic * n(2.7, 3);
+          b[BONE.shoulderL].rotation.x += 0.15 * panic * n(3.1, 1);
+          b[BONE.elbowR].rotation.x += 0.2 * panic * n(3.9, 4);
+          b[BONE.elbowL].rotation.x += 0.2 * panic * n(4.3, 2);
+        } else if (!dead) {
+          // passengers: hands clutching the harness at the chest, now and then an arm flung up
           const fling = panic > 0.4 ? Math.max(0, Math.sin(p * 0.7 + c.k)) ** 6 : 0;
           const fL = fling * (c.k % 2 ? 1 : 0.3), fR = fling * (c.k % 2 ? 0.3 : 1);
-          c.armL.rotation.x = 0.05 + 2.6 * fL + 0.15 * panic * n(2.3, 5);
-          c.armR.rotation.x = 0.05 + 2.6 * fR + 0.15 * panic * n(2.9, 6);
-          c.foreL.rotation.x = 2.15 * (1 - fL) + 0.25 * panic * n(3.3, 7); c.foreR.rotation.x = 2.15 * (1 - fR) + 0.25 * panic * n(3.7, 8);
-          c.armL.rotation.z = 0.32 - 0.6 * fL; c.armR.rotation.z = -0.32 + 0.6 * fR;
+          b[BONE.shoulderR].rotation.x = 0.55 + 2.1 * fR + 0.12 * panic * n(2.9, 6);
+          b[BONE.shoulderL].rotation.x = 0.55 + 2.1 * fL + 0.12 * panic * n(2.3, 5);
+          b[BONE.elbowR].rotation.x = 2.0 * (1 - fR) + 0.2 * panic * n(3.7, 8);
+          b[BONE.elbowL].rotation.x = 2.0 * (1 - fL) + 0.2 * panic * n(3.3, 7);
+          b[BONE.shoulderR].rotation.z = -0.25 + 0.5 * fR; b[BONE.shoulderL].rotation.z = 0.25 - 0.5 * fL;
         }
       }
     },
@@ -514,6 +402,7 @@ export function buildPod(grade, armed, level, label, station) {
       api.tick(0, 0, 0, null, true, false);
     },
     dispose() {
+      for (const c of crew) if (c.person) { c.person.dispose(); c.person = null; }
       root.parent && root.parent.remove(root);
       mark.map.dispose(); mark.dispose();
       for (const m of Object.values(L)) m.dispose();

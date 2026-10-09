@@ -48,6 +48,7 @@ export class VisorHud {
         <button data-k="call" class="red">救助要請</button><button data-k="boost">ブースター</button><button data-k="hold">アシスト</button>
       </div>
       <button class="vz-hatch">ハッチに入る</button>
+      <button class="vz-board">乗り込む</button>
       <div class="vz-call">
         <div class="vz-t">救助を呼ぶ</div>
         <button data-c="b29">B-29 を呼ぶ</button><button data-c="h8">H8 を呼ぶ</button><button data-c="station">最寄りのステーション</button><button data-c="x" class="dim">閉じる</button>
@@ -63,6 +64,7 @@ export class VisorHud {
     for (const b of el.querySelectorAll('button')) { b.addEventListener('pointerdown', stop); b.addEventListener('touchstart', stop, { passive: true }); }
     el.querySelector('.vz-bar').addEventListener('click', (e) => { const k = e.target && e.target.dataset && e.target.dataset.k; if (k) this.press(k); });
     el.querySelector('.vz-hatch').addEventListener('click', () => { if (this.s.hatchNear) this.s.evaEnter(this.s.hatchNear); });
+    el.querySelector('.vz-board').addEventListener('click', () => this.s.rescuer.board());
     el.querySelector('.vz-call').addEventListener('click', (e) => { const c = e.target && e.target.dataset && e.target.dataset.c; if (!c) return; this.callOpen(false); if (c !== 'x') this.s.call(c); });
     const camEl = el.querySelector('.vz-cam');
     camEl.addEventListener('click', (e) => {
@@ -167,6 +169,14 @@ export class VisorHud {
     this.el.classList.toggle('on', show);
     this.el.classList.toggle('busy', !!s.seq);
     this.el.classList.toggle('hatch', !!s.hatchNear);
+    // the rescuer is here: the computer can take him in
+    const R = s.rescue, canBoard = !!(R && R.canBoard && R.phase === 'here');
+    this.el.classList.toggle('board', canBoard);
+    if (canBoard) { const b = this.boardBtn || (this.boardBtn = this.el.querySelector('.vz-board')); const t = `${R.canBoard} に乗り込む`; if (b.textContent !== t) b.textContent = t; }
+    // (the switches lit while they are on)
+    if (!this.btns) this.btns = Object.fromEntries([...this.el.querySelectorAll('.vz-bar button')].map((b) => [b.dataset.k, b]));
+    const on = { lamp: s.lamp, visor: s.sunVisor > 0.5, boost: s.boost, hold: s.hold, cam: this.camMode };
+    for (const [k, v] of Object.entries(on)) if (this.btns[k]) this.btns[k].classList.toggle('act', !!v);
     for (const e of this.events) e.t += dt;
     this.events = this.events.filter((e) => e.t < 8);
     // the camera's view: the lens narrows the field, the crop coarsens the picture
@@ -386,14 +396,7 @@ export class VisorHud {
     return { v: this.s.relSpeed ? this.s.relSpeed() : pl.vel.length(), name: h8 ? 'H8' : 'B-29' };
   }
 
-  rescueText() {
-    const R = this.s.rescue;
-    if (!R) return '';
-    if (R.who === 'b29') return 'B-29 が接近中';
-    if (R.who === 'h8') return 'H8 が向かっています';
-    if (R.towing) return `${R.station.st.name} のタグが曳航中`;
-    return `${R.station.st.name} のタグが向かっています（あと ${hms(R.eta - R.t)}）`;
-  }
+  rescueText() { return this.s.rescuer ? this.s.rescuer.text() : ''; }
 
   markers(x, col, f, u = f / 900) {
     const g = this.g, cam = g.engine.camera, W = this.W, H = this.H;
@@ -401,6 +404,9 @@ export class VisorHud {
     const pv = g.shipVis.root.matrixWorld;
     items.push({ name: 'B-29', p: _v.set(0, 0.5, -1).applyMatrix4(pv).clone(), d: g.player.pos.length() });
     if (g.h8 && !g.h8.docked && g.h8.mode !== 'lost' && g.h8.root) items.push({ name: 'H8', p: g.h8.root.getWorldPosition(new THREE.Vector3()), d: g.h8.root.getWorldPosition(new THREE.Vector3()).distanceTo(g.engine.camera.position) });
+    // the station's rescue craft on its way
+    const tm = this.s.rescuer && this.s.rescuer.marker(g.origin);
+    if (tm) items.push(tm);
     cam.updateMatrixWorld();
     _m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
     x.font = `600 ${Math.round(10 * u)}px -apple-system, "Hiragino Sans", sans-serif`;
