@@ -361,7 +361,8 @@ export class Gameplay {
     // (away with H8, B-29 is not where its hull would be in this frame)
     const awayInH8 = !!(h8 && h8.solo);
     const insideHull = (!awayInH8 && p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || (!awayInH8 && g.docking.contains(p)) ||
-      !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p)));
+      !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p))) ||
+      !!(g.ride && g.ride.contains(p)) || !!(g.akamo && g.akamo.inCabinShip(p));
     const wasOut = pl.outside;
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {

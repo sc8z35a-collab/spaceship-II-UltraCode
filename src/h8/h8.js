@@ -2694,6 +2694,7 @@ export class H8Vessel {
     if (!c) return;
     if (c.kind === 'body') { this.say('hachi_goto_far', { name: c.name }, { minGap: 3 }); return; }
     if (c.kind === 'kaito') { this.callToKaito(); return; }
+    if (c.kind === 'akamo') { this.followAkamo(true); return; }
     if (this.mode === 'docked') {
       const ok = c.kind === 'station' && c.ref ? g.autopilot.engage(c.ref.id) : g.autopilot.engageObj(this.targetObj(c));
       this.say(ok ? 'hachi_goto' : 'hachi_goto_no', { name: c.name }, { minGap: 2 });
@@ -2727,6 +2728,24 @@ export class H8Vessel {
     const K = this._kaitoCall || {};
     this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.kaitoEci(pos, vel || null); return pos; }, standoff: K.standoff || 16, onArrive: () => { if (K.onArrive) K.onArrive(); else this.say('hachi_kaito_here', {}, { force: true }); } });
     this.goalKind = 'kaito';
+  }
+
+  /**
+   * AKAMO's cabin (Kaito riding it) calls H8 along: it casts off if it must and HACHI keeps it
+   * flying beside the ribbon at the cabin's side as well as it can (the cabin is far faster: at
+   * full speed H8 falls behind and catches up at the end); off: it holds where it is
+   */
+  followAkamo(on) {
+    const g = this.g, A = g.akamo;
+    if (!A) return;
+    if (!on) { if (this.goalKind === 'akamo') this.goal('hold'); return; }
+    const c = { kind: 'akamo', name: 'AKAMO' };
+    if (this.mode === 'docked') { this.release({ goto: c }); return; }
+    if (this.berthAt) { this.unberth({ goto: c }); return; }
+    this.wake();
+    this.pilot.setGoal({ kind: 'target', name: 'AKAMO', posOf: (t, pos, vel) => A.escortPoint('h8', pos, vel), standoff: 10, onArrive: null });
+    this.goalKind = 'akamo';
+    this.say('hachi_goto', { name: 'AKAMO' }, { minGap: 2 });
   }
 
   /** the way in from space while H8 flies alone: its neck hatch (physics frame) */

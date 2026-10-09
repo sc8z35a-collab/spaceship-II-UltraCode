@@ -21,6 +21,7 @@ import { LifeSupport } from './ship/lifeSupport.js';
 import { Damage } from './ship/damage.js';
 import { Stations } from './world/stations.js';
 import { SpaceElevator } from './world/elevator.js';
+import { Akamo } from './world/akamo.js';
 import { LightShafts } from './ship/lightShafts.js';
 import { Autopilot } from './ship/autopilot.js';
 import { Docking } from './world/docking.js';
@@ -168,7 +169,12 @@ export class Game {
     this.pods = new EscapePods(this);
     // engine flames burn what is in them and dazzle the cameras near them
     this.plumeHeat = new PlumeHeat(this);
-    this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // (riding AKAMO's cabin in its own frame: the cabin is the vessel he is in)
+    this.ride = null;
+    this.playerVessel = () => (this.ride ? this.ride : this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // Shirasagi's space elevator
+    this.akamo = new Akamo(this);
+    this.akamo.init();
     // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
     this.suits = new Suits(this);
     if (this.machines.suitApi) this.suits.setRack('b29', this.machines.suitApi, this.machines.suitPivot, this.machines.suitIdle);
@@ -344,6 +350,9 @@ export class Game {
     if (this.flight.damp > 0.001) this.gLocal.multiplyScalar(1 - 0.985 * this.flight.damp);
     // riding H8 alone: its own manoeuvres are what Kaito feels
     if (this.h8 && this.h8.solo) this.gLocal.copy(this.h8.gLocal);
+    // AKAMO: the cabin's run (and, riding in its frame, what is felt in it)
+    if (this.akamo) this.akamo.update(sdt);
+    if (this.ride) this.gLocal.copy(this.ride.gLocal);
     this.phys.setGravity(this.gLocal);
     this.fx.gravity.copy(this.gLocal);
     this.phys.step(sdt);
@@ -623,12 +632,15 @@ export class Game {
     const root = this.shipVis.root;
     // render origin: B-29, or H8 while Kaito flies it away from B-29
     const solo = !!(this.h8 && this.h8.solo);
-    this.origin.copy(solo ? this.h8.flight.pos : f.pos);
+    const ride = this.ride;
+    this.origin.copy(ride ? ride.pos : solo ? this.h8.flight.pos : f.pos);
     const one = new THREE.Vector3(1, 1, 1);
     root.matrix.compose(f.pos.clone().sub(this.origin), f.quat, one);
     root.matrixWorld.copy(root.matrix);
     const fr = this.frameRoot;
-    if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
+    // (riding AKAMO: the cabin's pose, the physics frame shifted so its room's origin sits at it)
+    if (ride) fr.matrix.compose(ride.off.clone().applyQuaternion(ride.quat).negate(), ride.quat, one);
+    else if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
     fr.matrixWorld.copy(fr.matrix);
     fr.updateMatrixWorld(true);
     // re-entry: the hull itself shudders under the eye (the frame the eye rides holds still)
@@ -725,6 +737,7 @@ export class Game {
     const eyePF = this.debugCam || wreck || podCam || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.suits && this.suits.rescuer) this.suits.rescuer.updateVisual(dt, origin, this.camWorld);
+    if (this.akamo) this.akamo.updateVisual(dt, origin, this.camWorld);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
