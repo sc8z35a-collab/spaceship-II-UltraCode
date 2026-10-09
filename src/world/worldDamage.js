@@ -91,8 +91,6 @@ export class WorldDamage {
       vent: new THREE.MeshBasicMaterial({ color: 0xdfe8ff, transparent: true, opacity: 0.25, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
       fire: new THREE.MeshBasicMaterial({ color: new THREE.Color(3.0, 1.1, 0.3), transparent: true, opacity: 0.9, depthWrite: false, blending: THREE.AdditiveBlending }),
       ring: new THREE.MeshBasicMaterial({ color: new THREE.Color(0.8, 0.85, 1.0), transparent: true, opacity: 0.35, depthWrite: false, blending: THREE.AdditiveBlending, side: THREE.DoubleSide }),
-      pod: new THREE.MeshStandardMaterial({ color: 0xe9e6dc, metalness: 0.3, roughness: 0.5 }),
-      podBand: new THREE.MeshStandardMaterial({ color: 0xd2691e, metalness: 0.2, roughness: 0.55 }),
     };
     this.visT = 0;          // real time since the last explosion we showed (sleeping speeds the sim up)
     for (const s of game.stations.list) s.dmg = { health: 1, status: 'ok', hits: [], destroyed: false, t: rand(1.5, 7) * H, dirty: false };
@@ -209,37 +207,6 @@ export class WorldDamage {
     if (dist < 400 && !(g.docking && g.docking.station === t && g.docking.state !== 'free')) for (let i = 0; i < 1 + Math.floor(k * 2 * (1 - dist / 400)); i++) setTimeout(() => g.asteroids.micro(), 300 + i * 400 + dist * 4);
   }
 
-  /** the crew abandons ship: escape pods fire away from the station, beacons blinking */
-  launchPods(t, n) {
-    if (!t.model.visible) return;
-    const grp = this.groupFor(t);
-    if (!this.podGeo) {
-      this.podGeo = new THREE.CapsuleGeometry(0.9, 1.6, 6, 14);
-      this.podGeo.rotateX(Math.PI / 2);
-      this.podBandGeo = new THREE.CylinderGeometry(0.93, 0.93, 0.3, 14, 1, true);
-      this.podBandGeo.rotateX(Math.PI / 2);
-    }
-    for (let i = 0; i < n; i++) {
-      const hp = this.hitPoint(t);
-      const pod = new THREE.Group();
-      pod.add(new THREE.Mesh(this.podGeo, this.mats.pod), new THREE.Mesh(this.podBandGeo, this.mats.podBand));
-      const plume = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(1.4, 0.9, 0.6), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-      plume.position.set(0, 0, 1.9);
-      plume.scale.setScalar(3.5);
-      allLayers(plume);
-      const blink = new THREE.Sprite(new THREE.SpriteMaterial({ map: flashTexture(), color: new THREE.Color(0.3, 1.6, 0.4), transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
-      blink.position.set(0, 1.0, 0);
-      blink.scale.setScalar(1.2);
-      allLayers(blink);
-      pod.add(plume, blink);
-      pod.position.copy(hp.p).addScaledVector(hp.n, 2);
-      const dir = hp.n.clone().add(new THREE.Vector3().randomDirection().multiplyScalar(0.35)).normalize();
-      pod.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, -1), dir);
-      grp.add(pod);
-      this.anim.push({ o: pod, kind: 'pod', t: -i * rand(0.8, 2.5), life: 480, v: dir.clone().multiplyScalar(rand(4, 8)), dir, plume, blink, w: new THREE.Vector3().randomDirection().multiplyScalar(rand(0.05, 0.25)) });
-    }
-  }
-
   /** the particle system riding with a station (vents, embers, explosion debris) */
   fxOf(t) {
     if (!t.fxs) t.fxs = { P: new Particles(this.groupFor(t)), vents: [], arcT: rand(0.5, 2) };
@@ -347,6 +314,8 @@ export class WorldDamage {
       const o = model.localToWorld(hp.p.clone().addScaledVector(hp.n, 40));
       const d = hp.n.clone().transformDirection(model.matrixWorld).negate();
       const rc = new THREE.Raycaster(o, d, 0, 80);
+      // (the station's meshes are on the render passes' layers only: the ray must look on all)
+      rc.layers.enableAll();
       const hit = rc.intersectObjects(meshes, false)[0];
       if (!hit || !hit.face) return hp;
       const p = model.worldToLocal(hit.point.clone());
@@ -370,7 +339,7 @@ export class WorldDamage {
       const pl = g.player;
       const inside = dk.lobby && dk.lobby.contains(pl.pos) && pl.state !== 'dead';
       dk.forceRelease();
-      g.damage.impact(new THREE.Vector3(3.0, 0.5, -1.0), new THREE.Vector3(-1, 0, 0), 2.5e6, { noBreakup: true });
+      g.damage.impact(new THREE.Vector3(3.0, 0.5, -1.0), new THREE.Vector3(-1, 0, 0), 2.5e6, { noBreakup: true, snap: true });
       if (inside) {
         // the lobby is torn away around Kaito: thrown out into vacuum among the wreckage, bruised —
         // a suit keeps him alive (fly back to B-29), without one there is under a minute left
@@ -420,13 +389,15 @@ export class WorldDamage {
     const near = this.distTo(t) < 2.0e5 || (g.docking && g.docking.station === t) || (g.autopilot.target === t);
     const key = { damaged: 'w_damaged', critical: 'w_critical', failed: 'w_failed', destroyed: 'w_destroyed' }[st];
     if (key && (near || st === 'destroyed' || st === 'failed')) g.asphalt.say(this.isElevator(t) ? key + '_el' : key, { name: this.name(t) }, { force: st === 'destroyed', minGap: 20 });
-    // the crew gets out: escape pods (seen from up to 60 km)
+    // the crew gets out: its escape pods, from their bays (escapePods.js) — flown out in full
+    // near Kaito; far off they are simply gone
     if (!this.isElevator(t) && (st === 'critical' || st === 'failed' || st === 'destroyed') && !D.podsOut) {
       D.podsOut = true;
-      const dist = this.distTo(t);
-      if (dist < 6.0e4) {
-        this.launchPods(t, 3 + Math.floor(Math.random() * 4));
-        if (dist < 2.0e5) setTimeout(() => g.asphalt.say('w_pods', { name: this.name(t) }, { minGap: 60 }), 4000);
+      const me = g.playerVessel ? g.playerVessel().pos : g.flight.pos;
+      const dist = Math.min(this.distTo(t), t.pos.distanceTo(me));
+      if (dist < 6.0e5 && g.pods) {
+        const n = g.pods.launch(t, st === 'destroyed');
+        if (n && dist < 2.0e5) setTimeout(() => g.asphalt.say('w_pods_n', { name: this.name(t), n }, { minGap: 60 }), 4500);
       }
     }
     if (near && g.gameplay && (st === 'critical' || st === 'failed' || st === 'destroyed')) g.gameplay.raise(st === 'destroyed' ? 0.9 : 0.6);
@@ -747,15 +718,6 @@ export class WorldDamage {
         const k = Math.max(0, Math.cos((ph - 0.5) * Math.PI * 2)) ** 8;
         o.material.opacity = (a.dim ? 0.35 : 1) * (0.12 + 0.88 * k);
         o.scale.setScalar(a.s0 * (0.7 + 0.6 * k));
-      } else if (a.kind === 'pod') {
-        // escape pod: thrusts away for half a minute, then coasts, tumbling slowly
-        const burn = a.t < 30;
-        if (burn) a.v.addScaledVector(a.dir, 2.5 * dt);
-        o.position.addScaledVector(a.v, dt);
-        o.rotation.x += a.w.x * dt * (burn ? 0.2 : 1); o.rotation.y += a.w.y * dt * (burn ? 0.2 : 1);
-        a.plume.visible = burn;
-        if (burn) a.plume.scale.setScalar(3 + Math.random() * 1.5);
-        a.blink.material.opacity = (tt * 1.3 + a.dir.x) % 1 < 0.12 ? 1 : 0.05;
       } else if (a.kind === 'debris' || a.kind === 'drift') {
         const v = a.kind === 'drift' ? a.v.clone().multiplyScalar(Math.max(0, 1 - a.t / 3600)) : a.v;
         o.position.addScaledVector(v, dt);
@@ -773,7 +735,7 @@ export class WorldDamage {
   }
 
   serialize() {
-    const pack = (t) => ({ h: +t.dmg.health.toFixed(4), d: t.dmg.destroyed ? 1 : 0, t: Math.round(t.dmg.t), bh: t.dmg.breakH || 0, hits: t.dmg.hits.map((h) => ({ p: h.p.toArray().map((v) => +v.toFixed(2)), n: h.n.toArray().map((v) => +v.toFixed(3)), r: +h.r.toFixed(2), s: +h.sev.toFixed(3), time: h.time, hh: h.h || 0 })) });
+    const pack = (t) => ({ h: +t.dmg.health.toFixed(4), d: t.dmg.destroyed ? 1 : 0, t: Math.round(t.dmg.t), bh: t.dmg.breakH || 0, po: t.dmg.podsOut ? 1 : 0, hits: t.dmg.hits.map((h) => ({ p: h.p.toArray().map((v) => +v.toFixed(2)), n: h.n.toArray().map((v) => +v.toFixed(3)), r: +h.r.toFixed(2), s: +h.sev.toFixed(3), time: h.time, hh: h.h || 0 })) });
     const out = { el: pack(this.g.elevator) };
     for (const s of this.g.stations.list) out[s.id] = pack(s);
     return out;
@@ -785,6 +747,8 @@ export class WorldDamage {
       if (!o) return;
       const D = t.dmg;
       D.health = o.h; D.destroyed = !!o.d; D.t = o.t || D.t; D.breakH = o.bh || 0;
+      // (its pods went before the save: the bays stay empty)
+      D.podsOut = !!o.po || D.destroyed;
       D.hits = (o.hits || []).map((h) => ({ p: new THREE.Vector3(...h.p), n: new THREE.Vector3(...h.n), r: h.r, sev: h.s, time: h.time, h: h.hh }));
       D.status = statusOf(D);
       D.dirty = true;

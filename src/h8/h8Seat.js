@@ -2,7 +2,9 @@
 // all the way round on its column, tips back to face straight up or forward to look at the floor
 // (it follows where Kaito looks, so his body always faces his gaze), and it rides H8's motion on
 // springs — leaning into the drive's push and the turns, settling with a soft sway — and shivers
-// with the guns, the railgun's kick, the hits and the drive's rumble.
+// with the guns, the railgun's kick, the hits and the drive's rumble. On the front end of the left
+// armrest, ahead of the hand, the red button that sends it into the shelter (a clear guard over
+// it: the first press lifts the guard, the second sends it).
 //
 // Seat-local frame: origin at the gimbal centre G (the pitch axis through the seat's sides), -z
 // forward. H8-local: G is fixed in the cockpit.
@@ -11,7 +13,7 @@ import { Builder } from '../ship/geom.js';
 import { H8 } from './h8Spec.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
-const _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3();
+const _q = new THREE.Quaternion(), _e = new THREE.Euler(0, 0, 0, 'YXZ'), _v = new THREE.Vector3(), _a = new THREE.Vector3();
 
 /** the gimbal centre (H8-local) and the eye relative to it (seat-local) */
 export const SEAT = {
@@ -31,12 +33,17 @@ export function seatMaterials(M) {
   M.carbon = S({ color: 0x1a1c1f, roughness: 0.38, metalness: 0.45 });
   M.seatLine = S({ color: 0x000000, emissive: new THREE.Color(1.0, 0.55, 0.18), emissiveIntensity: 1.2 });
   M.seatPad = S({ color: 0x000000, emissive: new THREE.Color(0.35, 0.75, 1.0), emissiveIntensity: 0.9 });
+  // the shelter button: red, lit from inside; its bezel striped yellow and black; a clear guard
+  M.redBtn = S({ color: 0x3a0402, roughness: 0.35, metalness: 0, emissive: new THREE.Color(1.0, 0.06, 0.03), emissiveIntensity: 0.6 });
+  M.hazY = S({ color: 0xf2c21b, roughness: 0.5, metalness: 0.1 });
+  M.hazK = S({ color: 0x141414, roughness: 0.6, metalness: 0.1 });
+  M.guard = new THREE.MeshStandardMaterial({ color: 0xffd0c0, roughness: 0.08, metalness: 0, transparent: true, opacity: 0.32, depthWrite: false });
   return M;
 }
 
 /**
  * Build the seat. Returns { base (static, H8-local), yaw (turns on the column, at G), pitch (tips,
- * child of yaw), stick, throttle }
+ * child of yaw), stick, throttle, red: { guard (its hinge), at (the button's middle) } }
  */
 export function buildSeat(M) {
   const G = SEAT.G;
@@ -85,7 +92,7 @@ export function buildSeat(M) {
   for (const s of [-1, 1]) {
     sb.box(0.065, 0.035, 0.34, 'seatWhite', [s * 0.3, -0.03, -0.12], null, 0.016);
     sb.box(0.02, 0.12, 0.05, 'seatGrey', [s * 0.27, -0.1, 0.0], null, 0.006);
-    sb.box(0.05, 0.004, 0.07, 'seatPad', [s * 0.3, -0.011, -0.24], null, 0.002);
+    if (s > 0) sb.box(0.05, 0.004, 0.07, 'seatPad', [s * 0.3, -0.011, -0.24], null, 0.002);
     sb.box(0.004, 0.006, 0.3, 'seatLine', [s * 0.334, -0.028, -0.12], null, 0.001);
   }
   // footrest on a strut under the pan
@@ -116,14 +123,43 @@ export function buildSeat(M) {
     throttle.position.set(-0.3, -0.013, -0.16);
     pitch.add(throttle);
   }
+  // the shelter button on the front end of the left armrest, ahead of the hand on the throttle: a
+  // striped bezel, the red cap, the clear guard on a hinge at its back edge (it covers the cap; it
+  // flips up and back to open)
+  const red = {};
+  {
+    const BX = -0.3, BZ = -0.272, top = -0.0125;
+    const kb = new Builder();
+    kb.box(0.062, 0.012, 0.074, 'seatWhite', [BX, top + 0.002, BZ], null, 0.005);
+    kb.box(0.05, 0.003, 0.062, 'hazY', [BX, top + 0.0085, BZ], null, 0.0015);
+    for (let k = -3; k <= 3; k++) kb.box(0.005, 0.0032, 0.07, 'hazK', [BX + k * 0.0085, top + 0.0089, BZ], [0, 0.785, 0], 0.0005);
+    kb.box(0.032, 0.0036, 0.04, 'seatGrey', [BX, top + 0.0093, BZ], null, 0.002);
+    kb.cyl(0.0125, 0.0135, 0.01, 'redBtn', [BX, top + 0.014, BZ], null, 20);
+    kb.cyl(0.0105, 0.0105, 0.0015, 'redBtn', [BX, top + 0.0193, BZ], null, 20);
+    pitch.add(kb.build(M, { castShadow: false }));
+    const hinge = new THREE.Group();
+    hinge.position.set(BX, top + 0.011, BZ + 0.031);
+    const gb = new Builder();
+    gb.box(0.04, 0.003, 0.06, 'guard', [0, 0.018, -0.031], null, 0.0015);
+    for (const s of [-1, 1]) gb.box(0.003, 0.018, 0.06, 'guard', [s * 0.0185, 0.009, -0.031], null, 0.001);
+    gb.box(0.04, 0.018, 0.003, 'guard', [0, 0.009, -0.06], null, 0.001);
+    gb.cyl(0.003, 0.003, 0.046, 'steel', [0, 0, 0], [0, 0, Math.PI / 2], 8);
+    hinge.add(gb.build(M, { castShadow: false }));
+    pitch.add(hinge);
+    red.guard = hinge;
+    red.at = new THREE.Object3D();
+    red.at.position.set(BX, top + 0.016, BZ);
+    pitch.add(red.at);
+  }
   yaw.add(pitch);
-  return { base, yaw, pitch, stick, throttle };
+  return { base, yaw, pitch, stick, throttle, red };
 }
 
 /**
  * The seat's motion. seat: the seat record (yawSeat / pitchSeat are set by the player as he looks
- * round); writes seat.eyeLocal (H8-local eye) and seat.dynQ (the motion's tilt of the view, in
- * H8's frame).
+ * round; seat.lockAim holds the seat facing forward — on the rail and in the shelter; seat.rig, if
+ * there, is where the carriage has taken it, H8-local); writes seat.eyeLocal (H8-local eye) and
+ * seat.dynQ (the motion's tilt of the view, in H8's frame).
  */
 export class SeatMotion {
   constructor(seat, parts) {
@@ -136,6 +172,7 @@ export class SeatMotion {
     seat.pitchSeat = seat.pitchSeat || 0;
     seat.dynQ = new THREE.Quaternion();
     seat.eyeLocal = SEAT.G.clone().add(SEAT.eye);
+    seat.rig = seat.rig || new THREE.Vector3();
   }
 
   /** a jolt (recoil, hits): the seat bucks a little */
@@ -143,13 +180,22 @@ export class SeatMotion {
 
   /**
    * accLocal: H8's proper acceleration (H8 frame, m/s^2), wLocal: its turn rate (rad/s), thrust
-   * 0..1 (the drive's rumble), dt
+   * 0..1 (the drive's rumble), dt; extra: the carriage's own acceleration on its rail (H8 frame)
    */
-  update(dt, accLocal, wLocal, thrust) {
+  update(dt, accLocal, wLocal, thrust, extra = null) {
     const s = this.seat;
     this.t += dt;
     // empty, it settles back upright
     if (!s.occupied) s.pitchSeat = (s.pitchSeat || 0) * Math.exp(-dt * 1.5);
+    // held facing forward (the rail, the shelter): it swings round to the bow and sits upright
+    if (s.lockAim) {
+      const k = Math.exp(-dt * 9);
+      let y = s.yawSeat || 0;
+      y -= Math.round(y / (Math.PI * 2)) * Math.PI * 2;
+      s.yawSeat = y * k;
+      s.pitchSeat = (s.pitchSeat || 0) * k;
+    }
+    if (extra) { _a.copy(accLocal).add(extra); accLocal = _a; }
     // the springs: lean back under forward push, into the turns; soft and a little underdamped
     const yawS = s.yawSeat || 0;
     // the push and the turn as the seat feels them (in its own turned frame)
@@ -176,10 +222,11 @@ export class SeatMotion {
     P.pitch.rotation.set((s.pitchSeat || 0) + this.p + vx, 0, this.r + vz, 'YXZ');
     P.pitch.position.set(0, vy, 0);
     P.yaw.updateMatrix(); P.pitch.updateMatrix();
-    // the eye rides on the seat
+    if (P.rig) { P.rig.position.copy(s.rig); P.rig.updateMatrix(); }
+    // the eye rides on the seat (and the seat on its carriage)
     _e.set((s.pitchSeat || 0) + this.p + vx, yawS, this.r + vz, 'YXZ');
     _q.setFromEuler(_e);
-    s.eyeLocal.copy(SEAT.eye).applyQuaternion(_q).add(SEAT.G).add(_v.set(0, vy, 0));
+    s.eyeLocal.copy(SEAT.eye).applyQuaternion(_q).add(SEAT.G).add(_v.set(0, vy, 0)).add(s.rig);
     // the view tilts with the springs and the shiver (not with the seat's own following)
     const qy = new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), yawS);
     const qd = new THREE.Quaternion().setFromEuler(new THREE.Euler(this.p + vx, 0, this.r + vz, 'YXZ'));

@@ -3,7 +3,7 @@
 import * as THREE from 'three';
 import { QUALITY } from '../core/quality.js';
 import { Builder, roundedRectShape, rng, fixNormals } from './geom.js';
-import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, CANOPY, inCanopy, onMullion, canopyZ } from './hullShape.js';
+import { HULL, hullAt, sectionPoint, sectionNormal, tForPoint, OPENINGS, inCanopy, canopyZ } from './hullShape.js';
 import { createGlassMaterial } from './glass.js';
 import { buildPortExterior, PORT } from '../h8/b29Port.js';
 
@@ -120,7 +120,7 @@ export function buildExterior(M) {
   // (low quality: a coarser skin, still smooth at every distance it is seen from)
   const lowQ = QUALITY.level !== 'high', low2 = QUALITY.level === 'low2';
   const skin = loftGeometry(HULL.zTip + 0.002, HULL.zTail1, low2 ? 110 : lowQ ? 150 : 260, low2 ? 72 : lowQ ? 100 : 160, 0, false);
-  b.add(skin, 'hull');
+  b.add(skin, 'hullSkin');
   // aft closing ring/neck
   b.cyl(1.72, 1.72, 0.5, 'hullDark', [0, 0.4, HULL.zTail1 + 0.2], [Math.PI / 2, 0, 0], 48);
   b.add(new THREE.RingGeometry(0.2, 1.75, 48), 'hullDark', [0, 0.4, HULL.zTail1 + 0.45], [0, 0, 0]);
@@ -130,7 +130,8 @@ export function buildExterior(M) {
     if (o.kind === 'hatch') continue;
     buildFrame(b, o, 'metalDark', 'hullDark');
   }
-  buildCanopyFrame(b);
+  // (no canopy any more: the nose is closed, its cameras feed the cockpit's big screen)
+  noseCameras(b);
   // hatch frame (airlock)
   const hatch = OPENINGS.find((o) => o.kind === 'hatch');
   buildFrame(b, hatch, 'metalDark', 'hullOrange');
@@ -374,7 +375,10 @@ export function buildExterior(M) {
   b.colCyl(1.3, 3.4, [0, 0.4, zE + 1.7], [Math.PI / 2, 0, 0]);
   // (LOW II: in sections along the ship, so from inside only what lies ahead of the eye is drawn)
   const group = b.build(M, QUALITY.level === 'low2' ? { chunks: [-6.5, -1.0, 4.0, 10.0] } : {});
-  return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders };
+  // the things mounted on the skin: their vertices in the merged meshes
+  const mounts = b.mountList || [];
+  group.traverse((o) => { if (o.isMesh && o.userData.mounts) for (const [id, start, count] of o.userData.mounts) if (mounts[id]) mounts[id].ranges.push({ mesh: o, start, count }); });
+  return { group, rcsSpots, lights, rails, ladder, colliders: b.colliders, mounts };
 }
 
 /**
@@ -411,23 +415,32 @@ function hullGreebles(b) {
     const e = new THREE.Euler().setFromRotationMatrix(m, 'YXZ');
     return { p, n, e };
   };
+  // (each one tagged: torn off with the skin under it, damage.js finds its vertices)
+  const mounts = b.mountList || (b.mountList = []);
   const keys = ['hullDark', 'hullDark', 'metal', 'mli', 'hull', 'metalDark'];
   let placed = 0, tries = 0;
   b.fine(() => { while (placed < 230 && tries < 4000) {
     tries++;
     const z = -9.8 + R() * 19.4, t = R() * Math.PI * 2 - Math.PI / 2;
     if (!clear(z, t, 0.22)) continue;
-    const { p, e } = frame(z, t);
+    const { p, n, e } = frame(z, t);
+    b.mount = mounts.length;
+    // (with its footprint's radius, its height and its mass: what a round passing through it, or
+    // the shock of a blow beside it, needs to know to knock it off: damage.js)
+    const M = { p: p.clone(), n: n.clone(), ranges: [], r: 0.1, h: 0.08, mass: 3 };
+    mounts.push(M);
     b.push(p.toArray(), [e.x, e.y, e.z]);
     const k = R();
     if (k < 0.34) {                                                   // equipment box with a lid line
       const w = 0.16 + R() * 0.34, h = 0.05 + R() * 0.1, d = 0.14 + R() * 0.38;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h, mass: 2 + w * h * d * 900 });
       const key = keys[Math.floor(R() * keys.length)];
       b.box(w, h, d, key, [0, h / 2 - 0.01, 0], null, Math.min(0.02, h * 0.3), 2);
       b.box(w * 0.8, 0.006, d * 0.04, 'metalDark', [0, h - 0.005, d * 0.3], null, 0);
       if (R() < 0.5) for (const sx of [-1, 1]) b.cyl(0.008, 0.008, 0.012, 'steel', [sx * w * 0.4, h, -d * 0.4], null, 6);
     } else if (k < 0.5) {                                            // canister pair on a cradle
       const r = 0.04 + R() * 0.06, l = 0.25 + R() * 0.35;
+      Object.assign(M, { r: Math.hypot(r * 2.5, l / 2), h: r * 2 + 0.04, mass: 1.5 + r * r * l * 2600 });
       b.box(r * 5, 0.025, l * 0.6, 'metalDark', [0, 0.012, 0], null, 0.005);
       for (const sx of [-1, 1]) {
         b.cyl(r, r, l, R() < 0.5 ? 'hull' : 'mli', [sx * r * 1.15, r + 0.03, 0], [Math.PI / 2, 0, 0], 12);
@@ -436,25 +449,31 @@ function hullGreebles(b) {
       for (const zz of [-l * 0.3, l * 0.3]) b.box(r * 5, 0.018, 0.025, 'steel', [0, r * 2 + 0.035, zz], null, 0.004);
     } else if (k < 0.62) {                                           // vent grille
       const w = 0.2 + R() * 0.25, d = 0.12 + R() * 0.2;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h: 0.04, mass: 1.6, low: true });
       b.box(w, 0.03, d, 'metalDark', [0, 0.012, 0], null, 0.008);
       for (let i = 0; i < 6; i++) b.box(w * 0.85, 0.012, 0.012, 'black', [0, 0.03, -d * 0.4 + i * d * 0.16], null, 0);
     } else if (k < 0.72) {                                           // sensor dome on a base
+      Object.assign(M, { r: 0.09, h: 0.11, mass: 1.1, round: true });
       b.cyl(0.07, 0.09, 0.05, 'hullDark', [0, 0.025, 0], null, 14);
       b.sphere(0.06, R() < 0.5 ? 'black' : 'plasticW', [0, 0.06, 0], 14, [1, 0.8, 1]);
     } else if (k < 0.8) {                                            // star tracker: baffle tube
+      Object.assign(M, { r: 0.1, h: 0.25, mass: 2.4 });
       b.box(0.14, 0.08, 0.14, 'hullDark', [0, 0.04, 0], null, 0.01);
       b.cyl(0.045, 0.055, 0.18, 'black', [0, 0.14, 0.03], [0.5, 0, 0], 14, true);
       b.torus(0.05, 0.008, 'metal', [0, 0.22, 0.075], [0.5 + Math.PI / 2, 0, 0], 14);
     } else if (k < 0.88) {                                           // camera on a short mast
+      Object.assign(M, { r: 0.07, h: 0.24, mass: 1.3 });
       b.cyl(0.015, 0.02, 0.18, 'metal', [0, 0.09, 0], null, 8);
       b.box(0.07, 0.06, 0.12, 'plasticW', [0, 0.2, 0.02], null, 0.012);
       b.cyl(0.022, 0.022, 0.02, 'black', [0, 0.2, 0.085], [Math.PI / 2, 0, 0], 12);
     } else {                                                         // flush panel cover with fasteners
       const w = 0.3 + R() * 0.4, d = 0.2 + R() * 0.35;
+      Object.assign(M, { r: Math.hypot(w, d) / 2, h: 0.016, mass: 1.2, flush: true });
       b.box(w, 0.012, d, R() < 0.5 ? 'hull' : 'hullDark', [0, 0.004, 0], null, 0.004);
       for (const [sx, sz] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) b.cyl(0.01, 0.01, 0.008, 'steel', [sx * (w / 2 - 0.025), 0.012, sz * (d / 2 - 0.025)], null, 6);
     }
     b.pop();
+    b.mount = null;
     placed++;
   } });
   // conduit runs along the flanks (broken around openings), clamped every 0.55 m (on low only the
@@ -482,6 +501,65 @@ function hullGreebles(b) {
 }
 
 /** glass panes for all windows (outer and inner pane) */
+/**
+ * Where the canopy was: a band of dark armoured glass over the nose (opaque: the cockpit sees out
+ * through its cameras), with the camera lenses set into it — the big one in the middle, a pair to
+ * each side, one low under the chin
+ */
+function noseCameras(b) {
+  // the band: the old canopy's outline, just proud of the skin. Laid out along its own edge — for
+  // each way round the nose, from the tip back to where the canopy's plane cuts the skin — so its
+  // edge is the clean curve of that cut, with a dark metal lip along it
+  const rings = 40, segs = 140, z0 = HULL.zTip + 0.001, lift = -0.012;
+  const cols = [];
+  for (let j = 0; j <= segs; j++) {
+    const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
+    const zc = canopyZ(t, lift);
+    cols.push(zc === null ? null : { t, zc });
+  }
+  const pos = [];
+  const at = (c, i) => sectionPoint(z0 + (c.zc - z0) * (i / rings), c.t, lift);
+  for (let j = 0; j < segs; j++) {
+    const c0 = cols[j], c1 = cols[j + 1];
+    if (!c0 || !c1) continue;
+    for (let i = 0; i < rings; i++) {
+      const A = at(c0, i), B = at(c1, i), C = at(c0, i + 1), D = at(c1, i + 1);
+      // (wound to face out of the hull)
+      for (const tri of [[A, D, C], [A, B, D]]) for (const p of tri) pos.push(p.x, p.y, p.z);
+    }
+  }
+  const band = new THREE.BufferGeometry();
+  band.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  band.computeVertexNormals();
+  b.add(band, 'sensorGlass');
+  const lip = cols.filter(Boolean).map((c) => sectionPoint(c.zc, c.t, lift - 0.004));
+  if (lip.length > 3) b.tube(lip, 0.014, 'metalDark', { radial: 6, seg: lip.length * 2, tension: 0.2 });
+  // the lenses: a dark eye in a bright rim, a status lamp beside it
+  const m = new THREE.Matrix4();
+  const lens = (z, t, r) => {
+    const p = sectionPoint(z, t, -0.016), n = sectionNormal(z, t, 0);
+    if (!inCanopy(p) && z > -13.0) return;
+    const f = new THREE.Vector3(0, 0, -1).addScaledVector(n, n.z).normalize();
+    const X = new THREE.Vector3().crossVectors(n, f).normalize();
+    m.makeBasis(X, n, f.clone().negate()).setPosition(p);
+    const add = (geo, key) => { geo.applyMatrix4(m); b.add(geo, key); };
+    const rim = new THREE.CylinderGeometry(r * 1.25, r * 1.32, 0.03, 28);
+    add(rim, 'metalDark');
+    const ring = new THREE.TorusGeometry(r * 1.12, r * 0.08, 6, 28); ring.rotateX(Math.PI / 2); ring.translate(0, 0.016, 0);
+    add(ring, 'metal');
+    const glass = new THREE.SphereGeometry(r, 20, 10, 0, Math.PI * 2, 0, Math.PI / 2); glass.scale(1, 0.35, 1); glass.translate(0, 0.012, 0);
+    add(glass, 'lens');
+    const led = new THREE.SphereGeometry(0.009, 8, 6); led.translate(r * 1.6, 0.01, 0);
+    add(led, 'ledGreen');
+  };
+  lens(-12.55, Math.PI / 2, 0.075);
+  for (const s of [-1, 1]) {
+    lens(-12.2, Math.PI / 2 - s * 0.55, 0.05);
+    lens(-12.85, Math.PI / 2 - s * 0.95, 0.045);
+  }
+  lens(-13.15, -Math.PI / 2 + 0.25, 0.04);
+}
+
 export function buildGlass(env) {
   const gOuter = [], gInner = [];
   for (const o of OPENINGS) {
@@ -515,138 +593,7 @@ export function buildGlass(env) {
       list.push(g);
     }
   }
-  gOuter.push(buildCanopyGlass(0.035));
-  gInner.push(buildCanopyGlass(HULL.inset - 0.025));
   const norm = (list) => list.map((g) => { let h = g.index ? g.toNonIndexed() : g; if (h.attributes.uv) h.deleteAttribute('uv'); fixNormals(h); return h; });
   return { outer: norm(gOuter), inner: norm(gInner) };
 }
 
-// ---------------- cockpit canopy ----------------
-function canopyGrid(inset, rings = 90, segs = 120) {
-  const z0 = HULL.zTip + 0.001, z1 = -10.6;
-  const P = [];
-  for (let i = 0; i <= rings; i++) {
-    const z = z0 + (z1 - z0) * (i / rings);
-    const row = [];
-    for (let j = 0; j <= segs; j++) {
-      const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
-      row.push(sectionPoint(z, t, inset));
-    }
-    P.push(row);
-  }
-  return P;
-}
-
-/** boundary loop of the canopy (plane / hull intersection), parametrised by section angle t */
-export function canopyBoundary(inset, n = 180) {
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const t = (i / n) * Math.PI * 2 - Math.PI / 2;
-    const z = canopyZ(t, inset);
-    if (z === null) continue;
-    pts.push(sectionPoint(z, t, inset));
-  }
-  return pts;
-}
-
-function mullionCurves(inset) {
-  const curves = [];
-  const zs = [];
-  for (let z = HULL.zTip + 0.01; z < -10.6; z += 0.03) zs.push(z);
-  for (const x0 of CANOPY.mullX) {
-    const pts = [];
-    for (const z of zs) {
-      // find t on the upper half where x == x0
-      let lo = x0 > 0 ? 0 : Math.PI / 2, hi = x0 > 0 ? Math.PI / 2 : Math.PI;
-      const fx = (t) => sectionPoint(z, t, inset).x - x0;
-      if (Math.sign(fx(lo)) === Math.sign(fx(hi))) continue;
-      for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (Math.sign(fx(m)) === Math.sign(fx(lo))) lo = m; else hi = m; }
-      const p = sectionPoint(z, (lo + hi) / 2, inset);
-      if (inCanopy(p)) pts.push(p);
-    }
-    if (pts.length > 2) curves.push(pts);
-  }
-  for (const y0 of CANOPY.mullY) {
-    const right = [], left = [];
-    for (const z of zs) {
-      for (const side of [1, -1]) {
-        let lo = side > 0 ? 0 : Math.PI / 2, hi = side > 0 ? Math.PI / 2 : Math.PI;
-        const fy = (t) => sectionPoint(z, t, inset).y - y0;
-        if (Math.sign(fy(lo)) === Math.sign(fy(hi))) continue;
-        for (let k = 0; k < 30; k++) { const m = (lo + hi) / 2; if (Math.sign(fy(m)) === Math.sign(fy(lo))) lo = m; else hi = m; }
-        const p = sectionPoint(z, (lo + hi) / 2, inset);
-        if (inCanopy(p)) (side > 0 ? right : left).push(p);
-      }
-    }
-    const pts = [...right.reverse(), ...left];
-    if (pts.length > 2) curves.push(pts);
-  }
-  return curves;
-}
-
-function ribbon(A, B) {
-  const pos = [];
-  for (let i = 0; i < A.length - 1 && i < B.length - 1; i++) {
-    const a = A[i], b = A[i + 1], c = B[i], d = B[i + 1];
-    pos.push(a.x, a.y, a.z, c.x, c.y, c.z, b.x, b.y, b.z, b.x, b.y, b.z, c.x, c.y, c.z, d.x, d.y, d.z);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.computeVertexNormals();
-  return g;
-}
-
-function buildCanopyFrame(b) {
-  const outer = canopyBoundary(0);
-  const inner = canopyBoundary(HULL.inset);
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(outer, true), 240, 0.065, 8, true), 'hullDark');
-  b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(inner, true), 240, 0.055, 8, true), 'frame');
-  // tunnel between the two rims (same parametrisation -> clean ribbon)
-  b.add(ribbon([...outer, outer[0]], [...inner, inner[0]]), 'metalDark');
-  const mo = mullionCurves(0), mi = mullionCurves(HULL.inset);
-  for (let k = 0; k < mo.length; k++) {
-    b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mo[k]), mo[k].length * 2, 0.04, 6), 'hullDark');
-    if (mi[k]) {
-      b.add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(mi[k]), mi[k].length * 2, 0.035, 6), 'frame');
-      const ca = new THREE.CatmullRomCurve3(mo[k]).getSpacedPoints(60), cb = new THREE.CatmullRomCurve3(mi[k]).getSpacedPoints(60);
-      b.add(ribbon(ca, cb), 'metalDark');
-    }
-  }
-}
-
-export function buildCanopyGlass(inset) {
-  const rings = 120, segs = 160;
-  const z0 = HULL.zTip + 0.001, z1 = -10.6;
-  const P = [], N = [];
-  for (let i = 0; i <= rings; i++) {
-    const z = z0 + (z1 - z0) * (i / rings);
-    const rowP = [], rowN = [];
-    for (let j = 0; j <= segs; j++) {
-      const t = (j / segs) * Math.PI * 2 - Math.PI / 2;
-      rowP.push(sectionPoint(z, t, inset));
-      rowN.push(sectionNormal(Math.max(z, HULL.zTip + 0.05), t, inset));
-    }
-    P.push(rowP); N.push(rowN);
-  }
-  const pos = [], nrm = [], wuv = [], wid = [];
-  const cen = new THREE.Vector3(0, 1.6, -12.3);
-  for (let i = 0; i < rings; i++) {
-    for (let j = 0; j < segs; j++) {
-      const A = [i, j], B = [i, j + 1], C = [i + 1, j], D = [i + 1, j + 1];
-      for (const tri of [[A, C, D], [A, D, B]]) {
-        if (!tri.every(([a, c]) => inCanopy(P[a][c]))) continue;
-        for (const [a, c] of tri) {
-          const p = P[a][c], n = N[a][c];
-          pos.push(p.x, p.y, p.z); nrm.push(n.x, n.y, n.z);
-          wuv.push(p.x * 0.6, (p.y - cen.y) * 0.6 + (p.z - cen.z) * 0.3); wid.push(15);
-        }
-      }
-    }
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
-  g.setAttribute('wuv', new THREE.Float32BufferAttribute(wuv, 2));
-  g.setAttribute('winId', new THREE.Float32BufferAttribute(wid, 1));
-  return g;
-}

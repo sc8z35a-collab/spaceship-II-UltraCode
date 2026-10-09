@@ -2,10 +2,10 @@
 // conduit bundles and junction boxes, through the hatch in the cockpit floor, into a sphere just
 // big enough for one — and that sphere is all display: the walls, the ceiling and the floor under
 // Kaito's feet (a sheet of display glass on a thin rim; the floor hatch is a disc of the same glass
-// that slides away under it). In the middle, on a gimbal, one smooth seat (h8Seat.js). Behind a
-// section of the display on the port side, a locker with the compact suit: the panel slides
-// aside and the suit comes out on its rail. Everything else — the computers, the wiring, the
-// cooling — lives behind the display, out of sight. H8-local coordinates.
+// that slides away under it). In the middle, on a gimbal, one smooth seat (h8Seat.js) — mounted
+// on a carriage under the floor that can send it back on a rail into the shelter behind the
+// cockpit (h8Shelter.js). Everything else — the computers, the wiring, the cooling — lives behind
+// the display, out of sight. H8-local coordinates.
 import * as THREE from 'three';
 import { Builder } from '../ship/geom.js';
 import { H8 } from './h8Spec.js';
@@ -29,12 +29,6 @@ export function createH8InteriorMaterials(M) {
   M.switchLever = S({ color: 0xc9ced4, roughness: 0.3, metalness: 0.9 });
   M.amberLamp = S({ color: 0x000000, emissive: new THREE.Color(1.0, 0.62, 0.25), emissiveIntensity: 1.6 });
   M.labelIn = S({ color: 0xd9d4c4, roughness: 0.7 });
-  M.lockerLight = S({ color: 0x000000, emissive: new THREE.Color(0.75, 0.88, 1.0), emissiveIntensity: 0 });
-  // the compact suit
-  M.suitWhite = S({ color: 0xe9e6df, roughness: 0.78, metalness: 0 });
-  M.suitOrange = S({ color: 0xd8671f, roughness: 0.7, metalness: 0 });
-  M.suitGrey = S({ color: 0x5b6067, roughness: 0.6, metalness: 0.25 });
-  M.visor = S({ color: 0x5a4416, roughness: 0.08, metalness: 1.0 });
   seatMaterials(M);
   return M;
 }
@@ -45,41 +39,9 @@ export function onCockpit(az, el, r = H8.cockpitR) {
   return V(C.x + Math.sin(az) * Math.cos(el) * r, C.y + Math.sin(el) * r, C.z - Math.cos(az) * Math.cos(el) * r);
 }
 
-/** the compact suit, folded on its hanger (local: -z toward the cockpit, +y up), ~0.85 m tall */
-function suitModel(M) {
-  const b = new Builder();
-  // helmet: shell, gold visor, lamps
-  b.sphere(0.13, 'suitWhite', [0, 0.66, 0], 20);
-  b.sphere(0.112, 'visor', [0, 0.655, -0.03], 20, [1, 0.86, 0.9]);
-  for (const s of [-1, 1]) b.cyl(0.018, 0.018, 0.03, 'lockerLight', [s * 0.1, 0.72, -0.06], [Math.PI / 2, 0, 0], 10);
-  b.torus(0.105, 0.018, 'suitGrey', [0, 0.53, 0], [Math.PI / 2, 0, 0], 24);              // neck ring
-  // torso with the chest unit (its little display glows when HACHI is linked), the backpack
-  b.box(0.36, 0.34, 0.22, 'suitWhite', [0, 0.35, 0.01], null, 0.06);
-  b.box(0.2, 0.1, 0.05, 'suitGrey', [0, 0.38, -0.11], null, 0.015);
-  b.box(0.12, 0.05, 0.01, 'lockerLight', [0, 0.39, -0.137], null, 0.004);
-  b.box(0.3, 0.36, 0.13, 'suitGrey', [0, 0.38, 0.17], null, 0.03);
-  for (const s of [-1, 1]) b.box(0.04, 0.3, 0.02, 'suitOrange', [s * 0.12, 0.36, -0.1], null, 0.008);
-  // arms folded across, gloves
-  for (const s of [-1, 1]) {
-    b.tube([V(s * 0.2, 0.45, 0), V(s * 0.24, 0.3, -0.05), V(s * 0.1, 0.22, -0.13)], 0.055, 'suitWhite', { radial: 10 });
-    b.sphere(0.05, 'suitGrey', [s * 0.06, 0.22, -0.15], 12);
-    b.torus(0.052, 0.012, 'suitOrange', [s * 0.13, 0.235, -0.12], [0, s * 0.9, 0], 16);
-  }
-  // legs folded up (knees forward), boots
-  for (const s of [-1, 1]) {
-    b.tube([V(s * 0.1, 0.18, 0.02), V(s * 0.11, 0.06, -0.14), V(s * 0.1, -0.1, -0.06)], 0.07, 'suitWhite', { radial: 10 });
-    b.box(0.1, 0.08, 0.17, 'suitGrey', [s * 0.1, -0.15, -0.08], null, 0.03);
-    b.torus(0.068, 0.012, 'suitOrange', [s * 0.11, 0.06, -0.14], [Math.PI / 2, 0, 0], 16);
-  }
-  // the hanger: a bar behind the shoulders on a rail carriage
-  b.box(0.42, 0.03, 0.03, 'frameIn', [0, 0.5, 0.24], null, 0.008);
-  b.box(0.05, 0.6, 0.04, 'frameIn', [0, 0.3, 0.26], null, 0.01);
-  return b.build(M, { castShadow: false });
-}
-
 /**
  * Build the interior. Returns { group, shaft (group, hidden while the floor hatch is shut and
- * Kaito is up in the cockpit), colliders, lamps, seat, seatParts, leds, locker }
+ * Kaito is up in the cockpit), colliders, lamps, seat, seatParts (with rig: the whole seat), leds }
  */
 export function buildH8Interior(M) {
   const b = new Builder();     // the cockpit
@@ -159,52 +121,6 @@ export function buildH8Interior(M) {
     b.colBox(0.62, 0.4, 0.1, p.toArray(), [e.x, e.y, e.z]);
   }
 
-  // ============================================================ the suit locker
-  const L = H8.locker;
-  const locker = new THREE.Group();
-  locker.name = 'h8Locker';
-  {
-    const lb = new Builder();
-    // a recess behind the display opening: back wall, sides, top and bottom (following the
-    // sphere's curve at the opening, then straight in)
-    const R0 = RC + 0.01, R1 = RC + L.depth;
-    const elM = (L.el0 + L.el1) / 2;
-    const n = onCockpit(L.az, elM, 1).sub(C).normalize();
-    const tW = 2 * Math.sin(L.hw) * RC, tH = (L.el1 - L.el0) * RC;
-    const q = new THREE.Quaternion().setFromUnitVectors(V(0, 0, -1), n);
-    const e = new THREE.Euler().setFromQuaternion(q, 'YXZ');
-    const back = C.clone().addScaledVector(n, R1);
-    lb.push(back.toArray(), [e.x, e.y, e.z]);
-    // (local frame: -z = outward, into the wall; +z toward the cockpit). The walls face into the
-    // niche only: from the cockpit, past the opening, the display shows the world, not a box
-    const dep = R1 - R0 + 0.05;
-    lb.add(new THREE.PlaneGeometry(tW, tH), 'panelInDark', [0, 0, 0]);
-    lb.add(new THREE.PlaneGeometry(dep, tH), 'padDark', [tW / 2, 0, dep / 2], [0, -Math.PI / 2, 0]);
-    lb.add(new THREE.PlaneGeometry(dep, tH), 'padDark', [-tW / 2, 0, dep / 2], [0, Math.PI / 2, 0]);
-    lb.add(new THREE.PlaneGeometry(tW, dep), 'padDark', [0, tH / 2, dep / 2], [Math.PI / 2, 0, 0]);
-    lb.add(new THREE.PlaneGeometry(tW, dep), 'padDark', [0, -tH / 2, dep / 2], [-Math.PI / 2, 0, 0]);
-    // light strips in the corners, the rail the suit rides on, a label
-    for (const s of [-1, 1]) lb.box(0.012, tH - 0.06, 0.012, 'lockerLight', [s * (tW / 2 - 0.01), 0, 0.06], null, 0.003);
-    lb.box(0.04, 0.03, dep - 0.04, 'steel', [0, tH / 2 - 0.05, dep / 2], null, 0.006);
-    lb.box(0.14, 0.04, 0.005, 'labelIn', [0, -tH / 2 + 0.05, 0.018], null, 0.002);
-    lb.pop();
-    const niche = lb.build(M, { castShadow: false });
-    locker.add(niche);
-    // the suit on its carriage: it rides out along n
-    const suit = suitModel(M);
-    const carriage = new THREE.Group();
-    carriage.add(suit);
-    suit.position.set(0, -tH / 2 + 0.17, 0);
-    carriage.quaternion.copy(q);
-    locker.add(carriage);
-    const inPos = C.clone().addScaledVector(n, R1 - 0.2);
-    const outPos = C.clone().addScaledVector(n, RC - 0.42);
-    carriage.position.copy(inPos);
-    locker.userData = { carriage, inPos, outPos, n, suit };
-    locker.visible = false;
-    lamps.push({ pos: C.clone().addScaledVector(n, R1 - 0.12), color: 0xcfe4ff, intensity: 0, range: 1.6, room: 'h8', locker: true });
-  }
-
   // lamps: soft amber at the floor's rim, a cool light from above
   lamp(V(0, H8.floorY + 0.3, C.z - 0.6), 0xffb070, 0.55, 2.5);
   lamp(V(0, C.y + 0.95, C.z + 0.1), 0xcfe2ff, 0.5, 3.2);
@@ -217,7 +133,6 @@ export function buildH8Interior(M) {
   const hatchRing = hb.build(M, { castShadow: false });
   hatchRing.name = 'h8HatchRing';
   group.add(hatchRing);
-  group.add(locker);
   // status LEDs (instanced: per-instance colour, blinked by the controller)
   const ledGeo = new THREE.SphereGeometry(0.006, 6, 4);
   const ledMat = new THREE.MeshBasicMaterial({ color: 0xffffff, toneMapped: false });
@@ -229,11 +144,16 @@ export function buildH8Interior(M) {
   leds.instanceColor.needsUpdate = true;
   leds.userData = { base: ledList.map((l) => PAL[l.color].clone()), rate: ledList.map((_, i) => 0.3 + ((i * 7919) % 100) / 100 * 3) };
   group.add(leds);
-  // the seat on its gimbal
+  // the seat on its gimbal, on its carriage (the rig: moved as one when it runs back into the
+  // shelter)
   const seatParts = buildSeat(M);
-  group.add(seatParts.base, seatParts.yaw);
+  const seatRig = new THREE.Group();
+  seatRig.name = 'h8SeatRig';
+  seatRig.add(seatParts.base, seatParts.yaw);
+  seatParts.rig = seatRig;
+  group.add(seatRig);
   // the seat record (for the seat system): it swivels round its column and tips on its yoke; the
   // eye rides on it (h8Seat.js works it out every frame)
   const seat = { id: 'h8pilot', kind: 'pilot', eye: SEAT.G.clone().add(SEAT.eye), fwd: V(0, -0.08, -1).normalize(), exit: V(0, H8.floorY, sz - 0.05), h8: true, swivel: true, gimbal: true, axis: V(SEAT.G.x, 0, SEAT.G.z), yawSeat: 0, pitchSeat: 0 };
-  return { group, shaft, hatchRing, hatchLeds: [hatchLed0, hatchLed0 + 12], colliders: [...b.colliders, ...bs.colliders], lamps, seat, seatParts, leds, locker };
+  return { group, shaft, hatchRing, hatchLeds: [hatchLed0, hatchLed0 + 12], colliders: [...b.colliders, ...bs.colliders], lamps, seat, seatParts, leds };
 }

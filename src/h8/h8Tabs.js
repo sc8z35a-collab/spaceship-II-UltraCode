@@ -1,28 +1,32 @@
-// The information on H8's all-round display, as tabs. The display draws them on its own glass:
-// each tab lies on the inside of the sphere — curved with it, bent down onto the floor glass where
-// it reaches it — and never turns toward Kaito. The display lays each one out for the pilot's eye
-// point (where the eye is in the seat): from the seat a tab looks flat and square; from anywhere
-// else, like what it is — a picture on curved glass. One tab per subject:
-//   警報 (the alert strip, low ahead), 機体, 推進・電力, 航法, 兵装, カメラ, B-29, HACHI, 装備.
-// Each has a slim header (its name and the figures that matter at a glance) and a body with the
-// rest and its buttons. Tap a header to fold the tab down to that strip (or open it again); drag a
+// The information on H8's all-round display, as tabs. The display draws them itself, in its own
+// pixels (h8Display.js): each tab lies on the inside of the sphere — curved with it, bent down onto
+// the floor glass where it reaches it — and never turns toward Kaito. The seat and his hands stand
+// in front of it, the panels' seams run across it, a hurt panel's faults show over it. The display
+// lays each one out for the pilot's eye point (where the eye is in the seat): from the seat a tab
+// looks flat and square; from anywhere else, like what it is — a picture on curved glass. Two
+// tabs, each with its pages:
+//   操縦 — 航法, 推進・電力, 兵装, カメラ (its header also carries the alerts);
+//   機体 — 機体, B-29, HACHI, 装備.
+// Each has a slim header (its name, the page and the figures that matter at a glance) and a body
+// with a row of page buttons over the page. Tap a header to fold the tab down to that strip (or
+// open it again); drag a
 // header to move the tab anywhere on the glass; pinch a tab with two fingers (or turn the mouse
 // wheel over it) to make it bigger or smaller. They stay as they are left (kept in the browser).
 //
-// They are drawn after the picture is finished (engine.uiScene, with the unmagnified view): the
-// zoom magnifies the outside, not the tabs — they stay where they are, as large and as opaque, and
-// work while zoomed. Where the display is dead (its camera gone, a broken panel) nothing of them
-// shows, and where a panel of the display has slid aside (the suit locker, the shelter) neither.
+// The zoom magnifies the outside cameras' picture, not the display's own pixels: the tabs stay
+// where they are, as large and as opaque, and work while zoomed. Where the display is dead (its
+// camera gone) nothing of them shows, a broken panel shows what is left of them, and where a panel
+// of the display has slid aside (the shelter's) neither. Their text is drawn large and bright.
 import * as THREE from 'three';
 import { Kit, COL } from '../ui/monitorKit.js';
 import { H8, CAMERAS } from './h8Spec.js';
 import { SEAT } from './h8Seat.js';
-import { fmtDist, altOf, DISPLAY_FX, FLOOR, CAM_DEAD } from './h8Display.js';
+import { fmtDist, altOf, FLOOR, CAM_DEAD } from './h8Display.js';
 import { QUALITY } from '../core/quality.js';
 
 const DEG = Math.PI / 180;
 const HEAD = 5.4;                // header height (degrees at scale 1)
-const STORE = 'b29.h8tabs.v3';
+const STORE = 'b29.h8tabs.v4';
 const AMBER = '#ffb347';
 const K_MIN = 0.45, K_MAX = 1.8; // how far a tab can be shrunk / enlarged
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -30,62 +34,34 @@ const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vecto
 const RT = Math.PI * 2;
 
 /** the tabs and where they start, as seen from the seat (az: 0 = H8's bow, + = starboard; el: up;
- * w, h: size in degrees — twice what the first tabs had) */
+ * w, h: size in degrees) */
 const DEFS = [
-  { id: 'alert', title: '警報', az: 0, el: 19, w: 54, h: 0, open: false, fixedClosed: true },
-  { id: 'hull', title: '機体', az: -55, el: 10, w: 44, h: 29, open: true, color: AMBER },
-  { id: 'drive', title: '推進・電力', az: 55, el: 10, w: 44, h: 29, open: true, color: AMBER },
-  { id: 'nav', title: '航法', az: -55, el: 50, w: 44, h: 31, open: false },
-  { id: 'wpn', title: '兵装', az: 55, el: 50, w: 44, h: 31, open: false, color: '#ff8a6a' },
-  { id: 'cam', title: 'カメラ', az: -112, el: 10, w: 44, h: 31, open: false },
-  { id: 'b29', title: 'B-29', az: 112, el: 10, w: 46, h: 31, open: false },
-  { id: 'hachi', title: 'HACHI', az: -112, el: 50, w: 44, h: 30, open: false, color: AMBER },
-  { id: 'gear', title: '装備', az: 112, el: 50, w: 42, h: 27, open: false },
+  { id: 'ops', title: '操縦', az: -44, el: 12, w: 56, h: 44, open: true, color: AMBER, pages: [['nav', '航法'], ['drive', '推進・電力'], ['wpn', '兵装'], ['cam', 'カメラ']] },
+  { id: 'ship', title: '機体', az: 44, el: 12, w: 56, h: 44, open: false, color: COL.cyan, pages: [['hull', '機体'], ['b29', 'B-29'], ['hachi', 'HACHI'], ['k3', 'K3'], ['gear', '装備']] },
 ];
+/** the tabs' text: a little larger than the pages ask for, and brighter (the dim greys lifted, the
+ * colours lit up) — drawn by the display, it has to read at a glance */
+const TEXT_SCALE = 1.07;
+const BRIGHT = {
+  [COL.dim]: 'rgba(200,226,250,0.9)',
+  'rgba(150,190,230,0.55)': 'rgba(200,226,250,0.9)',
+  [COL.text]: '#f6fbff',
+  'rgba(170,190,210,0.4)': 'rgba(205,218,232,0.6)',
+  [COL.cyan]: '#8fe2ff', [COL.green]: '#8af5b2', [COL.amber]: '#ffc870', [COL.red]: '#ff6e5e',
+  '#ff8a7a': '#ffa598', '#ffb3a6': '#ffc8bd', '#ffd0c8': '#ffe0da', '#d7e7f7': '#f6fbff',
+  '#ffd9a8': '#ffe6c4', '#7cf0a6': '#9cf8be',
+};
+/** the page row over a tab's body (units of the tab's 512-wide canvas) */
+const ROW = 44;
 
 /** the eye point the tabs are laid out for: the pilot's eye in the seat (H8-local) */
 const E0 = SEAT.G.clone().add(SEAT.eye);
 
-const VERT = /* glsl */`
-varying vec2 vUv;
-varying vec3 vP;
-void main(){ vUv = uv; vP = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`;
-
-const FRAG = /* glsl */`
-uniform sampler2D map;
-uniform float uOpacity;
-uniform vec3 uEye;
-uniform vec4 uDoorL;   // the suit locker's panel: az, half-width, el0, el1 (from the cockpit's middle)
-uniform float uDoorLOpen;
-uniform vec4 uDoorS;   // the shelter's panel
-uniform float uDoorSOpen;
-varying vec2 vUv;
-varying vec3 vP;
-${DISPLAY_FX}
-float inDoor(vec3 u, vec4 D){
-  float az = atan(u.x, -u.z);
-  float da = abs(mod(az - D.x + 3.14159265, 6.28318531) - 3.14159265);
-  float el = asin(clamp(u.y, -1.0, 1.0));
-  return step(da, D.y) * step(D.z, el) * step(el, D.w);
-}
-void main(){
-  vec3 u = normalize(vP - uC);
-  if (uDoorLOpen > 0.02 && inDoor(u, uDoorL) > 0.5) discard;
-  if (uDoorSOpen > 0.02 && inDoor(u, uDoorS) > 0.5) discard;
-  vec4 c = texture2D(map, vUv);
-  vec3 fc; float fa, dead;
-  displayFx(vP, normalize(vP - uEye), gl_FragCoord.xy, 1.0, fc, fa, dead);
-  if (dead > 0.5) discard;
-  float a = c.a * uOpacity;
-  if (a < 0.003) discard;
-  gl_FragColor = vec4(mix(c.rgb, fc, fa), a);
-  #include <colorspace_fragment>
-}`;
-
-/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways */
+/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways, a little
+ * more where it can be afforded (sharper text) */
 function pxDeg() {
   const q = QUALITY.level;
-  return q === 'low2' ? 10 : q === 'low' ? 14 : 19;
+  return q === 'low2' ? 12 : q === 'low' ? 16 : 23;
 }
 
 class Tab {
@@ -95,8 +71,10 @@ class Tab {
     this.sys = sys;
     this.fade = 0;
     this.t = Math.random();
-    this.sub = 0;               // a tab's own page (B-29's pages, list pages)
-    this.page = 0;
+    this.sub = 0;               // a page's own sub-page (B-29's pages)
+    this.page = 0;              // a list's page
+    this.pages = def.pages || null;
+    this.pg = 0;                // the page on show
     this.order = ++sys.z;
     this.c = V(0, 0, -1); this.ex = V(1, 0, 0); this.ey = V(0, 1, 0);
     this.dirty = true;
@@ -143,18 +121,7 @@ function onGlass(u, out) {
 export class H8Tabs {
   constructor(vessel) {
     this.v = vessel;
-    this.group = new THREE.Group();
-    this.group.name = 'h8Tabs';
-    this.group.matrixAutoUpdate = false;
     this.z = 0;
-    const D = vessel.display.uniforms, L = H8.locker, S = H8.shelter;
-    // the display's own state (cameras, panels, eye): one set of uniforms for every tab
-    this.uniforms = {
-      uCam: D.uCam, uCamH: D.uCamH, uCamFail: D.uCamFail, tPanel: D.tPanel, tFloorP: D.tFloorP,
-      uC: D.uC, uFloorY: D.uFloorY, uTime: D.uTime, uEye: D.uEye,
-      uDoorL: { value: new THREE.Vector4(L.az, L.hw, L.el0, L.el1) }, uDoorLOpen: { value: 0 },
-      uDoorS: { value: new THREE.Vector4(S.az, S.hw, S.el0, S.el1) }, uDoorSOpen: { value: 0 },
-    };
     this.tabs = DEFS.map((d) => new Tab(this, d));
     this.byId = Object.fromEntries(this.tabs.map((t) => [t.id, t]));
     this.visible = false;
@@ -164,7 +131,7 @@ export class H8Tabs {
   }
 
   // ------------------------------------------------------------------ surfaces
-  /** a canvas, its texture and the curved mesh it is shown on */
+  /** a canvas and its texture (the display draws it on its glass) */
   surface(t, part) {
     const canvas = document.createElement('canvas');
     canvas.width = 4; canvas.height = 4;
@@ -173,15 +140,10 @@ export class H8Tabs {
     tex.generateMipmaps = false;
     tex.minFilter = THREE.LinearFilter;
     tex.anisotropy = 4;
-    const mat = new THREE.ShaderMaterial({
-      uniforms: Object.assign({ map: { value: tex }, uOpacity: { value: 0 } }, this.uniforms),
-      vertexShader: VERT, fragmentShader: FRAG, transparent: true, depthWrite: false, depthTest: false,
-    });
-    const mesh = new THREE.Mesh(new THREE.BufferGeometry(), mat);
-    mesh.frustumCulled = false;
-    mesh.visible = false;
-    this.group.add(mesh);
-    const S = { canvas, tex, kit: new Kit(canvas), mesh, mat, part, W: 4, H: 4 };
+    const kit = new Kit(canvas);
+    kit.fs = TEXT_SCALE;
+    kit.pal = BRIGHT;
+    const S = { canvas, tex, kit, part, W: 4, H: 4 };
     this.size(t, S);
     return S;
   }
@@ -206,36 +168,14 @@ export class H8Tabs {
     t.t = 999;
   }
 
-  /** the curved meshes of a tab (after a move or a resize) */
+  /** a tab's frame on the glass, after a move or a resize */
   shape(t) {
     t.frame();
-    const mk = (S, y0, y1, nx, ny) => {
-      const pos = new Float32Array((nx + 1) * (ny + 1) * 3), uv = new Float32Array((nx + 1) * (ny + 1) * 2), idx = [];
-      for (let j = 0; j <= ny; j++) {
-        const Y = y0 + (y1 - y0) * j / ny;
-        for (let i = 0; i <= nx; i++) {
-          const X = -t.hx + 2 * t.hx * i / nx;
-          _v.copy(t.c).addScaledVector(t.ex, X).addScaledVector(t.ey, Y).normalize();
-          onGlass(_v, _v2);
-          const k = j * (nx + 1) + i;
-          pos[k * 3] = _v2.x; pos[k * 3 + 1] = _v2.y; pos[k * 3 + 2] = _v2.z;
-          uv[k * 2] = i / nx; uv[k * 2 + 1] = j / ny;
-          if (i < nx && j < ny) { const a = k, b = k + 1, c = k + nx + 1, d = c + 1; idx.push(a, b, c, b, d, c); }
-        }
-      }
-      const g = S.mesh.geometry;
-      g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-      g.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
-      g.setIndex(idx);
-      g.computeBoundingSphere();
-    };
-    mk(t.head, -t.hy, t.hy, 32, 2);
-    if (t.body) mk(t.body, -t.by, -t.hy, 32, 22);
     t.dirty = false;
   }
 
   // ------------------------------------------------------------------ layout (kept)
-  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open, k: +t.k.toFixed(3) }])); }
+  layout() { return Object.fromEntries(this.tabs.map((t) => [t.id, { az: +(t.az / DEG).toFixed(1), el: +(t.el / DEG).toFixed(1), open: t.open, k: +t.k.toFixed(3), pg: t.pg }])); }
 
   applyLayout(L) {
     if (!L) return;
@@ -246,6 +186,7 @@ export class H8Tabs {
       if (Number.isFinite(s.el)) t.el = Math.max(-78, Math.min(80, s.el)) * DEG;
       if (Number.isFinite(s.k)) t.k = Math.max(K_MIN, Math.min(K_MAX, s.k));
       if (typeof s.open === 'boolean' && !t.fixedClosed) t.open = s.open;
+      if (t.pages && Number.isInteger(s.pg)) t.pg = Math.max(0, Math.min(t.pages.length - 1, s.pg));
       t.dirty = true;
     }
   }
@@ -260,36 +201,36 @@ export class H8Tabs {
   }
 
   // ------------------------------------------------------------------ per frame
-  /** shown: Kaito in the cockpit with the display on */
+  /** shown: Kaito in the cockpit with the display on. Hands the display what it is to draw: each
+   * visible header and body (the front-most tab's last), its picture and its rectangle */
   place(dt, shown) {
     this.visible = shown;
-    this.group.visible = shown;
-    if (!shown) return;
-    const v = this.v, D = v.display;
+    const U = this.v.display.uniforms;
+    if (!shown) { for (let i = 0; i < 4; i++) { U.uTabA.value[i] = 0; U['tTab' + i].value = null; } return; }
+    const D = this.v.display;
     const pw = Math.max(0, Math.min(1, (D.power - 0.25) / 0.5));
-    this.uniforms.uDoorLOpen.value = v.locker ? v.locker.open : 0;
-    this.uniforms.uDoorSOpen.value = v.shelterOpen || 0;
+    const parts = [];
     for (const t of this.tabs) {
       if (t.open && t.h > 0 && !t.body) { t.body = this.surface(t, 'body'); t.dirty = true; }
       if (t.dirty) this.shape(t);
       const target = pw * (this.drag && this.drag.tab === t ? 0.82 : 1);
       t.fade += (target - t.fade) * Math.min(1, dt * 6);
       if (Math.abs(t.fade - target) < 0.002) t.fade = target;
-      const H = t.head;
-      H.mesh.visible = t.fade > 0.01;
-      H.mat.uniforms.uOpacity.value = t.fade;
-      H.mesh.renderOrder = t.order * 2;
-      if (t.body) {
-        const on = t.open && t.fade > 0.01;
-        t.body.mesh.visible = on;
-        t.body.mat.uniforms.uOpacity.value = t.fade;
-        t.body.mesh.renderOrder = t.order * 2 + 1;
-      }
     }
-    // the tabs ride with H8 (the scene they are drawn in has nothing else)
-    this.group.matrix.copy(v.root.matrixWorld);
-    this.group.matrixWorld.copy(v.root.matrixWorld);
-    for (const c of this.group.children) c.matrixWorld.copy(this.group.matrixWorld);
+    for (const t of this.tabs.slice().sort((a, b) => a.order - b.order)) {
+      if (t.fade < 0.01) continue;
+      parts.push({ t, S: t.head, y0: -t.hy, y1: t.hy });
+      if (t.body && t.open && t.h > 0) parts.push({ t, S: t.body, y0: -t.by, y1: -t.hy });
+    }
+    const first = Math.max(0, parts.length - 4);
+    for (let i = 0; i < 4; i++) {
+      const p = parts[first + i];
+      U['tTab' + i].value = p ? p.S.tex : null;
+      U.uTabA.value[i] = p ? p.t.fade : 0;
+      if (!p) continue;
+      U.uTabC.value[i].copy(p.t.c); U.uTabX.value[i].copy(p.t.ex); U.uTabY.value[i].copy(p.t.ey);
+      U.uTabR.value[i].set(-p.t.hx, p.t.hx, p.y0, p.y1);
+    }
   }
 
   // ------------------------------------------------------------------ drawing
@@ -314,8 +255,8 @@ export class H8Tabs {
     g.setTransform(1, 0, 0, 1, 0, 0);
     g.clearRect(0, 0, S.W, S.H);
     const Hk = 512 * S.H / S.W;
-    // (opaque enough to read over anything behind it)
-    K.rect(1, 1, 510, Hk - 2, { fill: warn ? 'rgba(52,9,6,0.9)' : 'rgba(5,12,21,0.88)', stroke: warn ? 'rgba(255,96,64,0.75)' : 'rgba(130,215,255,0.38)', r: S.part === 'head' ? 9 : 7, lw: 1.4 });
+    // (dark and nearly opaque: the text reads over anything behind it)
+    K.rect(1, 1, 510, Hk - 2, { fill: warn ? 'rgba(48,8,5,0.97)' : 'rgba(3,8,15,0.965)', stroke: warn ? 'rgba(255,110,80,0.85)' : 'rgba(140,220,255,0.5)', r: S.part === 'head' ? 9 : 7, lw: 1.6 });
   }
 
   drawHead(t, power) {
@@ -325,8 +266,9 @@ export class H8Tabs {
     if (power >= 0.2) {
       // a coloured rule at the left: what kind of tab this is
       K.rect(6, 8, 5, Hh - 16, { fill: info.warn ? COL.red : t.color, stroke: null, r: 2 });
-      K.text(t.title, 18, Hh / 2 + 1, { size: 19, color: info.warn ? '#ffb3a6' : t.color, weight: 700, base: 'middle' });
-      const x0 = 18 + Math.max(50, measure(K, t.title, 19, 700) + 14);
+      const title = t.pages ? `${t.title} · ${t.pages[t.pg][1]}` : t.title;
+      K.text(title, 18, Hh / 2 + 1, { size: 19, color: info.warn ? '#ffb3a6' : t.color, weight: 700, base: 'middle' });
+      const x0 = 18 + Math.max(50, measure(K, title, 19, 700) + 14);
       K.text(fit(K, info.text || '', 472 - x0, 15), x0, Hh / 2 + 1, { size: 15, color: info.warn ? '#ffd0c8' : COL.text, base: 'middle', mono: !!info.mono });
       if (!t.fixedClosed) K.text(t.open ? '▾' : '▸', 502, Hh / 2 + 1, { size: 19, color: COL.dim, align: 'right', base: 'middle' });
     }
@@ -337,17 +279,51 @@ export class H8Tabs {
     const S = t.body, K = S.kit, H = 512 * S.H / S.W;
     this.frame(K, S, false);
     if (power >= 0.2) {
-      const fn = this['body_' + t.id];
-      if (fn) { try { fn.call(this, K, H, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); } }
+      if (t.pages) {
+        // the row of pages; the page itself below it (its buttons moved down with it)
+        const n = t.pages.length, bw = 492 / n;
+        t.pages.forEach(([, label], i) => K.button(10 + i * bw + 2, 7, bw - 4, ROW - 12, label, () => this.setPage(t, i), { style: i === t.pg ? 'on' : 'normal', size: 15 }));
+        K.rect(10, ROW - 1, 492, 1.2, { fill: 'rgba(130,215,255,0.25)', stroke: null, r: 0 });
+        const fn = this['body_' + t.pages[t.pg][0]];
+        const nb = K.buttons.length;
+        K.g.save();
+        K.g.translate(0, ROW * K.s);
+        this._off = ROW;
+        try { if (fn) fn.call(this, K, H - ROW, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); }
+        K.g.restore();
+        this._off = 0;
+        for (let i = nb; i < K.buttons.length; i++) K.buttons[i].y += ROW;
+      } else {
+        const fn = this['body_' + t.id];
+        if (fn) { try { fn.call(this, K, H, t); } catch (e) { K.text('—', 14, 30, { size: 13, color: COL.dim }); } }
+      }
     }
     S.tex.needsUpdate = true;
   }
 
+  /** another page of a tab */
+  setPage(t, i) {
+    if (t.pg === i) return;
+    t.pg = i; t.page = 0; t.sub = 0; t.pm = null;
+    t.t = 999;
+    this.saveLayout();
+  }
+
   /** the strip of figures in each header */
   headInfo(t) {
+    if (!t.pages) return this.pageInfo(t.id);
+    if (t.id === 'ops') {
+      const a = this.v.alertText();
+      if (a) return { text: a, warn: true };
+    }
+    return this.pageInfo(t.pages[t.pg][0]);
+  }
+
+  /** a page's figures for the header */
+  pageInfo(id) {
     const v = this.v, g = v.g;
     const f = v.flight, docked = v.mode === 'docked';
-    switch (t.id) {
+    switch (id) {
       case 'alert': {
         const a = v.alertText();
         if (a) return { text: a, warn: true };
@@ -372,8 +348,9 @@ export class H8Tabs {
       case 'wpn': {
         const W = g.weapons;
         if (!W) return { text: '—' };
-        const n = g.drones ? g.drones.list.filter((d) => d.alive && (d.state === 'attack' || d.state === 'hunt') && d.pos.distanceTo(f.pos) < 90e3).length : 0;
-        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  ミサイル ${W.ammo.missile}  ${W.auto.hachi ? '自動' : '手動'}${n ? `  敵 ${n}` : ''}`, warn: n > 0 };
+        const n = v.defence ? v.defence.n : 0;
+        const A = W.arsenal;
+        return { text: `砲 ${W.ammo.cannon}  レール ${W.ammo.rail}  ミサイル ${W.ammo.missile}  ${W.auto.hachi ? '自動迎撃' : '手動'}${A.mw > 0.5 ? `  生産 ${Math.round(A.mw)} MW` : ''}${n ? `  敵 ${n}（50 km）` : ''}`, warn: n > 0 };
       }
       case 'cam': {
         const Z = v.zoom, z = Z ? Z.z : 1;
@@ -387,6 +364,7 @@ export class H8Tabs {
       }
       case 'hachi': return { text: v.hachiLine ? v.hachiLine() : '' };
       case 'gear': return { text: v.gearLine ? v.gearLine() : (v.suitLine ? v.suitLine() : '') };
+      case 'k3': return { text: v.k3 ? v.k3.line() : '', warn: !!(v.k3 && v.k3.units.some((u) => u.state === 'dead' || u.state === 'lost')) };
       default: return { text: '' };
     }
   }
@@ -427,7 +405,7 @@ export class H8Tabs {
     const holes = v.hull.dents.filter((d) => d.hole && !d.patched).length;
     const integ = Math.round((v.armour.outer * 0.45 + v.armour.inner * 0.4 + (v.circuitHealth ? v.circuitHealth() : 1) * 0.15) * 100);
     K.text(`機体 ${integ}%`, 14, 30, { size: 22, color: integ < 50 ? COL.red : COL.text, weight: 700 });
-    K.text(`被弾 ${v.hits}  へこみ ${v.hull.dents.length}  貫通 ${holes}`, 498, 28, { size: 14, color: holes ? '#ff8a7a' : COL.dim, align: 'right' });
+    K.text(`被弾 ${v.hits}  へこみ ${v.hull.dents.length}  貫通 ${holes}  装甲板脱落 ${v.hull.tiles.length}`, 498, 28, { size: 14, color: holes ? '#ff8a7a' : COL.dim, align: 'right' });
     let y = 42;
     y = this.row(K, y, '外部装甲', v.armour.outer, `${Math.round(v.armour.outer * 100)}%`, COL.green, v.armour.outer < 0.35);
     y = this.row(K, y, '内部装甲', v.armour.inner, `${Math.round(v.armour.inner * 100)}%`, COL.green, v.armour.inner < 0.5);
@@ -444,9 +422,14 @@ export class H8Tabs {
     y = this.chips(K, y, CAMERAS.map((c, i) => { const h = v.hull.cams[i]; return { label: c.name.split(' ')[0], txt: h < CAM_DEAD ? '喪失' : `${Math.round(h * 100)}%`, bad: h < CAM_DEAD }; }));
     const broken = v.display.panelHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0) + v.display.floorHP.reduce((n, h) => n + (h < 0.35 ? 1 : 0), 0);
     if (broken && y < H - 70) K.text(`表示パネル 破損 ${broken} 枚`, 14, y + 12, { size: 14, color: '#ff8a7a' });
+    // (undocked, the shaft is the airlock: pumped down, the lower hatch opens to space)
+    const A = v.airlock || { mode: 'idle' };
+    const lockLabel = A.mode === 'dep' ? '減圧中…' : A.mode === 'open' ? 'エアロック 閉・加圧' : A.mode === 'rep' ? '加圧中…' : 'エアロック 減圧';
+    const al = v.alarm;
     this.buttons(K, H, [
-      ['H8 状況報告', () => v.reportH8()],
-      [docked ? (v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開') : '下ハッチ', () => (docked ? v.portTapped() : null), docked ? 'normal' : 'disabled'],
+      al && al.active && !al.silenced ? ['警報停止', () => v.silenceAlarm(), 'danger'] : ['H8 状況報告', () => v.reportH8()],
+      docked ? [v.neckTarget > 0.5 ? '下ハッチ 閉' : '下ハッチ 開', () => v.portTapped(), 'normal']
+        : [lockLabel, () => v.lockTapped(), v.crew ? (A.mode === 'open' ? 'warn' : A.mode === 'idle' ? 'normal' : 'on') : 'disabled'],
       ['HACHI 診断', () => v.mind && v.mind.ask('sitrep')],
     ]);
   }
@@ -529,30 +512,42 @@ export class H8Tabs {
   body_wpn(K, H) {
     const v = this.v, g = v.g, W = g.weapons;
     if (!W) return;
+    const A = W.arsenal, D = v.defence;
+    const nx = (k) => { const t = A.nextIn(k); return Number.isFinite(t) ? ` 次 ${t > 90 ? Math.round(t / 60) + '分' : Math.max(1, Math.round(t)) + '秒'}` : ''; };
     let y = 6;
     y = this.row(K, y, '25mm 砲', W.ammo.cannon / 1600, `${W.ammo.cannon}`, AMBER, W.ammo.cannon < 200);
-    y = this.row(K, y, 'レール', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%` : `発射可 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
-    y = this.row(K, y, 'ミサイル', W.ammo.missile / 12, `${W.ammo.missile}/12`, '#ff8a6a', W.ammo.missile <= 0);
-    // what the guns are on: the locks, the focus first, with the fire control's odds of a hit
-    K.text('目標      距離   命中見込み 25mm / レール', 14, y + 15, { size: 13, color: COL.dim });
+    y = this.row(K, y, 'レール', W.railCharge, W.railCharge < 1 ? `充電 ${Math.round(W.railCharge * 100)}%  ${W.ammo.rail}` : `発射可 ${W.ammo.rail}`, COL.cyan, W.ammo.rail <= 0);
+    y = this.row(K, y, 'ミサイル', W.ammo.missile / 12, `${W.ammo.missile}/12${nx('missile')}`, '#ff8a6a', W.ammo.missile <= 0);
+    // the fabricator: what it draws, whether it has priority, the feedstock left
+    const pri = A.priority;
+    K.text(`弾薬生産 ${Math.round(A.mw)} MW ${pri ? (A.by === 'hachi' ? '優先（HACHI）' : '優先') : '通常'}`, 14, y + 15, { size: 14.5, color: pri ? AMBER : COL.text, weight: pri ? 700 : 400 });
+    K.text(`素材 ${(A.feedKg / 1000).toFixed(2)} t`, 498, y + 15, { size: 14, color: A.feedKg < 300 ? COL.red : COL.dim, align: 'right', mono: true });
     y += 22;
+    if (D) {
+      K.text(fit(K, D.line(), 484, 14), 14, y + 15, { size: 14, color: D.n ? (D.short ? '#ff8a7a' : AMBER) : COL.dim });
+      y += 24;
+    }
+    // what the guns are on: the locks, the focus first, with the fire control's odds of a hit
+    K.text('目標      距離   命中見込み 25mm / レール', 14, y + 13, { size: 13, color: COL.dim });
+    y += 19;
     const T = W.targets('h8');
     if (!T.length) { K.text('目標なし — 中央の枠に収めてロック', 14, y + 16, { size: 14.5, color: COL.dim }); y += 26; }
-    const prim = W.lastTarget;
+    const prim = W.lastTarget, ic = W.intercept;
     for (const x of T) {
-      if (y > H - 80) break;
-      const sel = prim && prim.id === x.id;
-      K.rect(10, y, 492, 26, { fill: sel ? 'rgba(255,90,60,0.18)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.red : 'rgba(150,190,230,0.18)', r: 6 });
-      K.text(fit(K, `${sel ? '◆ ' : ''}${x.name}`, 200, 14.5), 18, y + 18, { size: 14.5, color: x.threat ? '#ffb3a6' : COL.text });
+      if (y > H - 78) break;
+      const sel = prim && prim.id === x.id, auto = ic && ic.id === x.id;
+      K.rect(10, y, 492, 25, { fill: sel ? 'rgba(255,90,60,0.18)' : auto ? 'rgba(255,180,80,0.14)' : 'rgba(255,255,255,0.04)', stroke: sel ? COL.red : auto ? AMBER : 'rgba(150,190,230,0.18)', r: 6 });
+      K.text(fit(K, `${sel ? '◆ ' : auto ? '◎ ' : ''}${x.name}`, 200, 14.5), 18, y + 17, { size: 14.5, color: x.threat ? '#ffb3a6' : COL.text });
       const pc = W.hitChance ? W.hitChance(x, 'cannon') : null, pr = W.hitChance ? W.hitChance(x, 'rail') : null;
-      K.text(`${fmtDist(x.dist)}   ${pc != null ? pct(pc) : '—'} / ${pr != null ? pct(pr) : '—'}`, 494, y + 18, { size: 14, color: COL.text, align: 'right', mono: true });
-      K.buttons.push({ x: 10, y, w: 492, h: 26, onTap: () => v.hud && v.hud.setPrimary(x.id) });
-      y += 30;
+      K.text(`${fmtDist(x.dist)}   ${pc != null ? pct(pc) : '—'} / ${pr != null ? pct(pr) : '—'}`, 494, y + 17, { size: 14, color: COL.text, align: 'right', mono: true });
+      K.buttons.push({ x: 10, y, w: 492, h: 25, onTap: () => v.hud && v.hud.setPrimary(x.id) });
+      y += 28;
     }
     this.buttons(K, H, [
-      [W.auto.hachi ? 'HACHI 自動' : '手動射撃', () => W.toggleAuto('h8'), W.auto.hachi ? 'on' : 'normal'],
-      ['レールガン', () => W.fireRail(true), W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled'],
-      ['ミサイル斉射', () => W.salvoMissiles(true), W.ammo.missile > 0 ? 'danger' : 'disabled'],
+      [W.auto.hachi ? '自動迎撃 ON' : '自動迎撃 OFF', () => W.toggleAuto('h8'), W.auto.hachi ? 'on' : 'normal'],
+      [pri ? '生産優先 ON' : '生産優先 OFF', () => v.toggleAmmoPriority(), pri ? 'warn' : 'normal'],
+      ['ミサイル', () => W.fireMissile('h8'), W.ammo.missile > 0 ? 'danger' : 'disabled'],
+      ['レール', () => W.fireRail(true), W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled'],
     ]);
   }
 
@@ -616,7 +611,7 @@ export class H8Tabs {
       const ph = 512 * pm.H / pm.W;
       try { mon._tabs = null; const fn = mon['draw_' + page]; if (fn) fn.call(mon, pk, pm, ph); } catch (e) { /* a page that needs B-29's own screen */ }
       pk.end(0, performance.now(), false);
-      K.g.drawImage(pm.canvas, 0, 36 * K.s, K.W, K.H - 36 * K.s);
+      K.g.drawImage(pm.canvas, 0, 36 * K.s, K.W, (H - 36) * K.s);
       const w = 512 / pages.length;
       pages.forEach(([id, label], i) => {
         const on = i === t.sub % pages.length;
@@ -624,7 +619,8 @@ export class H8Tabs {
       });
       // taps below the row go to the page
       K.buttons.push({ x: 0, y: 36, w: 512, h: H - 36, onTap: null, page: true });
-      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 36) * pk.s);
+      const off = this._off || 0;
+      this._pageHit = (x, y) => pk.hit(x * pk.s, (y - 36 - off) * pk.s);
       return;
     }
     const L = v.link, fb = g.flight, ap = g.autopilot;
@@ -658,6 +654,11 @@ export class H8Tabs {
   body_hachi(K, H) {
     const v = this.v;
     if (v.drawHachi) v.drawHachi(K, H);
+  }
+
+  body_k3(K, H) {
+    const v = this.v;
+    if (v.k3) v.k3.drawTab(K, H, this);
   }
 
   body_gear(K, H) {
@@ -709,7 +710,7 @@ export class H8Tabs {
   inOpenDoor(u) {
     const az = Math.atan2(u.x, -u.z), el = Math.asin(Math.max(-1, Math.min(1, u.y)));
     const inside = (D) => { let d = az - D.az; d -= Math.round(d / RT) * RT; return Math.abs(d) < D.hw && el > D.el0 && el < D.el1; };
-    return (this.uniforms.uDoorLOpen.value > 0.02 && inside(H8.locker)) || (this.uniforms.uDoorSOpen.value > 0.02 && inside(H8.shelter));
+    return (this.v.shelterOpen || 0) > 0.02 && inside(H8.shelter);
   }
 
   /**

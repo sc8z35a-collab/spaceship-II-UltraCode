@@ -278,11 +278,11 @@ export class StationDoor {
     }
     if (snd) {
       if (prevLock === 1 && this.lockK < 1) audio._burst(at(1.1), { dur: 0.12, freq: 420, q: 1.2, gain: 0.14, type: 'brown', filter: 'lowpass' });   // the bar unlatches
-      if (prevLock < 1 && this.lockK === 1) audio.impact(at(1.1), 0.12);                                                                             // and drops into its catch
-      if (prevSeal === 1 && this.seal < 1) audio._burst(at(1.2), { dur: 0.55, freq: 1600, q: 0.5, gain: 0.13, type: 'white', filter: 'bandpass', sweep: -0.5 });
+      if (prevLock < 1 && this.lockK === 1) audio.mech(at(1.1), 'latch', { open: false });                                                         // and drops into its catch
+      if (prevSeal === 1 && this.seal < 1) audio._burst(at(1.2), { dur: 0.55, freq: 1600, q: 0.5, gain: 0.13, type: 'white', filter: 'bandpass', sweep: 0.5 });
       if (prevSeal < 1 && this.seal === 1) audio._burst(at(1.0), { dur: 0.2, freq: 140, q: 0.8, gain: 0.22, type: 'brown', filter: 'lowpass' });
-      if ((prevOpen === 0 && this.open > 0) || (prevOpen === 1 && this.open < 1)) audio.doorMotor && audio.doorMotor(at(2.2), this.target > 0.5);
-      if (prevOpen > 0 && this.open === 0 && this.locked) audio.impact(at(1.2), 0.2);
+      if ((prevOpen === 0 && this.open > 0) || (prevOpen === 1 && this.open < 1)) audio.mech(at(2.2), this.locked ? 'heavy' : 'door', { open: this.target > 0.5 });
+      if (prevOpen > 0 && this.open === 0 && this.locked) audio.mech(at(1.2), 'latch', { open: false, gain: 1.4 });
     }
     // the seal lets go: a puff of vapour out of the meeting line on both faces
     if (fx && prevSeal === 1 && this.seal < 1) {

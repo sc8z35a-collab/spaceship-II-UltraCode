@@ -26,6 +26,11 @@ const STYLES = {
 };
 // pushed past its rating (ULTRA / MAX): whiter core, the flame towards violet
 const BOOST = { core: [1.0, 1.0, 1.0], hot: [0.75, 0.7, 1.0], mant: [0.5, 0.36, 1.0], tail: [0.6, 0.2, 1.0] };
+// how hot each kind of flame is (the heat it puts into what is in it, per square metre of nozzle:
+// plumeHeat.js)
+const HEAT = { fusion: 40, plasma: 30, chem: 20, blue: 15, solid: 25 };
+/** every engine flame there is: what they burn and what they dazzle is worked out from these */
+export const PLUMES = new Set();
 
 const steps = () => (QUALITY.level === 'low2' ? 5 : QUALITY.level === 'low' ? 8 : 14);
 
@@ -168,7 +173,8 @@ const lerp = (a, b, k) => a + (b - a) * k;
  *  exits: [Vector3] nozzle exit centres (parent frame), dir: Vector3 exhaust direction (parent
  *  frame, default +z), r0: exit radius (m), len: plume length at full thrust in vacuum (m),
  *  style: STYLES key, spread: tan of the vacuum spread angle, dia: shock-cell strength in vacuum,
- *  gain: brightness, seed, layers: [render layers] (default near + mid)
+ *  gain: brightness, seed, layers: [render layers] (default near + mid), owner: whose engine it is
+ *  (its flame does not burn its own vessel), heat: how hot it is (default by style)
  */
 export class EnginePlume {
   constructor(parent, opts) {
@@ -195,6 +201,11 @@ export class EnginePlume {
     const qi = q.clone().invert();
     this.mesh = new THREE.Mesh(frustumGeo(o.exits.map((e) => e.clone().applyQuaternion(qi)), lowQ ? 12 : 20), this.mat);
     this.mesh.quaternion.copy(q);
+    // (the nozzles' exits in the plume's own frame, for the heat)
+    this.exitsP = o.exits.map((e) => e.clone().applyQuaternion(qi));
+    this.owner = o.owner || null;
+    this.heat = o.heat ?? (HEAT[o.style] || 15);
+    PLUMES.add(this);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 4;
     this.mesh.layers.mask = 0;
@@ -263,6 +274,7 @@ export class EnginePlume {
   get visible() { return this.mesh.visible; }
 
   dispose() {
+    PLUMES.delete(this);
     this.mesh.parent && this.mesh.parent.remove(this.mesh);
     this.mesh.geometry.dispose();
     this.mat.dispose();

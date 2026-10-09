@@ -18,6 +18,8 @@ export class Hud {
       rail: document.getElementById('b-rail'),
       msl: document.getElementById('b-msl'),
       auto: document.getElementById('b-auto'),
+      autoL: document.getElementById('b-auto-l'),
+      mslN: document.getElementById('b-msl-n'),
       zoom: document.getElementById('btns-zoom'),
       zfol: document.getElementById('b-zfol'),
     };
@@ -62,13 +64,18 @@ export class Hud {
     this.show('wpn', !!armed && (g.mode === 'pilot' || g.mode === 'camera') && !foc);
     if (armed) {
       const h8 = armed === 'h8';
-      this.show('rail', h8); this.show('msl', h8);
+      // (the missile button in B-29's seat too while H8 rides on its back: H8's launchers fire)
+      const msl = W.missilesAt(armed);
+      this.show('rail', h8); this.show('msl', msl);
       const autoOn = h8 ? W.auto.hachi : W.auto.asphalt;
       if (this.last.autoOn !== autoOn) { this.last.autoOn = autoOn; this.el.auto.classList.toggle('active', autoOn); }
+      const autoL = h8 ? (autoOn ? '自動迎撃 ON' : '自動迎撃 OFF') : (autoOn ? '機銃 自動' : '機銃 手動');
+      if (this.last.autoL !== autoL && this.el.autoL) { this.last.autoL = autoL; this.el.autoL.textContent = autoL; }
       const railDim = h8 && (W.railCharge < 1 || W.ammo.rail <= 0);
       if (this.last.railDim !== railDim) { this.last.railDim = railDim; this.el.rail.classList.toggle('dim', railDim); }
-      const mslDim = h8 && W.ammo.missile <= 0;
+      const mslDim = msl && (W.ammo.missile <= 0 || !W.readyLaunchers().length);
       if (this.last.mslDim !== mslDim) { this.last.mslDim = mslDim; this.el.msl.classList.toggle('dim', mslDim); }
+      if (msl && this.last.mslN !== W.ammo.missile && this.el.mslN) { this.last.mslN = W.ammo.missile; this.el.mslN.textContent = String(W.ammo.missile); }
     }
     // H8's zoom (in its seat)
     const inH8 = !!(g.h8 && g.player.state === 'seated' && g.player.seat === g.h8.seat);
@@ -89,7 +96,8 @@ export class Hud {
     }
     if (!foc && pil !== this.last.pil) {
       this.last.pil = pil;
-      for (const [s, x, y] of [[this.el.stickL, 0.17, 0.72], [this.el.stickR, 0.83, 0.72]]) {
+      // (clear of the controls in the bottom corners)
+      for (const [s, x, y] of [[this.el.stickL, 0.2, 0.6], [this.el.stickR, 0.78, 0.58]]) {
         s.classList.toggle('idle', pil);
         if (pil) { s.style.left = (x * 100) + '%'; s.style.top = (y * 100) + '%'; }
       }
@@ -98,7 +106,15 @@ export class Hud {
     const gr = g.engine.grade;
     const al = g.systems.alarm;
     const t = performance.now() / 1000;
-    const pulse = al.active && !al.silenced ? (0.55 + 0.45 * Math.sin(t * 7.5)) * al.level : 0;
+    // (red at the edges of the view only where that ship's alarm is: aboard B-29 for B-29's, in H8
+    // for H8's)
+    const gp = g.gameplay;
+    const place = gp && gp.playerPlace ? gp.playerPlace() : 'b29';
+    const b29On = al.active && !al.silenced && (!gp || !gp.hearsB29 || gp.hearsB29());
+    const ha = g.h8 && g.h8.alarm;
+    const h8On = !!(ha && ha.active && !ha.silenced && place === 'h8');
+    const lvl = Math.max(b29On ? al.level : 0, h8On ? ha.level : 0);
+    const pulse = lvl > 0 && !(gp && gp.unconscious) ? (0.55 + 0.45 * Math.sin(t * (h8On && !b29On ? 10.5 : 7.5))) * lvl : 0;
     gr.set('uAlarm', pulse);
     if (!this.el.alarm) this.el.alarm = document.getElementById('fx-alarm');
     this.setOverlay('alarm', pulse * 0.42);

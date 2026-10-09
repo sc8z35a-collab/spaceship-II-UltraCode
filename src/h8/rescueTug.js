@@ -65,7 +65,7 @@ function tugModel() {
   for (const s of [-1, 1]) b.cyl(0.16, 0.16, 0.08, 'flood', [s * 0.6, 0.9, -4.7], [Math.PI / 2, 0, 0], 10);
   const g = b.build(M, { castShadow: false });
   // the drive's plume (shown while it burns)
-  g.userData.plume = new EnginePlume(g, { exits: [V(0, 0, 5.1)], r0: 1.0, len: 26, style: 'blue', spread: 0.32, dia: 0.45, seed: 6.2 });
+  g.userData.plume = new EnginePlume(g, { exits: [V(0, 0, 5.1)], r0: 1.0, len: 26, style: 'blue', spread: 0.32, dia: 0.45, seed: 6.2, owner: 'tug' });
   g.matrixAutoUpdate = false;
   return g;
 }
@@ -160,7 +160,7 @@ export class RescueTug {
       if ((dist < w.tol && relV < 0.12 && r.ang < 0.05) || (dist < 0.2 && this.t > 600)) {
         this.state = 'latched'; this.latchedAt = this.t; this.holdPod();
         this.v.asphalt('pod_station_capture', { name: this.s.name });
-        if (this.v.crew) { this.g.shake = Math.max(this.g.shake, 0.5); this.g.audio.impact && this.g.audio.impact(new THREE.Vector3(0, 8.2, 2.6), 0.25); }
+        if (this.v.crew) { this.g.shake = Math.max(this.g.shake, 0.5); this.g.audio.impact(new THREE.Vector3(0, 8.2, 2.6), 0.14); this.g.audio.mech(new THREE.Vector3(0, 8.2, 2.6), 'clamp', { open: false }); }
       }
       return;
     }

@@ -41,6 +41,10 @@ const LINES = {
   w_destroyed_el: ['エレベーターのリボンが切れました。'],
   w_secondary: ['{name}で二次爆発。'],
   w_pods: ['{name}から脱出ポッド。'],
+  w_flame: ['船体がエンジン噴射を浴びています。離れてください。', '噴射炎が船体に当たっています。'],
+  w_flame_hot: ['外板が焼けています。噴射から離れて。', '外板が過熱。焼け抜けます。'],
+  suit_flame: ['噴射炎の中です！すぐに離れてください。', '高温です。スーツが焼けています。'],
+  w_pods_n: ['{name}から脱出ポッド、{n}機。総員退避です。', '{name}の乗員が脱出しています。ポッド{n}機。'],
   w_debris: ['破片が当たっています。離れてください。'],
   w_berth_dark: ['ステーション側の電源が落ちました。'],
   st_dock_start: ['{name}へドッキング開始。'],
@@ -52,7 +56,9 @@ const LINES = {
   el_climber_down: ['{line}のクライマー{id}が到着します。'],
   st_undock: ['{name}から離脱。'],
   st_undocked: ['離脱完了。'],
-  st_dock_hatch: ['先に外側ハッチを閉めてください。'],
+  st_dock_hatch: ['外側ハッチが閉まりません。'],
+  st_hatch_auto: ['外側ハッチを閉めて離脱します。'],
+  st_undock_go: ['離脱して{name}へ向かいます。'],
   st_dock_crew: ['まだステーション内にいます。'],
   st_dock_far: ['近くにドッキング先がありません。'],
   st_dock_ultra: ['ULTRA中はドッキングできません。'],
@@ -182,6 +188,7 @@ const LINES = {
   origin_done: ['補給完了。'],
   // the hunter drones and B-29's defence gun
   drones_contact: ['無人機{n}機、接近中。'],
+  enemy_near: ['敵が来ました。'],
   hit_shot: ['被弾。'],
   drone_down: ['無人機撃墜。残り{left}機。'],
   pd_auto_on: ['防衛機銃、自動。'],
@@ -197,6 +204,28 @@ const LINES = {
   asp_split: ['{b}は私が撃ちます。'],
   h8_leak_port: ['H8から空気が漏れています。ハッチを閉めて。'],
   photo_saved: ['写真を保存しました。'],
+  // the spacesuits
+  suit_breach: ['スーツの{part}が破損、空気が漏れています。すぐに戻ってください。'],
+  suit_visor_crack: ['バイザーにひびが入りました。'],
+  suit_batt_swap: ['バッテリーが切れました。予備に切り替えます。'],
+  suit_dead: ['スーツの電源が落ちました。生命維持だけで動いています。'],
+  suit_o2_reserve: ['主酸素タンクが空です。非常用ボンベに切り替えました。残り約30分。'],
+  suit_systems: ['スーツの{list}に異常が出ています。'],
+  suit_h8_here: ['H8の宇宙服は、H8のシェルターに戻してください。'],
+  suit_call_near: ['B-29はすぐそこです。'],
+  suit_call_b29: ['了解。B-29をそちらへ寄せます。距離{m}メートル。'],
+  suit_call_docked: ['B-29はステーションに係留中で動かせません。'],
+  suit_call_noh8: ['H8とは連絡がつきません。'],
+  suit_call_nost: ['救助を出せるステーションが近くにありません。'],
+  suit_call_station: ['{name}に救助を要請しました。タグの到着まで約{min}分です。'],
+  suit_call_here: ['B-29、到着しました。ハッチへどうぞ。'],
+  suit_tug_here: ['{name}の救助タグが到着しました。B-29まで曳航します。'],
+  suit_tug_done: ['エアロックの前です。お疲れさまでした。'],
+  st_eva_hatch: ['{name}のEVAハッチです。'],
+  st_eva_in: ['{name}へようこそ。B-29は係留しておきます。'],
+  st_eva_far: ['B-29が遠すぎて係留できません。'],
+  st_eva_out: ['EVAハッチから外に出ます。'],
+  st_busy: ['B-29は今、{name}への操作中です。少し待ってください。'],
 };
 
 // HACHI — H8's AI: terse, dry, very sure of itself
@@ -226,7 +255,7 @@ const HACHI = {
   hachi_drive_power: ['蓄電が尽きる。{mode}を落とした。'],
   hachi_drive_denied: ['出せない。{why}。'],
   hachi_goto_far: ['{name}は遠すぎる。'],
-  hachi_goto_docked: ['結合中は行けない。'],
+  hachi_goto_no: ['{name}へは行けない。'],
   hachi_hatch_closing: ['ハッチを閉める。'],
   hachi_vestibule: ['ハッチの間に人がいる。'],
   hachi_busy: ['B-29がドッキング中だ。'],
@@ -246,6 +275,26 @@ const HACHI = {
   hachi_hit: ['被弾。外部装甲{pct}%。'],
   hachi_hit_hard: ['被弾。外部装甲{pct}%。'],
   hachi_leak: ['内部装甲を抜かれた。減圧する。'],
+  hachi_alarm_off: ['警報を止めた。状況は変わっていない。'],
+  hachi_k3_out: ['K3を出す。{n}、発進。', '{n}を出す。修理に回す。'],
+  hachi_k3_home: ['{n}を戻す。'],
+  hachi_k3_cant: ['今はK3を出せない。加速が強すぎるか、大気の中だ。'],
+  hachi_k3_none: ['出せるK3がない。充電中か、失った。'],
+  hachi_k3_fixed: ['{n}が{what}を直した。', '{what}、{n}が修理完了。'],
+  hachi_k3_torn: ['{n}が船体から引き剥がされた。追わせる。'],
+  hachi_k3_dead: ['{n}の電池が切れた。もう戻れない。'],
+  hachi_k3_killed: ['{n}がやられた。'],
+  hachi_cam_heat: ['{cam}が過熱した。映像が途切れる。', '{cam}、熱で信号喪失。冷えるまで待て。'],
+  hachi_flame: ['噴射を浴びている。装甲が焼ける。', '炎の中だ。離れる。'],
+  hachi_suit_flame: ['カイト、炎の中だ。すぐ出ろ。', 'スーツが焼けている。離れろ。'],
+  hachi_pod_down: ['{n}を破壊した。', '{n}、撃破。'],
+  hachi_pod_fire: ['{n}が撃ってくる。武装ポッドだ。', '{n}から反撃。'],
+  hachi_hack_ready: ['{n}に侵入できる。'],
+  hachi_hack_start: ['{n}に侵入する。動かすな。', '{n}の制御系に入る。'],
+  hachi_hack_fail: ['侵入中止。{why}。'],
+  hachi_hack_done: ['{n}の操縦を奪った。機内カメラに切り替える。', '取った。{n}はカイトのものだ。'],
+  hachi_hack_off: ['{n}の制御を返した。'],
+  hachi_hack_lost: ['{n}とのリンクが切れた。'],
   hachi_bump: ['接触した。'],
   hachi_enter: ['ようこそ、カイト。'],
   hachi_no_link: ['B-29と通信できない。'],
@@ -267,8 +316,24 @@ const HACHI = {
   hachi_drone_down_station: ['ステーションが{id}を撃墜。'],
   hachi_drone_dry: ['{id}が弾切れで離脱。'],
   hachi_drones_clear: ['敵影なし。'],
+  hachi_enemy_near: ['敵が来ました。'],
+  hachi_low_auto: ['弾薬の生産が追いつかない。エンジンをLOWに。電力は弾薬生産へ回す。'],
+  hachi_low_cut: ['弾薬の生産が追いつかない。{mode}を切ってLOWに。電力は弾薬生産へ回す。'],
+  hachi_low_again: ['まだ弾薬が足りない。もう一度LOWに。電力も弾薬生産へ。'],
+  hachi_ammo_pri: ['弾薬の生産が追いつかない。電力を弾薬生産へ回す。'],
+  hachi_low_restore: ['敵影なし。エンジンを{mode}に戻す。'],
+  hachi_ammo_normal: ['敵影なし。弾薬生産は通常に戻す。'],
+  hachi_low_off_ack: ['LOW解除。弾薬生産も通常に。1分たってまだ足りなければ、またLOWにする。'],
+  hachi_drive_low: ['LOW。推力を絞る。'],
+  hachi_pri_on: ['弾薬生産を優先。'],
+  hachi_pri_off: ['弾薬生産を通常に。'],
+  hachi_msl: ['ミサイル、{name}へ。'],
+  hachi_msl_reload: ['再装填中。'],
+  hachi_msl_wait: ['{name}が射程に入ったら撃つ。'],
+  hachi_msl_lost: ['ミサイルが撃ち落とされた。'],
+  hachi_made_msl: ['ミサイル完成。{n}発。'],
   hachi_rock_kill: ['岩を砕いた。'],
-  hachi_auto_on: ['自動迎撃。'],
+  hachi_auto_on: ['自動迎撃。50 km圏内の一番近い敵を撃つ。'],
   hachi_auto_off: ['自動迎撃を切った。'],
   hachi_ammo_out: ['弾切れだ。'],
   hachi_rail_charging: ['レールガン充電中。{pct}%。'],
@@ -277,7 +342,7 @@ const HACHI = {
   hachi_rail_blocked: ['その方向は撃てない。'],
   hachi_friendly: ['射線に味方がいる。撃てない。'],
   hachi_salvo: ['ミサイル{n}発。'],
-  hachi_suit_out: ['スーツを出す。'],
+  hachi_suit_out: ['スーツを出す。右の壁だ。'],
   hachi_suit_on: ['スーツ接続。'],
   hachi_suit_off: ['スーツ収納。'],
   hachi_suit_keep: ['気圧が低い。脱ぐな。'],
@@ -306,9 +371,17 @@ const HACHI = {
   hachi_guide: ['{name}まで{m}メートル。'],
   hachi_circuit: ['{name}がやられた。'],
   // the shelter at the back of the cockpit
-  hachi_shelter_open: ['シェルターを開ける。'],
   hachi_shelter_seal: ['シェルター密閉。独立酸素に切り替えた。'],
-  hachi_shelter_go: ['シェルターに入れ、カイト。'],
+  hachi_shelter_go: ['シェルターに入れ、カイト。肘掛けの赤いボタンだ。'],
+  hachi_shelter_arm: ['シェルター退避ボタン。もう一度押せば下がる。'],
+  hachi_shelter_arm_back: ['もう一度押せばコックピットに戻る。'],
+  hachi_shelter_going: ['シェルターへ下がる。体を預けろ。'],
+  hachi_shelter_in: ['シェルター密閉完了。独立酸素で{t}もつ。'],
+  hachi_shelter_back: ['コックピットに戻す。'],
+  hachi_shelter_nohome: ['戻る場所がない。ここで待て。'],
+  hachi_shelter_stay: ['ここでは席を離れられない。戻るなら赤いボタンだ。'],
+  hachi_air_shelter: ['船内{p}キロパスカル。シェルターに下げる。'],
+  hachi_suit_where: ['スーツはシェルターの中だ。'],
   hachi_shelter_o2: ['シェルターの酸素、残り{t}。'],
   hachi_breakup: ['H8がもたない…！'],
   hachi_pod: ['H8を失った。シェルターだけ残った。酸素は{t}。'],
@@ -328,12 +401,21 @@ const HACHI = {
   hachi_triage: ['応急処置{n}件。まず{a}。'],
   hachi_relay_hit: ['B-29損傷。健全度{pct}%。'],
   hachi_relay_air: ['B-29の{zone}が{kpa}キロパスカル。'],
+  suit_breach: ['スーツの{part}が破れた。すぐ戻れ。'],
+  suit_visor_crack: ['バイザーにひびだ。防弾層は持ってる。'],
+  suit_batt_swap: ['バッテリーを予備に切り替える。'],
+  suit_dead: ['スーツが落ちた。生命維持だけだ。'],
+  suit_o2_reserve: ['主タンクが空だ。非常用に切り替えた。30分だ。'],
+  suit_systems: ['スーツの{list}がやられた。'],
+  hachi_suit_call: ['今行く。そこを動くな。'],
+  hachi_kaito_here: ['着いた。ハッチまで来い。'],
 };
 
 // What is said aloud in the default mode (最小限): danger Kaito must act on now, refusals (why
 // what he asked for will not happen) and the answers to his questions. The rest is log only.
 const VOICE = new Set([
   // danger
+  'suit_breach', 'suit_dead', 'suit_o2_reserve', 'suit_call_station', 'suit_tug_here', 'hachi_suit_call',
   'breach', 'breach_big', 'window_broken', 'pressure_low', 'o2_low', 'co2_high', 'danger3', 'reentry_hot', 'reentry_burn',
   'breakup', 'dying', 'crash', 'impact_big', 'asteroid', 'drones_contact', 'eva_o2', 'st_breach_here', 'st_gone', 'st_gone_suit',
   'w_debris', 'ultra_safety', 'fuel_out', 'reactor_hot', 'eva_impact', 'h8_leak_port', 'terrain_warn', 'h8_lost', 'pod_rescue', 'h8_lost_pod',
@@ -347,11 +429,13 @@ const VOICE = new Set([
   'b29_report',
   // HACHI: danger
   'hachi_leak', 'hachi_air_danger', 'hachi_air_suit', 'hachi_fuel_out', 'hachi_port_leak', 'hachi_drones_contact',
-  'hachi_power_out', 'hachi_shelter_go', 'hachi_breakup', 'hachi_shelter_o2', 'hachi_pod', 'hachi_pod_vacuum',
+  'enemy_near', 'hachi_enemy_near', 'hachi_low_auto', 'hachi_low_cut', 'hachi_low_again', 'hachi_ammo_pri', 'hachi_low_restore',
+  'hachi_low_off_ack',
+  'hachi_power_out', 'hachi_shelter_go', 'hachi_shelter_going', 'hachi_air_shelter', 'hachi_breakup', 'hachi_shelter_o2', 'hachi_pod', 'hachi_pod_vacuum',
   // HACHI: refusals
   'hachi_no_link', 'hachi_vestibule', 'hachi_busy', 'hachi_eva_nosuit', 'hachi_suit_keep', 'hachi_no_target', 'hachi_rail_blocked',
   'hachi_hatch_pressure', 'hachi_follow_none', 'hachi_b29_nofuel', 'hachi_b29_landed', 'hachi_kit_empty', 'hachi_ammo_out',
-  'hachi_out_of_range', 'hachi_friendly', 'hachi_goto_far', 'hachi_goto_docked', 'hachi_drive_denied', 'hachi_drive_power', 'hachi_dock_dead',
+  'hachi_out_of_range', 'hachi_friendly', 'hachi_goto_far', 'hachi_goto_no', 'hachi_drive_denied', 'hachi_drive_power', 'hachi_dock_dead',
   // HACHI: asked
   'hachi_free', 'hachi_report',
 ]);
@@ -432,9 +516,16 @@ export class Asphalt {
     if (this.speaking || !this.queue.length) return;
     const { text, who } = this.queue.shift();
     const hachi = who === 'hachi';
+    // does it reach Kaito at all, and how: said in the room he is in, or over a radio (his suit's,
+    // H8's link) — nothing carries a voice to someone in vacuum without a suit, or out cold
+    const gp = this.g.gameplay;
+    const route = gp && gp.voiceRoute ? gp.voiceRoute(who) : 'air';
+    if (!route) { setTimeout(() => this._next(), 50); return; }
+    const A = this.g.audio;
+    if (route === 'radio' && A.radio) A.radio();
     // HACHI announces itself with two short digital pips instead of Asphalt's chime
-    if (hachi) { const A = this.g.audio; if (A.beep) { A.beep(1760, 0.05, 0.05, { direct: true }); A.beep(2350, 0.06, 0.05, { direct: true, when: 0.08 }); } }
-    else this.g.audio.chime && this.g.audio.chime();
+    if (hachi) { if (A.beep) { A.beep(1760, 0.05, 0.05, { direct: true, when: route === 'radio' ? 0.12 : 0 }); A.beep(2350, 0.06, 0.05, { direct: true, when: route === 'radio' ? 0.2 : 0.08 }); } }
+    else A.chime && A.chime();
     if (!this.voiceOn || !('speechSynthesis' in window)) { this.speaking = true; setTimeout(() => { this.speaking = false; this._next(); }, 1200); return; }
     this.speaking = true;
     setTimeout(() => {
@@ -446,8 +537,8 @@ export class Asphalt {
         const sv = this.g.damage ? this.g.damage.health.servers : 1;
         u.rate = hachi ? 1.15 : sv < 0.5 ? 0.88 : 1.08;
         u.pitch = hachi ? (this.voiceH ? 0.85 : 0.55) : sv < 0.5 ? 0.7 : 1.08;
-        u.volume = 0.9;
-        u.onend = u.onerror = () => { this.speaking = false; setTimeout(() => this._next(), 200); };
+        u.volume = route === 'radio' ? 0.75 : 0.9;
+        u.onend = u.onerror = () => { if (route === 'radio' && A.radio) A.radio(true); this.speaking = false; setTimeout(() => this._next(), 200); };
         speechSynthesis.speak(u);
         // safety timeout
         setTimeout(() => { if (this.speaking) { this.speaking = false; this._next(); } }, 12000);

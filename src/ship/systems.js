@@ -3,9 +3,11 @@
 import * as THREE from 'three';
 import { LAYER_NEAR, LAYER_MID, assignLayers } from '../core/layers.js';
 import { DECK_Y } from './hullShape.js';
+import { shipUniforms } from './materials.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const ALARM_RED = new THREE.Color(1, 0.06, 0.03);
+const _bv = new THREE.Vector3();
 
 // (orbit: a camera that swings round that point when the view is dragged; the others pan / tilt)
 export const EXT_CAMS = [
@@ -36,15 +38,36 @@ export class ShipSystems {
       (g.frameRoot || root).add(l);
       this.pool.push({ light: l, lamp: null, f: 0 });
     }
-    // alarm beacons (red rotating spots)
+    // alarm beacons: a red rotating lamp on each room's ceiling. Their light is drawn by the cabin's
+    // own shader, room by room (materials.js: it never shows through a wall), not by real lights;
+    // here only the lamps themselves (housing, red dome, the mirror going round inside)
     this.beacons = [];
-    for (const p of [V(0, 2.45, -1.0), V(0, 2.3, -9.6), V(0, 2.3, 7.2), V(-1.7, 2.25, -6.0), V(0, -0.3, -1.0)]) {
-      const s = new THREE.SpotLight(0xff1a0a, 0, 9, 0.55, 0.6, 1.4);
-      s.position.copy(p);
-      s.layers.enableAll();
-      root.add(s); root.add(s.target);
-      this.beacons.push(s);
-    }
+    this.alarmBeacons = [];
+    const BEACONS = [
+      [V(0, 2.3, -9.6), 0], [V(-1.7, 2.2, -6.0), 1], [V(1.75, 2.15, -6.6), 2],
+      [V(0, 2.45, -5.2), 3], [V(0, 2.45, 2.2), 3], [V(1.55, 2.15, -1.0), 4],
+      [V(1.6, 2.15, 3.1), 5], [V(-1.6, 2.15, 3.1), 6], [V(0, 2.3, 7.4), 7],
+      [V(0, -0.3, -4.5), 8], [V(0, -0.3, 2.5), 8],
+    ];
+    const housing = new THREE.MeshStandardMaterial({ color: 0x2a2d31, roughness: 0.5, metalness: 0.6 });
+    const dome = new THREE.MeshStandardMaterial({ color: 0x3a0503, roughness: 0.18, metalness: 0, emissive: new THREE.Color(1, 0.08, 0.03), emissiveIntensity: 0, transparent: true, opacity: 0.85 });
+    const mirror = new THREE.MeshStandardMaterial({ color: 0xffd0c0, roughness: 0.1, metalness: 1, emissive: new THREE.Color(1, 0.12, 0.05), emissiveIntensity: 0 });
+    const domeG = new THREE.SphereGeometry(0.075, 20, 10, 0, Math.PI * 2, Math.PI / 2, Math.PI / 2);
+    const baseG = new THREE.CylinderGeometry(0.085, 0.09, 0.03, 20);
+    const mirG = new THREE.PlaneGeometry(0.06, 0.05);
+    BEACONS.forEach(([p, room], i) => {
+      const grp = new THREE.Group();
+      grp.position.copy(p);
+      const base = new THREE.Mesh(baseG, housing); base.position.y = 0.012; grp.add(base);
+      const dm = new THREE.Mesh(domeG, dome); grp.add(dm);
+      const rot = new THREE.Group(); rot.position.y = -0.035; grp.add(rot);
+      const mr = new THREE.Mesh(mirG, mirror); mr.position.z = 0.012; mr.rotation.x = 0.35; rot.add(mr);
+      grp.traverse((o) => { if (o.isMesh) { o.layers.set(LAYER_NEAR); o.castShadow = false; } });
+      root.add(grp);
+      this.alarmBeacons.push({ p, room, rot, dir: new THREE.Vector3(0, -1, 0) });
+      shipUniforms.uAlarmB.value[i].set(p.x, p.y, p.z, room);
+    });
+    this._beaconMat = { dome, mirror };
     // ----- seats
     for (const seat of L.seats) {
       g.interact.addSphere(seat.eye.clone().add(V(0, -0.45, 0)), 0.45, () => this.sit(seat), { maxDist: 2.4, enabled: () => g.player.state !== 'seated' });
@@ -86,10 +109,15 @@ export class ShipSystems {
     }
     // ULTRA guarded switch + alarm silence button
     if (L.spots.ultra) {
+      // (on the pods beside the armrests: the face out along N, the switch's top toward Up)
+      const face = (o, n, up) => {
+        const Z = n.clone().normalize(), Y = up.clone().addScaledVector(Z, -up.dot(Z)).normalize(), X = new THREE.Vector3().crossVectors(Y, Z);
+        o.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(X, Y, Z));
+      };
       const u = new THREE.Group();
       u.position.copy(L.spots.ultra);
-      const rot = L.spots.deskRot(0.06);
-      u.rotation.set(rot[0], rot[1], rot[2], 'YXZ');
+      face(u, L.spots.ultraN, L.spots.ultraUp);
+      u.scale.setScalar(0.8);
       const plate = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.08, 0.012), M.plasticK);
       const sw = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, 0.05, 8), M.steel);
       sw.rotation.x = Math.PI / 2 - 0.5; sw.position.z = 0.025;
@@ -107,8 +135,8 @@ export class ShipSystems {
       g.interact.addSphere(L.spots.ultra, 0.07, () => this.toggleUltra(), { maxDist: 1.6 });
       const s = new THREE.Group();
       s.position.copy(L.spots.silence);
-      const rs = L.spots.deskRot(-0.06);
-      s.rotation.set(rs[0], rs[1], rs[2], 'YXZ');
+      face(s, L.spots.silenceN, L.spots.silenceUp);
+      s.scale.setScalar(0.8);
       const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.012, 20), M.plasticY);
       ring.rotation.x = Math.PI / 2;
       const mush = new THREE.Mesh(new THREE.SphereGeometry(0.03, 16, 8, 0, Math.PI * 2, 0, Math.PI / 2), new THREE.MeshStandardMaterial({ color: 0x1a1a1a, emissive: new THREE.Color(1, 0.05, 0.02), emissiveIntensity: 0, roughness: 0.3 }));
@@ -147,6 +175,10 @@ export class ShipSystems {
     if (g.mode === 'camera') { this.cameraPressed(); return; }
     // H8's shelter adrift: there is nothing but vacuum outside its door
     if (g.player.state === 'seated' && g.player.seat && g.player.seat.shelter && g.h8 && g.h8.mode === 'pod') { g.h8.say('hachi_pod_vacuum', {}, { minGap: 5 }); return; }
+    // in H8's shelter there is no room to stand: the seat takes him back to the cockpit
+    if (g.player.state === 'seated' && g.player.seat && g.player.seat.shelter && g.h8) { if (!g.h8.shelter.goBack()) g.h8.say('hachi_shelter_stay', {}, { minGap: 4 }); return; }
+    // H8's seat on its rail (on its way in or back): strapped in until it stops
+    if (g.player.state === 'seated' && g.h8 && g.player.seat === g.h8.seat && g.h8.shelter && !g.h8.shelter.atHome) return;
     if (g.player.state === 'seated') {
       g.player.stand();
       g.mode = 'walk';
@@ -351,6 +383,11 @@ export class ShipSystems {
     const on = al.active && !al.silenced;
     const pulse = 0.5 + 0.5 * Math.sin(t * 7.5);
     const power = this.power ?? 1;
+    // (each ship's lamps answer to its own alarm: B-29's to B-29's, H8's to H8's, a station's to
+    // neither)
+    const ha = g.h8 && g.h8.alarm;
+    const onH8 = !!(ha && ha.active && !ha.silenced);
+    const hereZone = g.lifeSupport ? g.lifeSupport.zoneOfPlayer : null;
     for (const slot of this.pool) {
       const L = slot.lamp;
       if (!L) { slot.light.intensity = 0; continue; }
@@ -359,21 +396,35 @@ export class ShipSystems {
       slot.light.position.copy(L.pos);
       slot.light.distance = L.range || 7;
       slot.light.color.set(this.lightMode === 'night' ? 0xff3020 : L.color);
+      // (a lamp in the next room keeps its own colour: its light would show red through the wall)
+      const sameRoom = !L.room || !hereZone || L.room === hereZone;
+      const alarmed = L.room === 'station' ? false : L.room === 'h8' ? onH8 : on && sameRoom;
       // master alarm: emergency red wash pulsing with the siren
-      if (on) slot.light.color.lerp(ALARM_RED, 0.18 + 0.3 * pulse);
+      if (alarmed) slot.light.color.lerp(ALARM_RED, 0.18 + 0.3 * pulse);
       const f = flick > 0 && Math.random() < flick ? 0.1 : 1;   // impact jolt: lamps stutter for a moment
       // brown-out: lamps sag and stutter when the power bus is weak
       const brown = power < 0.45 && Math.random() < (0.45 - power) * 0.2 ? 0.45 : 1;
       const fe = slot.f * slot.f * (3 - 2 * slot.f);
-      slot.light.intensity = L.intensity * (L.room === 'station' ? 1 : 1.3) * fe * Math.max(dim, on ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (on ? 0.75 + 0.45 * pulse : 1);
+      slot.light.intensity = L.intensity * (L.room === 'station' ? 1 : 1.3) * fe * Math.max(dim, alarmed ? 0.25 : 0) * f * brown * Math.max(0.15, power) * (alarmed ? 0.75 + 0.45 * pulse : 1);
     }
-    // alarm beacons: rotating red spots
-    for (let i = 0; i < this.beacons.length; i++) {
-      const b = this.beacons[i];
-      b.intensity = on ? 26 * Math.max(0.6, al.level) : 0;
+    // alarm beacons: their beams go round (the light itself is drawn by the cabin's shader, room by
+    // room); the dome glows, brightest when the beam swings toward the eye
+    const AK = on ? Math.max(0.6, al.level) : 0;
+    shipUniforms.uAlarmK.value = AK;
+    const eyeB = g.player.eyeLocal;
+    let face = 0;
+    for (let i = 0; i < this.alarmBeacons.length; i++) {
+      const b = this.alarmBeacons[i];
       const a = t * 6.5 + i * 2.1;
-      b.target.position.set(b.position.x + Math.cos(a) * 2, b.position.y - 1.2, b.position.z + Math.sin(a) * 2);
-      b.target.updateMatrixWorld();
+      // (the under-deck ones hang below the deck plates: their beams sweep level and a little down)
+      b.dir.set(Math.cos(a), b.room === 8 ? -0.35 : -0.62, Math.sin(a)).normalize();
+      shipUniforms.uAlarmD.value[i].set(b.dir.x, b.dir.y, b.dir.z, 1);
+      b.rot.rotation.y = -a + Math.PI / 2;
+      if (AK > 0 && eyeB) { const dv = _bv.copy(eyeB).sub(b.p); const dl = dv.length(); if (dl < 9) face = Math.max(face, Math.max(0, b.dir.dot(dv.divideScalar(dl))) ** 6 * (1 - dl / 9)); }
+    }
+    if (this._beaconMat) {
+      this._beaconMat.dome.emissiveIntensity = AK * (1.6 + 0.8 * pulse);
+      this._beaconMat.mirror.emissiveIntensity = AK * (3 + 14 * face);
     }
     if (this.g.shipVis.M.lampRed) this.g.shipVis.M.lampRed.emissiveIntensity = on ? 2 + 10 * pulse : 0.4;
     // danger state: the red lamps stay lit (faster pulse the worse it is) and the cabin light turns
@@ -386,7 +437,7 @@ export class ShipSystems {
     // emergency lighting: the cabin goes red (stronger and pulsing as it gets worse)
     if (danger > 0 && !on) {
       const k = [0, 0.32, 0.52, 0.68][danger] + 0.12 * dp * (danger - 1) / 2;
-      for (const slot of this.pool) if (slot.lamp && slot.lamp.room !== 'station') slot.light.color.lerp(ALARM_RED, k);
+      for (const slot of this.pool) if (slot.lamp && slot.lamp.room !== 'station' && slot.lamp.room !== 'h8' && (!slot.lamp.room || !hereZone || slot.lamp.room === hereZone)) slot.light.color.lerp(ALARM_RED, k);
     }
     // exterior visible in the MID pass when the camera is away from the ship
     const far = camDist > 40;

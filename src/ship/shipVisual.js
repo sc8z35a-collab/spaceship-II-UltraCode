@@ -7,7 +7,7 @@ import { buildInteriorShell } from './interior.js';
 import { createGlassMaterial, glassUniforms } from './glass.js';
 import { mergeGeometries } from './geom.js';
 import { setLayersDeep, LAYER_NEAR, LAYER_MID, LAYER_FAR, assignLayers } from '../core/layers.js';
-import { OPENINGS, CANOPY } from './hullShape.js';
+import { OPENINGS } from './hullShape.js';
 import { QUALITY } from '../core/quality.js';
 
 export class ShipVisual {
@@ -29,6 +29,7 @@ export class ShipVisual {
     this.extLights = ext.lights;
     this.rails = ext.rails;
     this.ladder = ext.ladder;
+    this.mounts = ext.mounts || [];
     this.root.add(this.exterior);
     const shell = buildInteriorShell(M);
     this.interiorBuilder = shell.builder;
@@ -66,7 +67,7 @@ export class ShipVisual {
       );
     });
     shipUniforms.uOpenCount.value = OPENINGS.length;
-    shipUniforms.uCanopy.value.set(CANOPY.N.x, CANOPY.N.y, CANOPY.N.z, -CANOPY.N.dot(CANOPY.P0));
+    // (the canopy is closed now: no hole cut in the nose — uCanopy stays off)
     this._setupEnv();
     return this;
   }

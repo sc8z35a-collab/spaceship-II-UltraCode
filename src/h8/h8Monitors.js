@@ -117,7 +117,7 @@ export const H8_PAGES = {
     if (docked) K.button(410, H - 30, 92, 24, h.neckTarget > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => h.portTapped(), { size: 10 });
     const cams = h.hull.cams.map((c, i) => (c < 0.5 ? CAMERAS[i].name.split(' ')[0] : null)).filter(Boolean);
     const holed = h.hull.dents.some((d) => d.hole);
-    K.text(`被弾 ${h.hits} 回   へこみ ${h.hull.dents.length} か所${holed ? '（貫通あり）' : ''}${cams.length ? '   映像なし: ' + cams.join(' ') : ''}`, 12, H - 12, { size: 9.5, color: cams.length || holed ? COL.red : COL.dim });
+    K.text(`被弾 ${h.hits} 回   へこみ ${h.hull.dents.length} か所${h.hull.tiles.length ? `   装甲板脱落 ${h.hull.tiles.length} 枚` : ''}${holed ? '（貫通あり）' : ''}${cams.length ? '   映像なし: ' + cams.join(' ') : ''}`, 12, H - 12, { size: 9.5, color: cams.length || holed ? COL.red : COL.dim });
   },
 
   // ------------------------------------------------------------------ NAV
@@ -269,7 +269,7 @@ export const H8_PAGES = {
     const bw = 160, by = H - 34;
     K.button(10, by, bw, 28, W.auto.hachi ? 'HACHI 自動迎撃' : '手動射撃', () => W.toggleAuto('h8'), { style: W.auto.hachi ? 'on' : 'normal', size: 10.5 });
     K.button(10 + bw + 6, by, bw, 28, 'レールガン', () => W.fireRail(true), { style: W.railCharge >= 1 && W.ammo.rail > 0 ? 'warn' : 'disabled', size: 10.5 });
-    K.button(10 + (bw + 6) * 2, by, bw, 28, 'ミサイル斉射', () => W.salvoMissiles(true), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 10.5 });
+    K.button(10 + (bw + 6) * 2, by, bw, 28, 'ミサイル', () => W.fireMissile('h8'), { style: W.ammo.missile > 0 ? 'danger' : 'disabled', size: 10.5 });
   },
 
   // ------------------------------------------------------------------ SHELTER
@@ -279,7 +279,7 @@ export const H8_PAGES = {
     const S = h.shelter, pod = h.mode === 'pod';
     this.header(K, 'H8  緊急シェルター', H);
     let y = 34;
-    K.text(pod ? 'H8 喪失 — シェルター単独で漂流中' : S.occupied ? (S.sealed ? '密閉・独立酸素で運用中' : '扉 開') : S.open > 0.02 ? '扉 開' : '待機', 12, y + 12, { size: 13, color: pod ? COL.red : COL.text, weight: 700 });
+    K.text(pod ? 'H8 喪失 — シェルター単独で漂流中' : S.busy ? '座席 移動中' : S.occupied ? (S.sealed ? '密閉・独立酸素で運用中' : '扉 開') : S.door > 0.02 ? '扉 開' : '待機', 12, y + 12, { size: 13, color: pod ? COL.red : COL.text, weight: 700 });
     y += 24;
     const row = (label, v, txt, col, warn) => {
       K.text(label, 12, y + 8, { size: 10.5, color: COL.dim });
@@ -308,8 +308,10 @@ export const H8_PAGES = {
       K.text(line, 12, y + 12, { size: 12, color: col, weight: 600 });
       const busy = !!R || coming;
       K.button(10, H - 34, 260, 28, R ? '救助艇が向かっています' : coming ? 'B-29 が回収に向かっています' : can.ok ? 'B-29 に回収を要請' : '最寄りのステーションに救助を要請', () => { if (!busy) h.requestRescue(); }, { style: busy ? 'on' : 'warn', size: 11 });
-    } else {
-      K.button(10, H - 34, 200, 28, S.target > 0.5 ? '扉を閉める' : '扉を開ける', () => S.toggle(), { style: S.target > 0.5 ? 'on' : 'warn', size: 11 });
+    } else if (S.occupied) {
+      K.button(10, H - 34, 200, 28, S.busy ? '移動中…' : 'コックピットへ戻る', () => S.goBack(), { style: S.busy ? 'on' : 'warn', size: 11 });
+      const pl = g.player, suitOn = pl.suit && pl.suitH8;
+      K.button(220, H - 34, 160, 28, suitOn ? '宇宙服を脱ぐ' : S.locker.target > 0.5 ? '宇宙服を着る' : '宇宙服を出す', () => h.lockerTapped(), { style: 'normal', size: 11 });
     }
   },
 

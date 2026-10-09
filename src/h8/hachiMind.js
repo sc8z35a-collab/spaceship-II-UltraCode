@@ -3,7 +3,8 @@
 //   air      — the cabin's pressure history: how fast it is falling and how long until it is
 //              dangerous; a hole draining B-29 through the open port is first called out, then
 //              sealed off on H8's side (unless Kaito reopened it); Kaito losing air in H8's cabin
-//              gets the time left and the suit locker opened for him
+//              gets the time left; strapped into the seat without the suit, HACHI sends him
+//              into the shelter when the pressure gets dangerous
 //   threats  — every drone's distance, closing speed, state; an attack run is announced a few
 //              seconds before it reaches gun range, with the direction seen from Kaito's eyes;
 //              when a drone has its gun on the vessel HACHI is flying, a sideways jink
@@ -116,11 +117,14 @@ export class HachiMind {
         this.say('hachi_port_seal', {}, 10);
       }
     } else this.sealAskT = 0;
-    // Kaito in H8's cabin while it loses air: the time left, and the suit brought out
-    if (inH8 && (r < -0.02 || v._leak) && this.air.tLow < 300) {
+    // Kaito in H8's cabin while it loses air: the time left (sealed in the shelter he breathes its
+    // own air: nothing to say)
+    const sealedIn = v.shelter && v.shelter.occupied && v.shelter.sealed;
+    if (inH8 && !sealedIn && (r < -0.02 || v._leak) && this.air.tLow < 300) {
       if (!pl.suit) {
-        if (v.locker.target < 0.5) { v.locker.target = 1; v.lockerSound(); }
-        if (p.h8 < 62) this.say('hachi_air_danger', { p: Math.round(p.h8) }, 30);
+        // in the seat, the pressure going: into the sealed shelter with him
+        if (p.h8 < 62 && v.seatedHere() && v.shelter.go()) this.say('hachi_air_shelter', { p: Math.round(p.h8) }, 30);
+        else if (p.h8 < 62) this.say('hachi_air_danger', { p: Math.round(p.h8) }, 30);
         else this.say('hachi_air_suit', { t: mmss(this.air.tLow), r: (-r * 60).toFixed(1) }, 30);
       } else this.say('hachi_air_suited', { t: mmss(this.air.tLow) }, 90);
     }
@@ -227,7 +231,7 @@ export class HachiMind {
     if (!ds.length) { if (which === 'h8') this.h8Target = null; else this.b29Target = null; return null; }
     const v = this.v, linked = v.mode === 'docked' || v.link.ok;
     const other = which === 'h8' ? this.b29Target : this.h8Target;
-    let best = null, bs = -1;
+    let best = null, bs = -Infinity;
     for (const x of ds) {
       const d = x.ref;
       let s = 1 / (1 + x.dist / 1500);
@@ -235,7 +239,7 @@ export class HachiMind {
       if (d.run) s *= 1.5;
       s *= 1 + (1 - d.hp);
       if (linked && other && d === other && ds.length > 1) s *= 0.3;
-      if (s > bs) { bs = s; best = x; }
+      if (s > bs || !best) { bs = s; best = x; }
     }
     const was = which === 'h8' ? this.h8Target : this.b29Target;
     if (which === 'h8') this.h8Target = best.ref; else this.b29Target = best.ref;

@@ -45,6 +45,30 @@ void main(){
   gl_FragColor = vec4(c * uBright * on + vec3(0.004, 0.006, 0.008), 1.0);
 }`;
 
+/** a panel lying on a big curved screen (a section of the sphere round its centre), in the
+ * panel's own frame: u across (to the right as seen from the centre), v up */
+function curvedPanel(C, frame) {
+  const NU = 24, NV = 12, inv = frame.clone().invert();
+  const pos = [], uv = [], idx = [];
+  const p = new THREE.Vector3();
+  for (let j = 0; j <= NV; j++) for (let i = 0; i <= NU; i++) {
+    const az = C.az0 + (C.az1 - C.az0) * i / NU, el = C.el0 + (C.el1 - C.el0) * j / NV;
+    p.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).multiplyScalar(C.R).add(C.c).applyMatrix4(inv);
+    pos.push(p.x, p.y, p.z);
+    uv.push(i / NU, j / NV);
+  }
+  for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
+    const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, e = c + 1;
+    idx.push(a, b, c, b, e, c);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('uv', new THREE.Float32BufferAttribute(uv, 2));
+  g.setIndex(idx);
+  g.computeVertexNormals();
+  return g;
+}
+
 export class Monitors {
   constructor(game) {
     this.g = game;
@@ -121,19 +145,22 @@ export class Monitors {
       },
       vertexShader: SCREEN_VERT, fragmentShader: SCREEN_FRAG,
     });
-    const mesh = new THREE.Mesh(new THREE.PlaneGeometry(slot.w, slot.h), mat);
     const X = new THREE.Vector3().crossVectors(slot.up, slot.n).normalize();
     const Y = new THREE.Vector3().crossVectors(slot.n, X).normalize();
-    mesh.matrix.makeBasis(X, Y, slot.n).setPosition(lpos);
+    const frame = new THREE.Matrix4().makeBasis(X, Y, slot.n).setPosition(lpos);
+    const mesh = new THREE.Mesh(slot.curve ? curvedPanel(slot.curve, frame) : new THREE.PlaneGeometry(slot.w, slot.h), mat);
+    mesh.matrix.copy(frame);
     mesh.matrixAutoUpdate = false;
     mesh.layers.set(LAYER_NEAR);
     parent.add(mesh);
-    // bezel + glass
-    const bez = new THREE.Mesh(new THREE.BoxGeometry(slot.w + 0.035, slot.h + 0.035, 0.03), g.shipVis.M.plasticK);
-    bez.matrix.copy(mesh.matrix).multiply(new THREE.Matrix4().makeTranslation(0, 0, -0.017));
-    bez.matrixAutoUpdate = false; bez.layers.set(LAYER_NEAR);
-    bez.castShadow = true; bez.receiveShadow = true;
-    parent.add(bez);
+    // bezel + glass (a panel on a big screen is the screen's own pixels: none)
+    if (!slot.curve) {
+      const bez = new THREE.Mesh(new THREE.BoxGeometry(slot.w + 0.035, slot.h + 0.035, 0.03), g.shipVis.M.plasticK);
+      bez.matrix.copy(mesh.matrix).multiply(new THREE.Matrix4().makeTranslation(0, 0, -0.017));
+      bez.matrixAutoUpdate = false; bez.layers.set(LAYER_NEAR);
+      bez.castShadow = true; bez.receiveShadow = true;
+      parent.add(bez);
+    }
     const rate = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[slot.id] || 4;
     const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
     m.lo = { canvas, kit, tex, W, H };
@@ -323,10 +350,10 @@ export class Monitors {
     const K = m.kit;
     K.begin();
     // H8's screens can show any of H8's pages, or (docked) B-29's own: a row of tabs on top
-    const page = m.slot.h8 ? this.h8PageOf(m) : m.id;
+    const page = m.slot.h8 ? this.h8PageOf(m) : m.slot.pages ? this.slotPageOf(m) : m.id;
     const fn = this['draw_' + page];
     const H = 512 * m.H / m.W;
-    this._tabs = m.slot.h8 ? m : null;
+    this._tabs = m.slot.h8 || m.slot.pages ? m : null;
     try {
       if (fn) fn.call(this, K, m, H); else this.draw_generic(K, m, H);
     } finally { this._tabs = null; }
@@ -341,8 +368,8 @@ export class Monitors {
 
   header(K, title, H) {
     const g = this.g;
-    // on H8's screens the header row is the page tabs
-    if (this._tabs) { this.h8Tabs(K, this._tabs); return; }
+    // on H8's screens (and the panels of B-29's big screen) the header row is the page tabs
+    if (this._tabs) { if (this._tabs.slot.pages) this.slotTabs(K, this._tabs); else this.h8Tabs(K, this._tabs); return; }
     const d = formatDate(g.time);
     K.rect(0, 0, 512, 26, { fill: 'rgba(95,208,255,0.08)', stroke: null, r: 0 });
     K.line(0, 26, 512, 26, COL.line);
@@ -354,6 +381,30 @@ export class Monitors {
       K.rect(190, 4, 130, 18, { fill: blink ? 'rgba(255,77,61,0.5)' : 'rgba(255,77,61,0.15)', stroke: COL.red, r: 4 });
       K.text(al.silenced ? '警報（消音中）' : '警 報', 255, 17, { size: 11, color: '#fff', align: 'center', weight: 700 });
     }
+  }
+
+  /** the page a panel with several shows (its first until another is picked) */
+  slotPageOf(m) {
+    const P = m.slot.pages;
+    if (!m.page || !P.some(([id]) => id === m.page)) m.page = P[0][0];
+    return m.page;
+  }
+
+  /** the panel's tabs, the date and time, the alarm (the whole row blinks red while it sounds) */
+  slotTabs(K, m) {
+    const g = this.g, P = m.slot.pages;
+    const al = g.systems.alarm;
+    const blink = al.active && !al.silenced && Math.floor(performance.now() / 450) % 2;
+    K.rect(0, 0, 512, 26, { fill: blink ? 'rgba(120,20,16,0.9)' : 'rgba(6,12,20,0.96)', stroke: null, r: 0 });
+    const w = Math.min(120, 330 / P.length);
+    P.forEach(([id, label], i) => {
+      const on = m.page === id;
+      K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? 'rgba(95,208,255,0.22)' : 'rgba(255,255,255,0.03)', stroke: on ? COL.cyan : 'rgba(150,190,230,0.2)', r: 5 });
+      K.text(label, i * w + w / 2, 17, { size: 11, color: on ? '#fff' : COL.cyan, align: 'center', weight: on ? 700 : 500 });
+      if (P.length > 1) K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== id) { m.page = id; this.setFeed(m, false); } } });
+    });
+    const d = formatDate(g.time);
+    K.text(al.active ? (al.silenced ? '警報（消音中）' : '警 報') : `${d.date}  ${d.time}`, 504, 18, { size: al.active ? 12 : 11, color: al.active ? '#fff' : COL.text, align: 'right', mono: !al.active, weight: al.active ? 700 : 400 });
   }
 
   // ------------------------------------------------------------------ NAV

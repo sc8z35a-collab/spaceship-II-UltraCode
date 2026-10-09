@@ -14,6 +14,8 @@ export class Kit {
     this.W = canvas.width; this.H = canvas.height;
     this.buttons = [];
     this.s = this.W / 512; // scale unit
+    this.fs = 1;           // the text's size against what the page asks for (bigger on H8's tabs)
+    this.pal = null;       // colours swapped for brighter ones as the text is drawn ({ asked: drawn })
   }
 
   /** re-read the canvas size (the canvas is enlarged while a monitor is being looked at closely) */
@@ -55,13 +57,13 @@ export class Kit {
   }
 
   font(px, weight = 400, mono = false) {
-    this.g.font = `${weight} ${Math.round(px * this.s)}px ${mono ? MONO : FONT}`;
+    this.g.font = `${weight} ${Math.round(px * this.fs * this.s)}px ${mono ? MONO : FONT}`;
   }
 
   text(str, x, y, { size = 14, color = COL.text, align = 'left', weight = 400, mono = false, base = 'alphabetic' } = {}) {
     const g = this.g;
     this.font(size, weight, mono);
-    g.fillStyle = color;
+    g.fillStyle = (this.pal && this.pal[color]) || color;
     g.textAlign = align;
     g.textBaseline = base;
     g.fillText(str, x * this.s, y * this.s);

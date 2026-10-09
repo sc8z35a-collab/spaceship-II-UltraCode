@@ -10,6 +10,7 @@ import { QUALITY } from '../core/quality.js';
 import { Builder, rng } from '../ship/geom.js';
 import { H8, CAMERAS, RCS, exclusions } from './h8Spec.js';
 import { decalUV } from './h8Materials.js';
+import { HEX, hexAt, hexOutline, hexPoint } from './h8Hex.js';
 
 const LOWQ = () => QUALITY.level !== 'high';
 
@@ -50,90 +51,103 @@ function sphereDecal(b, key, dir, w, h, rot = 0, lift = 0.012) {
 
 // ---------------------------------------------------------------------------- armour plates
 /**
- * Bevelled armour tiles on latitude bands with staggered seams. Returns bolt placements.
+ * Bevelled hexagonal armour tiles (h8Hex.js: a geodesic sphere's cells — hexagons, and the twelve
+ * pentagons a ball needs). Returns bolt placements.
  */
+const TILE = { gap: 0.024, chamfer: 0.016, T: 0.07 };
+
+/** the armour tile under a direction from H8's centre: null where there is none (under a fitting) */
+export function armourTileAt(dir) {
+  const i = hexAt(dir.clone().normalize());
+  if (i < 0) return null;
+  const t = HEX.tiles[i];
+  if (t.excluded) return null;
+  return { id: i, cdir: t.c, equator: t.equator, red: t.red, tile: t };
+}
+
+/**
+ * one tile's solid (H8-local, where it sits): the pillowed outer face, its chamfer and bevelled
+ * sides down to its base. colour: a THREE.Color for vertex colours (the whole hull's tiles), or
+ * null (a plate knocked off, drawn in a material of its own). Normals are set: the face round the
+ * sphere, the sides flat.
+ */
+export function armourTileGeometry(t, colour = null, fine = !LOWQ()) {
+  const T = t.tile || HEX.tiles[t.id], R0 = H8.R;
+  const top = hexOutline(T, (TILE.gap + TILE.chamfer) / R0), bot = hexOutline(T, TILE.gap / R0);
+  const n = top.pts.length;
+  const pos = [], nrm = [], col = [];
+  const dark = colour ? colour.clone().multiplyScalar(0.72) : null;
+  const tmp = new THREE.Vector3(), a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3();
+  const tri = (p0, p1, p2, n0, n1, n2, c0) => {
+    for (const [p, nn] of [[p0, n0], [p1, n1], [p2, n2]]) { pos.push(p.x, p.y, p.z); nrm.push(nn.x, nn.y, nn.z); if (c0) col.push(c0.r, c0.g, c0.b); }
+  };
+  // the outer face: a fan of rings out from the middle, pillowed a few millimetres
+  const RINGS = fine ? 3 : 1, SEG = fine ? 3 : 1;
+  const at = (k, j, ring) => {
+    // corner k to k+1, step j of SEG along the edge, ring of RINGS out from the middle
+    const f = ring / RINGS;
+    const [x0, y0] = top.pts[k], [x1, y1] = top.pts[(k + 1) % n];
+    const u = (x0 + (x1 - x0) * j / SEG) * f, v = (y0 + (y1 - y0) * j / SEG) * f;
+    const pil = 0.006 * (1 - f * f);
+    return hexPoint(top, u, v, R0 + pil);
+  };
+  const radial = (p) => p.clone().normalize();
+  for (let k = 0; k < n; k++) for (let ring = 0; ring < RINGS; ring++) for (let j = 0; j < SEG; j++) {
+    const p00 = at(k, j, ring), p01 = at(k, j + 1, ring), p10 = at(k, j, ring + 1), p11 = at(k, j + 1, ring + 1);
+    if (ring === 0) tri(p00, p10, p11, radial(p00), radial(p10), radial(p11), colour);
+    else { tri(p00, p10, p11, radial(p00), radial(p10), radial(p11), colour); tri(p00, p11, p01, radial(p00), radial(p11), radial(p01), colour); }
+  }
+  // the chamfer and the sides: the face's edge down to the base's (flat, each its own normal)
+  for (let k = 0; k < n; k++) {
+    const k1 = (k + 1) % n;
+    const A = hexPoint(top, top.pts[k][0], top.pts[k][1], R0), B = hexPoint(top, top.pts[k1][0], top.pts[k1][1], R0);
+    const A2 = hexPoint(bot, bot.pts[k][0], bot.pts[k][1], R0 - TILE.T), B2 = hexPoint(bot, bot.pts[k1][0], bot.pts[k1][1], R0 - TILE.T);
+    const fn = a.subVectors(B, A).cross(b.subVectors(A2, A)).normalize().clone();
+    if (fn.dot(tmp.addVectors(A, B).multiplyScalar(0.5).sub(c.copy(T.c).multiplyScalar(R0)).normalize()) < 0) fn.negate();
+    tri(A, A2, B2, fn, fn, fn, dark); tri(A, B2, B, fn, fn, fn, dark);
+  }
+  // (the base, for a plate tumbling away)
+  if (!colour) {
+    const m = hexPoint(bot, 0, 0, R0 - TILE.T), inN = T.c.clone().negate();
+    for (let k = 0; k < n; k++) {
+      const k1 = (k + 1) % n;
+      tri(m, hexPoint(bot, bot.pts[k1][0], bot.pts[k1][1], R0 - TILE.T), hexPoint(bot, bot.pts[k][0], bot.pts[k][1], R0 - TILE.T), inN, inN, inN, null);
+    }
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute('normal', new THREE.Float32BufferAttribute(nrm, 3));
+  if (colour) g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+  return g;
+}
+
 function armourTiles(b, R0) {
   const R = rng(8);
-  const ex = exclusions();
   const bolts = [];
-  const bands = 16, latMax = 79 * Math.PI / 180;
-  const gap = 0.024, chamfer = 0.016, T = 0.07;
-  // B-29's family: light warm-grey armour, a few darker and replaced plates, the orange belt
+  // B-29's family: light warm-grey armour, a few darker and replaced plates, the orange belt round
+  // the equator; one red: the K3 bay's hatch
   const base = new THREE.Color(0.6, 0.61, 0.6);
   const tmpC = new THREE.Color();
-  const dirOf = (lat, lon) => V(Math.cos(lat) * Math.sin(lon), Math.sin(lat), -Math.cos(lat) * Math.cos(lon));
-  for (let bi = 0; bi < bands; bi++) {
-    const la0 = -latMax + (2 * latMax) * bi / bands, la1 = -latMax + (2 * latMax) * (bi + 1) / bands;
-    const lam = (la0 + la1) / 2;
-    const n = Math.max(6, Math.round(2 * Math.PI * R0 * Math.cos(lam) / 1.05));
-    const dl = 2 * Math.PI / n, off = (bi % 2) * dl * 0.5;
-    const equator = la0 < 0.02 && la1 > -0.02;
+  for (const t of HEX.tiles) {
+    if (t.excluded) continue;
+    const k = R();
+    if (t.red) tmpC.setRGB(0.62, 0.05, 0.035);
+    else if (t.equator) tmpC.setRGB(0.86, 0.42, 0.11).multiplyScalar(0.9 + 0.15 * R());
+    else if (k < 0.07) tmpC.copy(base).multiplyScalar(1.22 + 0.1 * R());
+    else if (k < 0.14) tmpC.setRGB(0.3, 0.32, 0.35).multiplyScalar(0.95 + 0.2 * R());
+    else if (k < 0.18) tmpC.setRGB(0.52, 0.5, 0.45).multiplyScalar(0.95 + 0.15 * R());
+    else tmpC.copy(base).multiplyScalar(0.84 + 0.2 * R());
+    // (the red hatch is the K3 bay's own part: it swings open)
+    if (t.red) continue;
+    b.add(armourTileGeometry({ id: t.id, tile: t }, tmpC), 'armor');
+    // bolts: in from each corner, and at some edge middles
+    const o = hexOutline(t, (TILE.gap + TILE.chamfer + 0.045) / R0);
+    const n = o.pts.length;
     for (let i = 0; i < n; i++) {
-      const lo0 = off + i * dl, lo1 = lo0 + dl;
-      const cdir = dirOf(lam, (lo0 + lo1) / 2);
-      // only plates centred under a component's footprint are left out (the component's base covers
-      // the plates it overlaps: a whole ring of plates round every fitting left the sphere bald)
-      if (ex.some((e) => cdir.angleTo(e.dir) < e.ang + 0.03)) continue;
-      // inset by the gap (angles), outer face further in by the chamfer
-      const gLat = gap / R0, gLon = gap / (R0 * Math.cos(lam));
-      const cLat = chamfer / R0, cLon = chamfer / (R0 * Math.cos(lam));
-      const A0 = [la0 + gLat, la1 - gLat, lo0 + gLon, lo1 - gLon];
-      const A1 = [A0[0] + cLat, A0[1] - cLat, A0[2] + cLon, A0[3] - cLon];
-      const NU = LOWQ() ? 3 : 5, NV = LOWQ() ? 2 : 4;
-      const pos = [], col = [], idx = [];
-      // tile tint: graphite with variation; a few replaced (lighter) plates; the orange belt
-      const k = R();
-      if (equator) tmpC.setRGB(0.86, 0.42, 0.11).multiplyScalar(0.9 + 0.15 * R());
-      else if (k < 0.07) tmpC.copy(base).multiplyScalar(1.22 + 0.1 * R());
-      else if (k < 0.14) tmpC.setRGB(0.3, 0.32, 0.35).multiplyScalar(0.95 + 0.2 * R());
-      else if (k < 0.18) tmpC.setRGB(0.52, 0.5, 0.45).multiplyScalar(0.95 + 0.15 * R());
-      else tmpC.copy(base).multiplyScalar(0.84 + 0.2 * R());
-      const push = (p, c) => { pos.push(p.x, p.y, p.z); col.push(c.r, c.g, c.b); };
-      // outer face (pillowed slightly)
-      for (let v = 0; v <= NV; v++) for (let u = 0; u <= NU; u++) {
-        const la = A1[0] + (A1[1] - A1[0]) * (v / NV), lo = A1[2] + (A1[3] - A1[2]) * (u / NU);
-        const pil = 0.006 * Math.sin(Math.PI * u / NU) * Math.sin(Math.PI * v / NV);
-        push(dirOf(la, lo).multiplyScalar(R0 + pil), tmpC);
-      }
-      for (let v = 0; v < NV; v++) for (let u = 0; u < NU; u++) {
-        const a = v * (NU + 1) + u, c = a + NU + 1;
-        idx.push(a, c, a + 1, a + 1, c, c + 1);
-      }
-      // bevelled sides: outer face edge down to the base edge (R0 - T, not chamfered)
-      const ring = (A, r) => {
-        const out = [];
-        for (let u = 0; u <= NU; u++) out.push(dirOf(A[0], A[2] + (A[3] - A[2]) * (u / NU)).multiplyScalar(r));
-        for (let v = 1; v <= NV; v++) out.push(dirOf(A[0] + (A[1] - A[0]) * (v / NV), A[3]).multiplyScalar(r));
-        for (let u = NU - 1; u >= 0; u--) out.push(dirOf(A[1], A[2] + (A[3] - A[2]) * (u / NU)).multiplyScalar(r));
-        for (let v = NV - 1; v >= 1; v--) out.push(dirOf(A[0] + (A[1] - A[0]) * (v / NV), A[2]).multiplyScalar(r));
-        return out;
-      };
-      const top = ring(A1, R0), bot = ring(A0, R0 - T);
-      const dark = tmpC.clone().multiplyScalar(0.75);
-      const s0 = pos.length / 3;
-      for (const p of top) push(p, tmpC);
-      for (const p of bot) push(p, dark);
-      const L = top.length;
-      for (let k2 = 0; k2 < L; k2++) {
-        const a = s0 + k2, c = s0 + (k2 + 1) % L, a2 = s0 + L + k2, c2 = s0 + L + (k2 + 1) % L;
-        idx.push(a, c, a2, c, c2, a2);
-      }
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-      g.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
-      g.setIndex(idx);
-      g.computeVertexNormals();
-      b.add(g, 'armor');
-      // bolts: corners and edge middles, set in from the bevel
-      const bi2 = 0.05 / R0;
-      const la_ = [A1[0] + bi2, (A1[0] + A1[1]) / 2, A1[1] - bi2];
-      const lo_ = [A1[2] + bi2 / Math.cos(lam), (A1[2] + A1[3]) / 2, A1[3] - bi2 / Math.cos(lam)];
-      for (let a = 0; a < 3; a++) for (let c = 0; c < 3; c++) {
-        if (a === 1 && c === 1) continue;
-        if ((a === 1 || c === 1) && R() < 0.35) continue;
-        const d = dirOf(la_[a], lo_[c]);
-        bolts.push({ p: d.clone().multiplyScalar(R0 + 0.003), n: d });
-      }
+      const [x, y] = o.pts[i], [x1, y1] = o.pts[(i + 1) % n];
+      const p = hexPoint(o, x, y, R0 + 0.003);
+      bolts.push({ p, n: p.clone().normalize() });
+      if (R() < 0.55) { const q = hexPoint(o, (x + x1) / 2, (y + y1) / 2, R0 + 0.003); bolts.push({ p: q, n: q.clone().normalize() }); }
     }
   }
   return bolts;
@@ -294,9 +308,9 @@ function sensors(b, parts) {
     b.cyl(0.045, 0.045, 0.004, 'lens', [0, 0.175, 0], null, 20);
     b.pop();
   }
-  // high-gain dish on a two-joint arm (aft, high)
+  // high-gain dish on a two-joint arm (aft, high: clear of the upper gun ring)
   {
-    const d = V(0, 0.64, 0.77).normalize();
+    const d = V(0, 0.82, 0.57).normalize();
     const f = frameAt(d);
     b.pushM(mBasis(f, d.clone().multiplyScalar(R0 - 0.02)));
     b.cyl(0.16, 0.2, 0.12, 'metalDark', [0, 0.06, 0], null, 24);
@@ -310,9 +324,9 @@ function sensors(b, parts) {
     b.cyl(0.035, 0.03, 0.06, 'metalDark', [0, 0.34, 0], null, 12);
     b.pop(); b.pop(); b.pop();
   }
-  // laser comm terminal (starboard, high)
+  // laser comm terminal (starboard, high: above the upper gun ring)
   {
-    const d = V(0.86, 0.45, -0.24).normalize();
+    const d = H8.laserDir.clone();
     const f = frameAt(d);
     b.pushM(mBasis(f, d.clone().multiplyScalar(R0 - 0.02)));
     b.cyl(0.14, 0.18, 0.1, 'metalDark', [0, 0.05, 0], null, 24);
@@ -322,7 +336,8 @@ function sensors(b, parts) {
     b.pop();
   }
   // whip antennas and sun sensors
-  for (const [x, y, z, L] of [[-0.55, 0.8, -0.2, 1.4], [0.3, 0.9, 0.3, 1.0], [-0.9, 0.35, 0.25, 0.9]]) {
+  // (none where the gun carriages run)
+  for (const [x, y, z, L] of [[-0.55, 0.8, -0.2, 1.4], [0.3, 0.9, 0.3, 1.0], [-0.95, 0.06, 0.27, 0.9]]) {
     const d = V(x, y, z).normalize();
     const p = d.clone().multiplyScalar(R0);
     b.cyl(0.05, 0.06, 0.06, 'metalDark', p.toArray(), null, 10);

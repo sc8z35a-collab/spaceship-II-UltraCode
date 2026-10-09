@@ -20,6 +20,39 @@ import { EnginePlume } from '../fx/enginePlume.js';
 import { Particles } from '../fx/particles.js';
 import { H8 } from '../h8/h8Spec.js';
 import { AMMO, ENV, Rng, launch, step as flyStep, leadDir as bLead } from './ballistics.js';
+import { Builder } from '../ship/geom.js';
+
+/** the missile, nose along -z (1.6 m, 0.2 m across): body, ogive nose with its seeker window,
+ * coloured bands, a cruciform of tail fins and body strakes, the motor's nozzle */
+function missileModel() {
+  const S = (o) => new THREE.MeshStandardMaterial(o);
+  const M = {
+    mslBody: S({ color: 0xe4e7ea, metalness: 0.45, roughness: 0.38 }),
+    mslBand: S({ color: 0xe0a020, metalness: 0.3, roughness: 0.5 }),
+    mslRed: S({ color: 0xb8231c, metalness: 0.3, roughness: 0.5 }),
+    mslFin: S({ color: 0x8d949b, metalness: 0.7, roughness: 0.35 }),
+    mslDark: S({ color: 0x101214, metalness: 0.9, roughness: 0.12 }),
+    mslNozzle: S({ color: 0x3a3c40, metalness: 0.85, roughness: 0.45 }),
+  };
+  const b = new Builder();
+  b.cyl(0.1, 0.1, 1.1, 'mslBody', [0, 0, 0.05], [Math.PI / 2, 0, 0], 18);
+  b.lathe([[0.1, 0], [0.097, 0.07], [0.086, 0.15], [0.066, 0.22], [0.04, 0.27], [0.012, 0.3], [0, 0.302]], 'mslBody', [0, 0, -0.5], [-Math.PI / 2, 0, 0], 18);
+  b.sphere(0.03, 'mslDark', [0, 0, -0.79], 12);
+  b.cyl(0.102, 0.102, 0.05, 'mslBand', [0, 0, -0.38], [Math.PI / 2, 0, 0], 18);
+  b.cyl(0.102, 0.102, 0.03, 'mslRed', [0, 0, 0.28], [Math.PI / 2, 0, 0], 18);
+  for (let k = 0; k < 4; k++) {
+    const a = k * Math.PI / 2 + Math.PI / 4;
+    b.push([0, 0, 0], [0, 0, a]);
+    b.box(0.008, 0.13, 0.24, 'mslFin', [0, 0.16, 0.48], null, 0.002);
+    b.box(0.005, 0.045, 0.42, 'mslFin', [0, 0.12, -0.08], null, 0.001);
+    b.pop();
+  }
+  b.cyl(0.075, 0.088, 0.1, 'mslNozzle', [0, 0, 0.65], [Math.PI / 2, 0, 0], 16, true);
+  b.cyl(0.092, 0.092, 0.02, 'mslNozzle', [0, 0, 0.6], [Math.PI / 2, 0, 0], 16);
+  const g = b.build(M, { castShadow: false });
+  g.name = 'missile';
+  return g;
+}
 
 /** round types: their ammunition (ballistics.js: mass, muzzle velocity, scatter, self-destruct),
  *  effective energy on a hull at the muzzle velocity (J), tracer colour / length, damage to a
@@ -29,11 +62,16 @@ export const ROUNDS = {
   cannon: { am: AMMO.c25, E: 1.6e5, color: [1.0, 0.82, 0.32], len: 26, w: 2.6, drone: 0.075, station: 0.003, rock: 0.35 },
   pd: { am: AMMO.p30, E: 7e4, color: [1.0, 0.92, 0.6], len: 18, w: 2.0, drone: 0.045, station: 0.0015, rock: 0.25 },
   rail: { am: AMMO.rail, E: 2.6e7, color: [0.55, 0.85, 1.0], len: 320, w: 3.6, drone: 0.8, station: 0.035, rock: 6 },
-  missile: { speed: 120, E: 3.5e6, life: 28, color: [1.0, 0.7, 0.4], len: 0, w: 0, drone: 1.3, station: 0.06, rock: 8 },
+  // (a missile: at most 600 m/s faster than the vessel that launched it, 200 s of flight — the
+  // 120 km it is launched out to — and six hits from a drone's gun bring it down)
+  missile: { speed: 120, E: 3.5e6, life: 200, vMax: 600, hp: 6, color: [1.0, 0.7, 0.4], len: 0, w: 0, drone: 1.3, station: 0.06, rock: 8 },
 };
 for (const R of Object.values(ROUNDS)) if (R.am) { R.speed = R.am.v0; R.life = R.am.life; }
 
 const MAX_TRACERS = 900;
+/** the chance a drone's shell passing close to a missile brings its fuse off on it (by the
+ * drone's grade, ★1 .. ★5) */
+const FUSE = [0, 0.2, 0.35, 0.52, 0.7, 0.9];
 const MAX_FLASH = 160;
 const _q = new THREE.Quaternion(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 
@@ -58,6 +96,29 @@ function segSphere(p0, p1, c, R) {
   if (D < 0) return -1;
   const t = (-b - Math.sqrt(D)) / (2 * a);
   return t >= 0 && t <= 1 ? t : -1;
+}
+
+const _ca = new THREE.Vector3();
+/** first contact of segment p0->p1 with a capsule along z (za..zb, radius r): fraction, or -1 */
+function segCapsuleZ(p0, p1, za, zb, r) {
+  let best = -1;
+  const dx = p1.x - p0.x, dy = p1.y - p0.y, dz = p1.z - p0.z;
+  // the side: the infinite cylinder, kept to za..zb
+  const a = dx * dx + dy * dy, b = 2 * (p0.x * dx + p0.y * dy), c = p0.x * p0.x + p0.y * p0.y - r * r;
+  if (c <= 0 && p0.z >= za && p0.z <= zb) return 0;
+  if (a > 1e-12) {
+    const D = b * b - 4 * a * c;
+    if (D >= 0) {
+      const t = (-b - Math.sqrt(D)) / (2 * a);
+      if (t >= 0 && t <= 1) { const z = p0.z + dz * t; if (z >= za && z <= zb) best = t; }
+    }
+  }
+  // the round ends
+  for (const z of [za, zb]) {
+    const t = segSphere(p0, p1, _ca.set(0, 0, z), r);
+    if (t >= 0 && (best < 0 || t < best)) best = t;
+  }
+  return best;
 }
 
 export class Combat {
@@ -112,9 +173,7 @@ export class Combat {
     this.flashPts.layers.set(LAYER_NEAR); this.flashPts.layers.enable(LAYER_MID); this.flashPts.layers.enable(LAYER_FAR);
     this.flashPts.renderOrder = 23;
     game.engine.scene.add(this.flashPts);
-    this.missileGeo = new THREE.CylinderGeometry(0.09, 0.11, 1.5, 10);
-    this.missileGeo.rotateX(Math.PI / 2);
-    this.missileMat = new THREE.MeshStandardMaterial({ color: 0xd8dcdf, metalness: 0.6, roughness: 0.4 });
+    this.missileTpl = missileModel();
     this.t = 0;
     this.stats = { fired: 0, hits: 0, on: {} };
     // the scatter of rounds fired without a fire control of their own
@@ -133,7 +192,7 @@ export class Combat {
     if (R.am) {
       // a shell: the ballistics engine flies it (scatter, muzzle velocity, gravity, the air)
       const b = o.round || launch(R.am, null, o.pos, o.vel, o.dir, this.rng, { disp: o.disp || 1 });
-      r = { kind: o.kind, R, am: R.am, pos: b.pos, prev: b.prev, vel: b.vel, dir: b.dir, t: 0, owner: o.owner || null, age: 0, life: R.am.life, byPlayer: !!o.byPlayer, target: null, done: false, boost: -1 };
+      r = { kind: o.kind, R, am: R.am, pos: b.pos, prev: b.prev, vel: b.vel, dir: b.dir, t: 0, owner: o.owner || null, age: 0, life: R.am.life, byPlayer: !!o.byPlayer, target: null, done: false, boost: -1, atMsl: o.atMsl || null };
     } else {
       const dir = o.dir.clone();
       r = {
@@ -143,11 +202,15 @@ export class Combat {
       };
     }
     if (o.kind === 'missile') {
-      r.mesh = new THREE.Mesh(this.missileGeo, this.missileMat);
+      // its speed is reckoned against the launcher's (a frame falling along with it)
+      r.refVel = o.vel.clone();
+      r.hp = R.hp;
+      r.mesh = this.missileTpl.clone();
       r.mesh.matrixAutoUpdate = false;
-      r.mesh.frustumCulled = false;
-      // its motor's flame out of the tail
-      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.75)], r0: 0.1, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4 });
+      r.mesh.traverse((o) => { o.frustumCulled = false; });
+      // its motor's flame out of the tail; it coasts clear of the launcher before it lights
+      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.72)], r0: 0.08, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4, owner: r });
+      r.boost = o.coast ? -o.coast : 0;
       this.g.engine.scene.add(r.mesh);
       r.q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), r.dir);
     }
@@ -207,7 +270,14 @@ export class Combat {
     add('b29', g.flight, g.flight.pos, g.flight.vel, 20);
     if (g.h8 && g.h8.mode !== 'parked' && g.h8.mode !== 'pod' && g.h8.mode !== 'lost') add('h8', g.h8, g.h8.flight.pos, g.h8.flight.vel, H8.R);
     if (g.drones) for (const d of g.drones.list) if (d.alive) add('drone', d, d.pos, d.vel, d.R);
+    // H8's K3 robots out of their bay (a small cube; on H8's hull they are part of H8)
+    if (g.h8 && g.h8.k3) for (const u of g.h8.k3.free()) add('k3', u, u.pos, u.vel, 0.32);
+    // the stations' escape pods in flight (a capsule along the pod: tested in its own frame)
+    if (g.pods) for (const p of g.pods.list) if (p.alive && p.state !== 'wait') add('pod', p, p.pos, p.vel, p.G.len / 2 + 0.3);
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) add('rock', a, a.pos, a.vel, a.radius);
+    // (a missile as the drones' guns see it: their shells carry proximity fuses against missiles —
+    // one that goes off within six metres counts; six bring it down)
+    for (const m of this.rounds) if (m.kind === 'missile' && !m.done) add('missile', m, m.pos.clone(), m.vel.clone(), 6);
     // stations: their exact pose now and a step on (their drawn position is a frame old)
     for (const s of g.stations.list) {
       if (s.dmg && s.dmg.destroyed) continue;
@@ -243,15 +313,28 @@ export class Combat {
       else {
         r.prev.copy(r.pos);
         grav(r.pos, acc);
+        const gx = acc.x, gy = acc.y, gz = acc.z;
+        const vx = r.vel.x, vy = r.vel.y, vz = r.vel.z;
         if (r.kind === 'missile') this.steerMissile(r, dt, acc);
         r.pos.addScaledVector(r.vel, dt).addScaledVector(acc, 0.5 * dt * dt);
         r.vel.addScaledVector(acc, dt);
+        if (r.refVel) {
+          // no faster than its top speed against the launch frame (which falls as it does)
+          r.refVel.x += gx * dt; r.refVel.y += gy * dt; r.refVel.z += gz * dt;
+          const rel = _v.copy(r.vel).sub(r.refVel), sp = rel.length();
+          if (sp > r.R.vMax) r.vel.copy(r.refVel).addScaledVector(rel, r.R.vMax / sp);
+          // what it is actually doing besides falling (a gun tracking it reads this off)
+          (r.aAct || (r.aAct = new THREE.Vector3())).set((r.vel.x - vx) / dt - gx, (r.vel.y - vy) / dt - gy, (r.vel.z - vz) / dt - gz);
+        }
       }
       // what did it run into on the way (each target in its own moving frame: the round went from
       // prev to pos while the target went from pos to p1)
       let best = null;
       for (const tg of T) {
         if (tg.ref === r.owner || (r.owner && tg.ref === r.owner.ref)) continue;
+        // (missiles in flight are only in danger from the drones' guns)
+        // (and only the one a drone's gun was laid on: its shells' fuses are set for that one)
+        if (tg.kind === 'missile' && (r.kind !== 'drone' || r.atMsl !== tg.ref || tg.ref.done)) continue;
         const c0 = tg.pos, c1 = tg.p1;
         // quick reject: the segment is far from the target
         const dmid = Math.min(c1.distanceTo(r.pos), c0.distanceTo(r.prev));
@@ -259,6 +342,9 @@ export class Combat {
         if (dmid > reach) continue;
         const p0 = r.prev.clone().sub(c0), p1 = r.pos.clone().sub(c1);
         const hit = this.hitTest(tg, p0, p1, r);
+        // (a drone's shell passing a missile: whether its fuse catches it depends on how good the
+        // drone's fire control is at setting it — the better the drone, the surer)
+        if (hit && tg.kind === 'missile' && Math.random() > FUSE[(r.owner && r.owner.stars) || 3]) continue;
         if (hit && (!best || hit.f < best.f)) best = Object.assign(hit, { tg });
       }
       // a missile's proximity fuse: the closest it came to its target during the step
@@ -271,7 +357,7 @@ export class Combat {
         const s = L2 > 1e-9 ? Math.max(0, Math.min(1, -q0.dot(seg) / L2)) : 0;
         const cp = q0.addScaledVector(seg, s);
         const R = mt.R || mt.radius || 1;
-        if (cp.length() < 7 + R) {
+        if (cp.length() < 5 + R) {
           const tg = T.find((x) => x.ref === mt) || { kind: mt.kind || 'drone', ref: mt, pos: mt.pos, vel: tv, R };
           best = { tg, f: s, point: cp.clone(), n: cp.clone().normalize(), prox: true };
         }
@@ -297,8 +383,11 @@ export class Combat {
   /** missile guidance: boost, then proportional navigation toward its target */
   steerMissile(r, dt, acc) {
     const tg = r.target;
-    if (!tg || tg.alive === false || !tg.pos) return;
+    const was = r.boost;
     r.boost += dt;
+    // the motor lights once it is clear of the launcher: a bright flash
+    if (was < 0 && r.boost >= 0) this.flash(r.pos, [1.0, 0.8, 0.5], 3.2, 0.25, r.vel);
+    if (r.boost < 0 || !tg || tg.alive === false || !tg.pos) return;
     const rel = tg.pos.clone().sub(r.pos), vrel = (tg.vel || r.vel).clone().sub(r.vel);
     const d = rel.length();
     const los = rel.clone().divideScalar(Math.max(1, d));
@@ -306,7 +395,7 @@ export class Combat {
     // line-of-sight rate (PN, N = 4) plus a push along the line of sight
     const omega = rel.clone().cross(vrel).divideScalar(Math.max(1, d * d));
     const aPN = omega.cross(los).multiplyScalar(4 * Math.max(60, closing));
-    const aMax = r.boost < 0.6 ? 60 : 320;
+    const aMax = r.boost < 0.6 ? 60 : 140;
     const push = los.clone().multiplyScalar(closing < 900 ? aMax : 40);
     const a = aPN.add(push);
     if (a.length() > aMax) a.setLength(aMax);
@@ -361,6 +450,17 @@ export class Combat {
       }
       return null;
     }
+    if (tg.kind === 'pod') {
+      // a capsule along its axis: the round's path in the pod's frame against it
+      const P = tg.ref, qi = _q.copy(P.q).invert();
+      const a = p0.clone().applyQuaternion(qi), b = p1.clone().applyQuaternion(qi);
+      const f = segCapsuleZ(a, b, -P.G.len / 2 + P.G.R, P.G.len / 2 - P.G.R * 0.5, P.G.R);
+      if (f < 0) return null;
+      const pl = a.lerp(b, f);
+      const zc = Math.max(-P.G.len / 2 + P.G.R, Math.min(P.G.len / 2 - P.G.R * 0.5, pl.z));
+      const nl = _v2.set(pl.x, pl.y, pl.z - zc).normalize();
+      return { f, point: pl.clone().applyQuaternion(P.q), n: nl.clone().applyQuaternion(P.q) };
+    }
     // spheres: H8, drones, rocks
     const R = tg.kind === 'h8' ? H8.R : tg.R;
     const f = segSphere(p0, p1, _v.set(0, 0, 0), R);
@@ -396,8 +496,23 @@ export class Combat {
         g.shake = Math.max(g.shake, big ? 1.4 : 0.35);
       }
       if (g.combatLog) g.combatLog('h8', r);
+    } else if (tg.kind === 'missile') {
+      // a drone's round finds a missile: six of them and it breaks up
+      const m = tg.ref;
+      m.hp -= 1;
+      const A = this.anchorAt(m.pos, m.vel);
+      A.P.burst('spark', hit.point.clone(), hit.n, 14, { speed: 14, spread: 1.4, size: 8 });
+      if (m.hp <= 0 && !m.done) {
+        m.done = true;
+        this.explode(m.pos, m.vel, 0.55, false);
+        if (g.h8) g.h8.say('hachi_msl_lost', {}, { minGap: 4, force: false });
+      }
     } else if (tg.kind === 'drone') {
       g.drones.damage(tg.ref, R.drone * Math.min(1.5, Ek), hit, r);
+    } else if (tg.kind === 'k3') {
+      if (g.h8 && g.h8.k3) g.h8.k3.hit(tg.ref, R.E * Ek, hit);
+    } else if (tg.kind === 'pod') {
+      if (g.pods) g.pods.damage(tg.ref, R.E * (r.kind === 'missile' ? 1 : Ek), hit, r);
     } else if (tg.kind === 'rock') {
       const a = tg.ref;
       a.hp = (a.hp ?? Math.pow(a.radius / 0.5, 3) * 0.6) - R.rock;
@@ -464,9 +579,9 @@ export class Combat {
         r.mesh.matrixWorld.copy(r.mesh.matrix);
         r.mesh.updateMatrixWorld(true);
         const d = rel.distanceTo(camWorld);
-        assignLayers(r.mesh, Math.max(0, d - 2), d + 2);
-        // (it lights at launch and burns to the end; gentler while it clears the launcher)
-        r.plume.update(dt, r.boost < 0.6 ? 0.55 : 1, 0, 0);
+        r.mesh.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - 2), d + 2); });
+        // (dark while it coasts out of the tube; it lights, then burns to the end)
+        r.plume.update(dt, r.boost < 0 ? 0 : r.boost < 0.6 ? 0.55 + r.boost : 1, 0, 0);
         r.plume.setDistance(d);
         continue;
       }

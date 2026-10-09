@@ -98,6 +98,8 @@ export class Builder {
     const m = this.top.clone();
     if (pos || rot || scl) m.multiply(mat4(pos, rot, scl));
     g.applyMatrix4(m);
+    // (a part of something mounted on a surface: which one, so it can be found in the merged mesh)
+    if (this.mount !== undefined && this.mount !== null) g.userData.mount = this.mount;
     if (!this.parts.has(key)) this.parts.set(key, []);
     this.parts.get(key).push(g);
     return g;
@@ -229,6 +231,13 @@ export class Builder {
         if (!merged) continue;
         merged.computeBoundingSphere();
         const mesh = new THREE.Mesh(merged, mat);
+        // where each mounted thing's vertices ended up (the parts are laid end to end, in order)
+        let off = 0;
+        for (const g of part) {
+          const n = g.attributes.position.count;
+          if (g.userData && g.userData.mount !== undefined) (mesh.userData.mounts || (mesh.userData.mounts = [])).push([g.userData.mount, off, n]);
+          off += n;
+        }
         mesh.name = base;
         if (fine) { mesh.userData.fine = true; mesh.visible = !lowQ(); }
         mesh.castShadow = castShadow && !mat.transparent;

@@ -31,6 +31,7 @@ export class Player {
     this.onLift = null;
     this.holding = null;
     this.outside = false;
+    this.inertial = false;                         // out in space in a suit: his own inertia (suits.js)
     const w = phys.world;
     this.body = w.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(this.pos.x, this.pos.y, this.pos.z));
     this.colStand = w.createCollider(R.ColliderDesc.capsule(STAND_HH, STAND_R), this.body);
@@ -119,7 +120,13 @@ export class Player {
     this.pitch = Math.max(-pLim, Math.min(pLim, this.pitch));
     if (this.state === 'seated') {
       const s = this.seat;
-      if (s.gimbal) {
+      if (s.gimbal && s.lockAim) {
+        // the seat held facing forward (H8's seat on its rail, in the shelter): only the head turns
+        this.yaw = Math.max(-1.9, Math.min(1.9, this.yaw));
+        this.pitch = Math.max(-1.0, Math.min(1.1, this.pitch));
+        if (s.eyeLocal) this.eyeLocal.copy(s.eyeLocal).add(s.dock || _v.set(0, 0, 0));
+        else this.eyeLocal.copy(s.eye);
+      } else if (s.gimbal) {
         // a seat on a gimbal: it turns all the way round after the head, and tips back or forward
         // after it too (lying back to look straight up, leaning over to look at the floor)
         // (it swings round quickly: turning to look behind used to leave the body lagging)
@@ -147,9 +154,11 @@ export class Player {
     const gMag = gLocal.length();
     // hysteresis: thrust hovering around the threshold must not flip walk <-> float every few
     // seconds (the camera height, the controls and the up/down buttons all change with it)
-    const gravityMode = this.gravityMode = gMag > (this.gravityMode ? 1.4 : 2.2);
-    // body up vector: oppose gravity when there is any, else drift back to ship up
-    const targetUp = gravityMode ? _v.copy(gLocal).multiplyScalar(-1 / gMag) : _v.set(0, 1, 0);
+    // (free in space in a suit the ship's pull is none of his: he floats, whatever it does)
+    const gravityMode = this.gravityMode = !this.inertial && gMag > (this.gravityMode ? 1.4 : 2.2);
+    // body up vector: oppose gravity when there is any, else drift back to ship up (free in space
+    // it stays where it points)
+    const targetUp = gravityMode ? _v.copy(gLocal).multiplyScalar(-1 / gMag) : this.inertial ? _v.copy(this.up) : _v.set(0, 1, 0);
     const k = 1 - Math.exp(-dt * (gravityMode ? 4 : 0.8));
     // keep the look direction stable while the up vector changes
     this.up.lerp(targetUp, k).normalize();
@@ -200,6 +209,12 @@ export class Player {
       this.vel.lerp(desired, 1 - Math.exp(-dt * (has ? 2.2 : 0.9)));
       // apparent acceleration (ship manoeuvres) still pushes us
       this.vel.addScaledVector(gLocal, dt * 0.6);
+    } else if (this.state === 'eva' && env.suit) {
+      // the suit's own thrusters and boosters (suits.js): true inertia, its flight computer
+      const camU = new THREE.Vector3(0, 1, 0).applyQuaternion(vq);
+      this._nearRail = !!env.nearRail;
+      if (env.nearRail && !(input.moveX || input.moveY || input.up)) this.vel.multiplyScalar(Math.exp(-dt * 2.5));
+      this.thrusting = env.suit.fly(dt, this, input, camF, camR, camU, gLocal);
     } else if (this.state === 'eva') {
       // MMU-style jetpack: true inertia, thrust while input, gentle auto-stabilisation
       const thrust = 0.35;
@@ -240,6 +255,8 @@ export class Player {
       if (env.liftDelta) realV.addScaledVector(env.liftDelta, -1 / dt);
       const lost = this.vel.clone().sub(realV);
       if (lost.length() > 3.5 && this.state !== 'walk') this.bump = Math.min(1, (lost.length() - 3.5) / 6);
+      // a knock in a suit marks the suit (suits.js works out what it did)
+      if (env.suit && this.state !== 'walk' && this.state !== 'seated' && lost.lengthSq() > 0.36) env.suit.contact(this, lost, realV);
       // keep tangential motion, drop the blocked component
       if (!walking) this.vel.copy(realV.lerp(this.vel, 0.0));
       else if (this.grounded) { const vu = this.vel.dot(this.up); if (vu < 0) this.vel.addScaledVector(this.up, -vu); }

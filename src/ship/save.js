@@ -30,6 +30,8 @@ export class SaveSystem {
       player: g.player.serialize(),
       ls: g.lifeSupport.serialize(),
       dmg: g.damage.serialize(),
+      disp: g.b29Display ? g.b29Display.serialize() : null,
+      suits: g.suits ? g.suits.serialize() : null,
       doors: Object.fromEntries(Object.entries(g.doors).map(([k, d]) => [k, { open: d.open, target: d.target, locked: d.locked, jammed: d.jammed }])),
       hatch: { open: g.hatch.open, target: g.hatch.target, dogs: g.hatch.dogs },
       lift: g.lift ? g.lift.y : 0,
@@ -69,6 +71,8 @@ export class SaveSystem {
     g.flight.restore(d.flight);
     g.lifeSupport.restore(d.ls);
     g.damage.restore(d.dmg);
+    if (g.b29Display) g.b29Display.restore(d.disp);
+    if (g.suits) g.suits.restore(d.suits);
     for (const [k, v] of Object.entries(d.doors || {})) if (g.doors[k]) Object.assign(g.doors[k], v);
     if (d.hatch) Object.assign(g.hatch, d.hatch);
     if (g.lift && d.lift !== undefined) { g.lift.y = d.lift; g.lift.target = d.lift; }
@@ -130,7 +134,8 @@ export class SaveSystem {
     if (gap < 5) return report;
     const tStart = g.time;
     const terrain = (pos) => g.terrainAt(pos);
-    if (apTarget && (engaged || g.autopilot.engage(apTarget))) {
+    // (lying at a station the ship stays there: the catch-up does not cast off)
+    if (apTarget && (engaged || (g.docking.state === 'free' && g.autopilot.engage(apTarget)))) {
       // fly the autopilot in coarse steps (the simulation clock advances with it)
       if (!engaged) { g.asphalt.queue.length = 0; g.asphalt.log.pop(); }
       let t = 0;

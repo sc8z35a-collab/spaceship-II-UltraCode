@@ -32,8 +32,13 @@ export class AudioEngine {
     this.cabin = ctx.createGain();
     this.cabinLP = ctx.createBiquadFilter(); this.cabinLP.type = 'lowpass'; this.cabinLP.frequency.value = 18000;
     this.cabin.connect(this.cabinLP); this.cabinLP.connect(this.master); this.cabinLP.connect(this.reverb);
-    // suit / direct bus (not muffled)
+    // suit / direct bus (not muffled): the helmet's and the ship's own speakers — silent when there
+    // is nothing to carry them to the ears (no suit, vacuum on the skin)
     this.direct = ctx.createGain(); this.direct.connect(this.master);
+    // through the structure Kaito stands in or holds on to (the thump of a blow on the hull)
+    this.hull = ctx.createGain(); this.hull.connect(this.master);
+    // his own body: heartbeat, breath, a gasp — heard through the bones, even in vacuum
+    this.body = ctx.createGain(); this.body.connect(this.master);
     // noise buffers
     this.white = this._noise('white');
     this.pink = this._noise('pink');
@@ -101,14 +106,45 @@ export class AudioEngine {
     for (const L of this.loops.values()) if (L.panner && L.pos) this._setPannerPos(L.panner, L.pos);
   }
 
-  /** air pressure in kPa where the listener is (0 = vacuum) and suit state */
-  setAir(kPa, suit) {
+  /**
+   * what carries sound to Kaito's ears: kPa the air where he is (0 = vacuum), suit on, contact (0..1:
+   * standing on or holding a structure — out on a walk only its own thumps come through it),
+   * exposed (0..1: vacuum on his skin — nothing at all but his own body)
+   */
+  setAir(kPa, suit, { contact = 1, exposed = 0, outside = false } = {}) {
     if (!this.ready) return;
     const k = Math.max(0, Math.min(1, kPa / 60));
     this.cabinLevel = k;
     const t = this.ctx.currentTime;
-    this.cabin.gain.setTargetAtTime(suit ? 0.25 + 0.6 * k : 0.05 + 0.95 * k, t, 0.2);
-    this.cabinLP.frequency.setTargetAtTime(suit ? 900 + 3000 * k : 300 + 17000 * k * k, t, 0.2);
+    const ex = Math.max(0, Math.min(1, exposed));
+    // (outside there is no air to carry anything: what reaches the helmet comes through a boot on
+    // the hull, or not at all)
+    let cab = suit ? 0.25 + 0.6 * k : 0.05 + 0.95 * k;
+    if (outside && k < 0.05) cab = suit ? 0.08 * contact : 0;
+    this.cabin.gain.setTargetAtTime(cab * (1 - ex), t, 0.12);
+    this.cabinLP.frequency.setTargetAtTime(outside && k < 0.05 ? 380 : suit ? 900 + 3000 * k : 300 + 17000 * k * k, t, 0.2);
+    this.direct.gain.setTargetAtTime(1 - ex, t, 0.08);
+    this.hull.gain.setTargetAtTime((outside ? (suit ? 0.6 : 0.3) * contact : 1) * (1 - ex * 0.7), t, 0.1);
+  }
+
+  /** a radio transmission's squelch: the click and hiss before (and the tail after) a voice */
+  radio(tail = false) {
+    if (!this.ready) return;
+    this._burst(null, { dur: tail ? 0.16 : 0.1, freq: 1900, q: 1.4, gain: tail ? 0.05 : 0.07, type: 'white', direct: true });
+    if (!tail) this.beep(1150, 0.03, 0.03, { direct: true, type: 'square' });
+  }
+
+  /** vacuum hits the skin: the breath torn out of him, the ears pop (his body only) */
+  gasp() {
+    if (!this.ready) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const s = ctx.createBufferSource(); s.buffer = this.pink;
+    const f = ctx.createBiquadFilter(); f.type = 'bandpass'; f.frequency.setValueAtTime(900, t); f.frequency.exponentialRampToValueAtTime(260, t + 0.9); f.Q.value = 0.6;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.32, t + 0.03); g.gain.exponentialRampToValueAtTime(0.001, t + 1.1);
+    s.connect(f); f.connect(g); g.connect(this.body); s.start(t, Math.random(), 1.3);
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.setValueAtTime(55, t); o.frequency.exponentialRampToValueAtTime(24, t + 0.5);
+    const og = ctx.createGain(); og.gain.setValueAtTime(0.5, t); og.gain.exponentialRampToValueAtTime(0.001, t + 0.6);
+    o.connect(og); og.connect(this.body); o.start(t); o.stop(t + 0.7);
   }
 
   // ---------------------------------------------------------------- loops
@@ -129,7 +165,7 @@ export class AudioEngine {
   }
 
   /** continuous noise-based loop (fans, hiss, wind, water) */
-  noiseLoop(id, { pos = null, type = 'pink', freq = 800, q = 0.7, gain = 0.2, filter = 'bandpass', direct = false } = {}) {
+  noiseLoop(id, { pos = null, type = 'pink', freq = 800, q = 0.7, gain = 0.2, filter = 'bandpass', direct = false, bus = null } = {}) {
     return this.loop(id, () => {
       const ctx = this.ctx;
       const src = ctx.createBufferSource(); src.buffer = this[type]; src.loop = true;
@@ -138,8 +174,9 @@ export class AudioEngine {
       const g = ctx.createGain(); g.gain.value = 0;
       src.connect(f); f.connect(g);
       let panner = null;
-      if (pos) { panner = this._panner(pos); g.connect(panner); panner.connect(direct ? this.direct : this.cabin); }
-      else g.connect(direct ? this.direct : this.cabin);
+      const out = bus || (direct ? this.direct : this.cabin);
+      if (pos) { panner = this._panner(pos); g.connect(panner); panner.connect(out); }
+      else g.connect(out);
       src.start();
       g.gain.setTargetAtTime(gain, ctx.currentTime, 0.3);
       return { nodes: [src], gain: g, filter: f, panner, pos, src };
@@ -211,14 +248,14 @@ export class AudioEngine {
     this.beep(2400, 0.015, gain * 0.3, { pos });
   }
 
-  _burst(pos, { dur = 0.2, freq = 1000, q = 1, gain = 0.3, type = 'white', filter = 'bandpass', attack = 0.002, sweep = 0, direct = false } = {}) {
-    const ctx = this.ctx, t = ctx.currentTime;
+  _burst(pos, { dur = 0.2, freq = 1000, q = 1, gain = 0.3, type = 'white', filter = 'bandpass', attack = 0.002, sweep = 0, direct = false, when = 0, bus = null } = {}) {
+    const ctx = this.ctx, t = ctx.currentTime + when;
     const s = ctx.createBufferSource(); s.buffer = this[type];
     s.loopStart = 0; const off = Math.random() * 2;
     const f = ctx.createBiquadFilter(); f.type = filter; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
     if (sweep) f.frequency.exponentialRampToValueAtTime(Math.max(40, freq * sweep), t + dur);
     const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0008, t + dur);
-    s.connect(f); f.connect(g); g.connect(this._out(pos, direct));
+    s.connect(f); f.connect(g); g.connect(bus || this._out(pos, direct));
     s.start(t, off, dur + 0.1);
   }
 
@@ -230,8 +267,8 @@ export class AudioEngine {
     const o = ctx.createOscillator(); o.type = 'sine';
     o.frequency.setValueAtTime(70 + 50 * (1 - size), t); o.frequency.exponentialRampToValueAtTime(28, t + 0.9);
     const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.9 * (0.3 + size), t + 0.01); g.gain.exponentialRampToValueAtTime(0.001, t + 1.4 + size);
-    o.connect(g); g.connect(this.direct); o.start(t); o.stop(t + 3);
-    this._burst(null, { dur: 0.5 + size, freq: 400, q: 0.5, gain: 0.6 * (0.3 + size), type: 'brown', filter: 'lowpass', direct: true });
+    o.connect(g); g.connect(this.hull); o.start(t); o.stop(t + 3);
+    this._burst(null, { dur: 0.5 + size, freq: 400, q: 0.5, gain: 0.6 * (0.3 + size), type: 'brown', filter: 'lowpass', bus: this.hull });
     this._burst(pos, { dur: 1.2 + size * 2, freq: 2500, q: 0.8, gain: 0.25 * (0.2 + size), type: 'white', sweep: 0.3 });
     // metallic ring (inharmonic partials)
     for (const [m, a] of [[1, 1], [2.76, 0.5], [5.4, 0.3], [8.93, 0.18]]) {
@@ -254,16 +291,118 @@ export class AudioEngine {
     o.connect(bp); bp.connect(g); g.connect(this._out(pos, false)); o.start(t); o.stop(t + 1);
   }
 
-  doorMotor(pos, open) {
+  /** a door slides (the old name: everything that called it gets the new set) */
+  doorMotor(pos, open) { this.mech(pos, 'door', { open }); }
+
+  /**
+   * Everything that moves, one family of sounds (the same maker's actuators all through the
+   * ship): the latches let go with a click and a puff of gas; an electric drive spins up — two
+   * close-tuned windings through a resonant housing, a sub-harmonic for weight — its pitch rising
+   * as it speeds up and sagging as it brakes; air moves with the panel; at the end stop a soft
+   * magnetic thump and a metallic tick, and a closing seal hisses. kind:
+   *   door   — a cabin door or a sliding display panel (about a second)
+   *   hatch  — a pressure hatch: locking bolts, a slower, deeper drive, a long seal
+   *   servo  — a small actuator: a gun carriage, a launcher door, a shutter (short, high)
+   *   heavy  — big machinery: clamps, a lift, a docking collar (deep, with rumble)
+   *   latch  — a clamp or a lock only: a double clack and a hiss
+   * opts: { open (opening or closing), dur (s of travel), gain, pitch (x), direct (bypass the air) }
+   */
+  mech(pos, kind = 'door', { open = true, dur = null, gain = 1, pitch = 1, direct = false } = {}) {
     if (!this.ready) return;
-    const ctx = this.ctx, t = ctx.currentTime;
-    const o = ctx.createOscillator(); o.type = 'sawtooth';
-    o.frequency.setValueAtTime(open ? 90 : 110, t); o.frequency.linearRampToValueAtTime(open ? 140 : 80, t + 1.1);
-    const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 700;
-    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.07, t + 0.1); g.gain.setValueAtTime(0.07, t + 1.0); g.gain.linearRampToValueAtTime(0, t + 1.3);
-    o.connect(lp); lp.connect(g); g.connect(this._out(pos)); o.start(t); o.stop(t + 1.4);
-    this._burst(pos, { dur: 0.35, freq: 1800, q: 0.6, gain: 0.08, type: 'pink' }); // seal hiss
-    setTimeout(() => this._burst(pos, { dur: 0.25, freq: 160, q: 0.8, gain: 0.25, type: 'brown', filter: 'lowpass' }), 1200);
+    const ctx = this.ctx, t0 = ctx.currentTime;
+    const K = {
+      door: { f0: 150, f1: 255, d: 0.9, g: 0.055, q: 3.2, whoosh: 0.05, thump: 0.32, tick: 0.05, seal: 0.07, bolts: 0 },
+      hatch: { f0: 85, f1: 150, d: 1.3, g: 0.065, q: 2.6, whoosh: 0.03, thump: 0.45, tick: 0.06, seal: 0.11, bolts: 3 },
+      servo: { f0: 330, f1: 560, d: 0.35, g: 0.04, q: 4.5, whoosh: 0, thump: 0.12, tick: 0.045, seal: 0, bolts: 0 },
+      heavy: { f0: 48, f1: 82, d: 1.6, g: 0.075, q: 2.2, whoosh: 0.02, thump: 0.6, tick: 0.05, seal: 0.05, bolts: 2 },
+      latch: { f0: 0, f1: 0, d: 0.05, g: 0, q: 1, whoosh: 0, thump: 0.3, tick: 0.07, seal: 0.05, bolts: 2 },
+      // docking clamps: a short heavy drive, four bolts, a hard seat
+      clamp: { f0: 105, f1: 175, d: 0.5, g: 0.055, q: 3, whoosh: 0, thump: 0.55, tick: 0.075, seal: 0.09, bolts: 4 },
+      // a motorised valve turning
+      valve: { f0: 240, f1: 410, d: 0.55, g: 0.035, q: 5, whoosh: 0, thump: 0.08, tick: 0.04, seal: 0.04, bolts: 0 },
+      // booms and radiator wings folding: a long slow drive
+      fold: { f0: 92, f1: 138, d: 2.2, g: 0.042, q: 3.4, whoosh: 0, thump: 0.28, tick: 0.05, seal: 0, bolts: 1 },
+      // a gun carriage or turret slewing: a quick high whine
+      slew: { f0: 430, f1: 720, d: 0.28, g: 0.026, q: 6, whoosh: 0, thump: 0.06, tick: 0.03, seal: 0, bolts: 0 },
+    }[kind] || null;
+    if (!K) return;
+    const out = this._out(pos, direct);
+    const D = Math.max(0.12, dur ?? K.d);
+    const p = pitch * (open ? 1 : 0.92);
+    // -- the latches let go (or, closing, they bite at the end)
+    const boltsAt = open ? 0 : D;
+    for (let i = 0; i < K.bolts; i++) this._tick(out, t0 + boltsAt + i * 0.07, 2600 + 300 * i, 0.06 * gain);
+    if (open && K.seal) this._hiss(out, t0, 0.16, 2600, K.seal * 0.8 * gain);
+    // -- the drive
+    if (K.f0) {
+      const ts = t0 + (open ? 0.06 : 0);
+      const f0 = K.f0 * p, f1 = K.f1 * p;
+      const curve = (prm) => {
+        prm.setValueAtTime(open ? f0 : f1, ts);
+        prm.linearRampToValueAtTime(open ? f1 : f0 * 1.15, ts + D * 0.6);
+        prm.linearRampToValueAtTime(open ? f1 * 0.86 : f0, ts + D);
+      };
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.Q.value = K.q;
+      bp.frequency.setValueAtTime(f0 * 3, ts); bp.frequency.linearRampToValueAtTime(f1 * 3.2, ts + D * 0.6); bp.frequency.linearRampToValueAtTime(f1 * 2.4, ts + D);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0, ts); g.gain.linearRampToValueAtTime(K.g * gain, ts + 0.05);
+      g.gain.setValueAtTime(K.g * gain, ts + D - 0.09); g.gain.linearRampToValueAtTime(0, ts + D);
+      bp.connect(g); g.connect(out);
+      for (const det of [1, 1.0072]) {
+        const o = ctx.createOscillator(); o.type = 'sawtooth';
+        curve(o.frequency); o.detune.value = (det - 1) * 1731;
+        o.connect(bp); o.start(ts); o.stop(ts + D + 0.05);
+      }
+      // the sub-harmonic: weight
+      const s = ctx.createOscillator(); s.type = 'sine';
+      s.frequency.setValueAtTime((open ? f0 : f1) / 2, ts); s.frequency.linearRampToValueAtTime((open ? f1 : f0) / 2, ts + D);
+      const sg = ctx.createGain(); sg.gain.setValueAtTime(0, ts); sg.gain.linearRampToValueAtTime(K.g * 1.6 * gain, ts + 0.06); sg.gain.setValueAtTime(K.g * 1.6 * gain, ts + D - 0.1); sg.gain.linearRampToValueAtTime(0, ts + D);
+      s.connect(sg); sg.connect(out); s.start(ts); s.stop(ts + D + 0.05);
+      // the heavy machines rumble
+      if (kind === 'heavy') this._burstAt(out, ts, { dur: D, freq: 140, q: 0.7, gain: 0.12 * gain, type: 'brown', filter: 'lowpass', attack: 0.2 });
+      // air moving with the panel
+      if (K.whoosh) this._burstAt(out, ts + D * 0.15, { dur: D * 0.75, freq: 900, q: 0.9, gain: K.whoosh * gain, type: 'pink', attack: D * 0.3, sweep: open ? 1.5 : 0.65 });
+    }
+    // -- the end stop: a magnetic thump, a metallic tick; a closing seal hisses
+    const te = t0 + D + (open ? 0.06 : 0.02);
+    this._thump(out, te, (kind === 'heavy' ? 70 : kind === 'hatch' ? 95 : 130) * pitch, K.thump * gain);
+    this._tick(out, te + 0.01, kind === 'servo' ? 3400 : 2300, K.tick * gain);
+    if (!open && K.seal) this._hiss(out, te + 0.03, kind === 'hatch' ? 0.55 : 0.32, 2000, K.seal * gain);
+  }
+
+  /** a short metallic tick at time t */
+  _tick(out, t, freq, gain) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator(); o.type = 'triangle'; o.frequency.value = freq;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.002); g.gain.exponentialRampToValueAtTime(0.0005, t + 0.05);
+    o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.07);
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = freq * 2.71;
+    const g2 = ctx.createGain(); g2.gain.setValueAtTime(0, t); g2.gain.linearRampToValueAtTime(gain * 0.4, t + 0.002); g2.gain.exponentialRampToValueAtTime(0.0005, t + 0.09);
+    o2.connect(g2); g2.connect(out); o2.start(t); o2.stop(t + 0.1);
+  }
+
+  /** a soft deep thump (a magnetic end stop, a latch seating) at time t */
+  _thump(out, t, freq, gain) {
+    const ctx = this.ctx;
+    const o = ctx.createOscillator(); o.type = 'sine';
+    o.frequency.setValueAtTime(freq * 1.8, t); o.frequency.exponentialRampToValueAtTime(freq * 0.55, t + 0.16);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + 0.006); g.gain.exponentialRampToValueAtTime(0.0008, t + 0.26);
+    o.connect(g); g.connect(out); o.start(t); o.stop(t + 0.3);
+    this._burstAt(out, t, { dur: 0.08, freq: 600, q: 0.8, gain: gain * 0.25, type: 'white', filter: 'lowpass' });
+  }
+
+  /** gas through a seal at time t */
+  _hiss(out, t, dur, freq, gain) { this._burstAt(out, t, { dur, freq, q: 0.6, gain, type: 'pink', filter: 'highpass', attack: 0.01, sweep: 0.7 }); }
+
+  /** a filtered noise burst into a given output, at time t */
+  _burstAt(out, t, { dur = 0.2, freq = 1000, q = 1, gain = 0.3, type = 'white', filter = 'bandpass', attack = 0.002, sweep = 0 } = {}) {
+    const ctx = this.ctx;
+    const s = ctx.createBufferSource(); s.buffer = this[type];
+    const f = ctx.createBiquadFilter(); f.type = filter; f.frequency.setValueAtTime(freq, t); f.Q.value = q;
+    if (sweep) f.frequency.exponentialRampToValueAtTime(Math.max(40, freq * sweep), t + dur);
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(gain, t + attack); g.gain.exponentialRampToValueAtTime(0.0008, t + Math.max(attack + 0.01, dur));
+    s.connect(f); f.connect(g); g.connect(out);
+    s.start(t, Math.random() * 2, dur + 0.1);
   }
 
   denied(pos) {
@@ -282,27 +421,51 @@ export class AudioEngine {
   }
 
   // ---------------------------------------------------------------- alarm
-  alarm(on, kind = 'master') {
+  /**
+   * a ship's siren on / off. kind 'b29': B-29's master alarm (a hard square-wave yelp); 'h8': H8's
+   * own (a sharper two-tone warble). Each sounds through the air where Kaito is (the cabin bus: in
+   * thin air it is muffled, in vacuum it is gone); the caller decides who can hear which.
+   */
+  alarm(on, kind = 'b29') {
     if (!this.ready) return;
-    if (!on) { if (this._alarm) { this._alarm.stop(); this._alarm = null; } return; }
-    if (this._alarm) return;
+    this._alarms = this._alarms || {};
+    const cur = this._alarms[kind];
+    if (!on) { if (cur) { cur.stop(); delete this._alarms[kind]; } return; }
+    if (cur) return;
     const ctx = this.ctx;
     const g = ctx.createGain(); g.gain.value = 0.0;
-    const o1 = ctx.createOscillator(); o1.type = 'square';
-    const o2 = ctx.createOscillator(); o2.type = 'sawtooth';
-    const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 1.6;
-    const lfoG = ctx.createGain(); lfoG.gain.value = 260;
-    o1.frequency.value = 760; o2.frequency.value = 762;
-    lfo.connect(lfoG); lfoG.connect(o1.frequency); lfoG.connect(o2.frequency);
+    const nodes = [];
     const ws = ctx.createWaveShaper();
     const curve = new Float32Array(256); for (let i = 0; i < 256; i++) { const x = i / 128 - 1; curve[i] = Math.tanh(x * 3); }
     ws.curve = curve;
-    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1200; bp.Q.value = 0.7;
-    o1.connect(ws); o2.connect(ws); ws.connect(bp); bp.connect(g); g.connect(this.direct);
+    const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+    if (kind === 'h8') {
+      // two tones swapping five times a second, a little ring on each
+      const o1 = ctx.createOscillator(); o1.type = 'triangle'; o1.frequency.value = 880;
+      const o2 = ctx.createOscillator(); o2.type = 'square'; o2.frequency.value = 1320;
+      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 2.6;
+      const lfoG = ctx.createGain(); lfoG.gain.value = 220;
+      lfo.connect(lfoG); lfoG.connect(o1.frequency); lfoG.connect(o2.frequency);
+      const mix2 = ctx.createGain(); mix2.gain.value = 0.35;
+      o1.connect(ws); o2.connect(mix2); mix2.connect(ws);
+      bp.frequency.value = 1500; bp.Q.value = 0.9;
+      nodes.push(o1, o2, lfo);
+    } else {
+      const o1 = ctx.createOscillator(); o1.type = 'square';
+      const o2 = ctx.createOscillator(); o2.type = 'sawtooth';
+      const lfo = ctx.createOscillator(); lfo.type = 'square'; lfo.frequency.value = 1.6;
+      const lfoG = ctx.createGain(); lfoG.gain.value = 260;
+      o1.frequency.value = 760; o2.frequency.value = 762;
+      lfo.connect(lfoG); lfoG.connect(o1.frequency); lfoG.connect(o2.frequency);
+      o1.connect(ws); o2.connect(ws);
+      bp.frequency.value = 1200; bp.Q.value = 0.7;
+      nodes.push(o1, o2, lfo);
+    }
+    ws.connect(bp); bp.connect(g); g.connect(this.cabin);
     const t = ctx.currentTime;
-    g.gain.setTargetAtTime(0.16, t, 0.05);
-    o1.start(); o2.start(); lfo.start();
-    this._alarm = { stop: () => { g.gain.setTargetAtTime(0, ctx.currentTime, 0.05); setTimeout(() => { o1.stop(); o2.stop(); lfo.stop(); }, 400); } };
+    g.gain.setTargetAtTime(kind === 'h8' ? 0.13 : 0.16, t, 0.05);
+    for (const n of nodes) n.start();
+    this._alarms[kind] = { stop: () => { g.gain.setTargetAtTime(0, ctx.currentTime, 0.05); setTimeout(() => { for (const n of nodes) { try { n.stop(); } catch (e) { /* stopped */ } } }, 400); } };
   }
 
   // ---------------------------------------------------------------- music (5G radio)
@@ -366,14 +529,23 @@ export class AudioEngine {
     if (rate <= 0) return;
     if (this._hbNext && now < this._hbNext) return;
     this._hbNext = now + 60 / rate;
-    this.beep(48, 0.12, 0.35, { direct: true });
-    this.beep(42, 0.1, 0.25, { direct: true, when: 0.22 });
+    this._bodyBeep(48, 0.12, 0.35 * (this.hbGain ?? 1), 0);
+    this._bodyBeep(42, 0.1, 0.25 * (this.hbGain ?? 1), 0.22);
+  }
+
+  _bodyBeep(freq, dur, gain, when) {
+    const ctx = this.ctx, t = ctx.currentTime + when;
+    const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = freq;
+    const g = ctx.createGain(); g.gain.setValueAtTime(0, t);
+    g.gain.linearRampToValueAtTime(gain, t + 0.006); g.gain.setValueAtTime(gain, t + dur - 0.02); g.gain.linearRampToValueAtTime(0, t + dur);
+    o.connect(g); g.connect(this.body);
+    o.start(t); o.stop(t + dur + 0.05);
   }
 
   breath(active, rate = 0.25) {
     if (!this.ready) return;
     if (!active) { this.stopLoop('breath'); return; }
-    const L = this.noiseLoop('breath', { type: 'pink', freq: 1200, q: 0.5, gain: 0.0, direct: true });
+    const L = this.noiseLoop('breath', { type: 'pink', freq: 1200, q: 0.5, gain: 0.0, bus: this.body });
     const t = this.ctx.currentTime;
     const ph = (t * rate) % 1;
     L.gain.gain.setTargetAtTime(ph < 0.4 ? 0.07 * Math.sin(ph / 0.4 * Math.PI) : 0.02, t, 0.08);

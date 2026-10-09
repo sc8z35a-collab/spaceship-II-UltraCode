@@ -42,17 +42,23 @@ import { springVec, springQuat } from './core/spring.js';
 import { setFineVisible } from './ship/geom.js';
 import { shipUniforms } from './ship/materials.js';
 import { setSkyQuality } from './world/atmosphere.js';
-import { HULL, halfWidthAt, heightRangeAt, OPENINGS, CANOPY } from './ship/hullShape.js';
+import { HULL, halfWidthAt, heightRangeAt, OPENINGS } from './ship/hullShape.js';
+import { B29Display } from './ship/b29Display.js';
+import { Suits } from './suit/suits.js';
 import { glassUniforms } from './ship/glass.js';
 import { StatusLine } from './ui/statusLine.js';
 import { ExtMarkers } from './ui/extMarkers.js';
 import { Photos } from './ui/photos.js';
+import { EscapePods } from './world/escapePods.js';
+import { PlumeHeat } from './fx/plumeHeat.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
 const FAR_SURFACE = { h: 0, water: false };
 
 const _hjQ = new THREE.Quaternion(), _hjE = new THREE.Euler(), _hjM = new THREE.Matrix4();
+
+const _qHead = new THREE.Quaternion();
 
 export class Game {
   constructor(engine, earth, params) {
@@ -62,6 +68,9 @@ export class Game {
     this.time = START_TIME;
     this.camWorld = new THREE.Vector3();
     this.camQuat = new THREE.Quaternion();
+    // the outside's view: the head's (camQuat) — or, through H8's zoom, the cameras' stabilised
+    // gimbal following it (what the magnified picture and the marks over it are drawn with)
+    this.viewQuat = new THREE.Quaternion();
     this.running = false;
     this.mode = 'walk';         // walk | pilot | seated | camera | dead
     this.extCam = 0;
@@ -153,7 +162,18 @@ export class Game {
     this.combat = new Combat(this);
     if (!this.params.has('noDrones')) this.drones = new Drones(this, this.combat);
     this.weapons = new Weapons(this, this.combat);
+    // the stations' escape pods (their bays, the pods in flight, breaking into one)
+    this.pods = new EscapePods(this);
+    // engine flames burn what is in them and dazzle the cameras near them
+    this.plumeHeat = new PlumeHeat(this);
     this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
+    this.suits = new Suits(this);
+    if (this.machines.suitApi) this.suits.setRack('b29', this.machines.suitApi, this.machines.suitPivot, this.machines.suitIdle);
+    if (this.h8 && this.h8.shelter && this.h8.shelter.suitRack) this.h8.shelter.suitRack(this.suits);
+    // the cockpit's big screen: every material of B-29's learns to drop what lies behind it
+    this.b29Display = new B29Display(this);
+    this.b29Display.init();
     P(0.6);
     // graphics quality chosen earlier in this browser (the engine already started at its resolution)
     if (QUALITY.level !== 'high') this.applyQuality(QUALITY.level);
@@ -246,19 +266,25 @@ export class Game {
     this.lastInput = inp;
     const pl = this.player;
     const dead = pl.state === 'dead';
+    // (out cold — vacuum on the skin, no air — he does nothing at all)
+    const limp = dead || !!(this.gameplay && this.gameplay.unconscious);
     // ---- mode routing
     let flightIn = null;
     // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
-    const focused = !!(F && !F.out);
-    if (!dead && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
+    const focused = !!(F && !F.out) || !!this.cine;
+    if (!limp && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
     this.lastFlightIn = flightIn;
-    if (!dead) {
-      if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
+    // flying a stolen escape pod from H8's seat: the sticks are the pod's, H8 holds as it is
+    const remote = !!(this.pods && this.pods.remote);
+    if (remote) { this.pods.remoteInput(limp ? null : flightIn, limp ? null : inp); flightIn = null; }
+    if (!limp) {
+      if (inp.pressed['b-exit']) { if (remote) this.pods.release(); else if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
+      if (inp.pressed['b-cam-prev']) this.extCam--;
       if (this.mode === 'camera' && !focused) {
         // drag in the middle / top of the screen: look round with the external camera
         // (more sensitive than it was: a short drag swings the view a long way round)
@@ -266,8 +292,13 @@ export class Game {
         L.zoom = Math.max(0.25, Math.min(6, (L.zoom || 1) * Math.pow(inp.pinch || 1, 1.6)));
         L.yaw -= inp.lookDX * 0.011;
         L.pitch = Math.max(-1.5, Math.min(1.5, L.pitch - inp.lookDY * 0.011));
-        // a double tap puts it back
+        // a tap on something out there: focus on it (twice: go there); a double tap anywhere
+        // else puts the view back
         for (const tap of inp.taps) {
+          // (the viewfinder's strip of cameras along the bottom: a tap picks one)
+          const ci = this.extMarkers ? this.extMarkers.stripAt(tap) : -1;
+          if (ci >= 0) { this.extCam = ci; L.lastTap = 0; continue; }
+          if (this.h8 && this.h8.hudTap(tap)) { L.lastTap = 0; continue; }
           const now = performance.now();
           if (now - L.lastTap < 380) { L.yaw = 0; L.pitch = 0; L.zoom = 1; L.lastTap = 0; } else L.lastTap = now;
         }
@@ -297,8 +328,9 @@ export class Game {
     this.damage.update(sdt);
     this.asteroids.update(sdt, dt);
     if (this.drones) this.drones.update(sdt);
-    if (this.weapons) this.weapons.update(sdt, dead ? null : inp);
+    if (this.weapons) this.weapons.update(sdt, limp || remote ? null : inp);
     if (this.combat) this.combat.update(sdt);
+    if (this.pods) this.pods.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
     let env, gPl = this.gLocal;
@@ -310,16 +342,24 @@ export class Game {
       env = this.systems.playerEnv();
       this.docking.envFor(env, pl);
     }
+    // out in a suit: its own thrusters and boosters fly him
+    env.suit = this.suits && pl.suit ? this.suits : null;
     let lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
+    if (limp && !dead) lookInp = Object.assign({}, lookInp, { lookDX: 0, lookDY: 0, moveX: 0, moveY: 0, up: 0, rx: 0, ry: 0 });
+    // (out in space in a suit he keeps his own motion: the frame is worked out round him)
+    if (this.suits) this.suits.preStep(pl, sdt);
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
+    if (this.suits) this.suits.afterMove(pl);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
+    if (this.suits) this.suits.update(sdt, Math.min(dt, 0.1));
     // ---- taps
-    if (this.h8 && !dead) this.h8.hudHolds(inp.holds);
+    if (this.h8 && !limp) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
-      if (this.mode === 'camera' || dead) continue;
+      if (remote) { this.pods.remoteTap(tap); continue; }
+      if (this.mode === 'camera' || limp || this.cine) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
       // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
       if (this.h8 && this.h8.hudTap(tap)) continue;
@@ -337,8 +377,8 @@ export class Game {
 
   /**
    * B-29's cabin (rooms, machines, loose things, doors: most of the ship's triangles) is drawn only
-   * when it can be seen: from inside the hull, or from in front of a window, the canopy or an open
-   * hatch / port not too far off. Otherwise the outer panes show a dim inside of their own.
+   * when it can be seen: from inside the hull, or from in front of a window or an open hatch / port
+   * not too far off. Otherwise the outer panes show a dim inside of their own.
    */
   updateCabinVisibility() {
     const S = this.shipVis;
@@ -354,7 +394,6 @@ export class Game {
     this._cabInside = vis;
     if (!vis) {
       const d = this._cabD || (this._cabD = new THREE.Vector3());
-      if (d.copy(c).sub(CANOPY.P0).dot(CANOPY.N) > -0.1 && d.lengthSq() < 26 * 26) vis = true;
       for (const o of OPENINGS) {
         if (vis) break;
         if (o.kind === 'hatch' && !(this.hatch && this.hatch.open > 0.01)) continue;
@@ -374,7 +413,7 @@ export class Game {
 
   /**
    * LOW II, the eye in B-29's cabin: what lies outside (the Earth, the sky, stations...) shows only
-   * through the windows, the canopy, a hatch or a breach, so the far and middle passes are drawn
+   * through the windows, the cockpit's screen, a hatch or a breach, so the far and middle passes are drawn
    * only inside the box on the picture those cover (with none in view, not at all). They used to be
    * shaded over the whole picture and then painted over by the cabin.
    */
@@ -415,8 +454,8 @@ export class Game {
     };
     const A = this._frA || (this._frA = { a: new THREE.Vector3(), b: new THREE.Vector3(), n: new THREE.Vector3(), c: new THREE.Vector3() });
     for (const o of OPENINGS) box(o.center, A.a.copy(o.u).multiplyScalar(o.halfW + 0.06), A.b.copy(o.v).multiplyScalar(o.halfH + 0.06), A.n.copy(o.normal).multiplyScalar(0.62));
-    // the canopy
-    box(A.c.set(0, 0.35, -11.65), A.a.set(3.35, 0, 0), A.b.set(0, 2.98, 0), A.n.set(0, 0, 2.4));
+    // the cockpit's big screen (the outside shows through it)
+    box(A.c.set(0, 1.12, -10.95), A.a.set(1.2, 0, 0), A.b.set(0, 0.92, 0), A.n.set(0, 0, 0.62));
     // breaches in the hull
     const BR = shipUniforms.uBreach.value;
     for (let i = 0; i < BR.length; i++) {
@@ -610,6 +649,8 @@ export class Game {
         const P = this.focusPose(F, eyeLocal, viewQ, dt);
         if (P) { eyeLocal = P.pos; viewQ = P.q; }
       }
+      // a suit going on or coming off: the eye follows the climb in (or out)
+      if (this.cine) { const P = this.cine.pose(); if (P) { eyeLocal = P.pos; viewQ = P.q; } }
     }
     // shake
     const sh = this.shake;
@@ -620,15 +661,32 @@ export class Game {
       // jolt moves the magnified picture only as far as it moves the head, and a followed target
       // is held by the stabiliser)
       let k = this.focus ? 1 - (this.focus.amt || 0) : 1;
-      if (this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat) { const Z = this.h8.zoom; k *= Z.follow ? 0 : 1 / Math.max(1, Z.z); }
+      // (through H8's zoom the jolt shakes the cockpit; the cameras' picture is stabilised)
       shakeQ.setFromEuler(new THREE.Euler(Math.sin(t * 47) * sh * 0.02 * k, Math.sin(t * 39 + 1) * sh * 0.02 * k, Math.sin(t * 31 + 2) * sh * 0.03 * k));
       this.shake *= Math.exp(-dt * 2.2);
     }
     this.camWorld.copy(eyeLocal).applyQuaternion(frameQ).add(frameP);
     this.camQuat.copy(frameQ).multiply(viewQ).multiply(shakeQ);
+    // flying a stolen escape pod: the view is its cabin camera's (Kaito is still in H8's seat)
+    const podCam = this.pods && this.pods.remote ? this.pods.remoteCamera(this._podCam || (this._podCam = {})) : null;
+    if (podCam) { this.camWorld.copy(podCam.pos).sub(this.origin); this.camQuat.copy(podCam.quat); }
+    // H8's zoom: the magnified picture is the outside cameras', on their stabilised gimbal — it
+    // follows the head smoothly, the slower the further in it is zoomed (auto-follow holds it on
+    // the target exactly), and no jolt shakes it; the cockpit is seen with the head as it is
+    const Zm = this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat && this.mode !== 'camera' && !this.debugCam && !podCam ? this.h8.zoom : null;
+    const zoomed = !!(Zm && Zm.z > 1.02);
+    if (zoomed) {
+      const head = _qHead.copy(frameQ).multiply(viewQ);
+      if (this._gimbal && !Zm.follow) this.viewQuat.slerp(head, 1 - Math.exp(-16 / (1 + 1.1 * Math.log10(Zm.z)) * dt));
+      else this.viewQuat.copy(head);
+    } else this.viewQuat.copy(this.camQuat);
+    this._gimbal = zoomed;
     this.updateCabinVisibility();
+    if (this.b29Display) this.b29Display.update(dt);
+    // the suit seen from outside (another camera looking at him out on a walk)
+    if (this.suits) this.suits.updateAvatar(dt, this.mode === 'camera' || !!this.debugCam || !!podCam);
     const cam = this.engine.camera;
-    cam.matrix.compose(this.camWorld, this.camQuat, new THREE.Vector3(1, 1, 1));
+    cam.matrix.compose(this.camWorld, this.viewQuat, new THREE.Vector3(1, 1, 1));
     // world
     const origin = this.origin;
     this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
@@ -640,10 +698,15 @@ export class Game {
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     if (this.combat) this.combat.updateVisual(dt, origin, this.camWorld);
     if (this.drones) this.drones.updateVisual(dt, origin, this.camWorld);
-    const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
+    const eyePF = this.debugCam || wreck || podCam || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
+    if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
+    // the engines' flames and what is in them: worked out here, with every vessel and every plume
+    // where it is drawn this frame (during the step the plumes are still where they were drawn the
+    // frame before — at orbital speed a hundred metres behind the ships carrying them)
+    if (this.plumeHeat && this.running) this.plumeHeat.update(dt * this.timeScale);
     if (this.extMarkers) this.extMarkers.update();
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());

@@ -7,6 +7,8 @@ import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js
 import { LIFT, ENG_HATCH } from './interior.js';
 import { DECK_Y, LOWER_Y, Z_REACTOR_BULK } from './hullShape.js';
 import { setLayersDeep, LAYER_NEAR } from '../core/layers.js';
+import { buildSuit } from '../suit/suitModel.js';
+import { SUITS } from '../suit/suitSystem.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
@@ -198,13 +200,17 @@ export class Machines {
     const railsUp = L.moving || Math.abs(L.y - L.top) > 0.02;
     for (const r of L.rails) r.rotation.x += ((railsUp ? 0 : -Math.PI / 2 + 0.05) - r.rotation.x) * Math.min(1, dt * 4);
     const gateUp = Math.abs(L.y - L.top) > 0.03;
+    // (the gates swing on a servo; the platform's brakes let go and bite)
+    if (L.gateWas !== undefined && gateUp !== L.gateWas) g.audio.mech(L.plat.position.clone().add(V(0, 0.6, 0)), 'servo', { open: !gateUp, dur: 0.5 });
+    L.gateWas = gateUp;
+    if (L.moving && !L.drive) { L.drive = true; g.audio.mech(L.plat.position.clone(), 'latch', { open: true }); }
     for (const gt of L.gates) gt.rotation.x += ((gateUp ? 0 : Math.PI / 2 - 0.05) - gt.rotation.x) * Math.min(1, dt * 3);
     if (L.moving) {
       const ready = L.rails.every((r) => Math.abs(r.rotation.x) < 0.1);
       if (ready) {
         const d = L.target - L.y;
         const sp = L.speed * (0.4 + 0.6 * health) * Math.min(1, 0.25 + Math.min(Math.abs(d), Math.abs(L.y - (d > 0 ? L.bottom : L.top))) * 3);
-        if (Math.abs(d) < sp * dt) { L.y = L.target; L.moving = false; g.audio.beep(990, 0.12, 0.1, { pos: L.plat.position.clone() }); g.audio.stopLoop('lift'); }
+        if (Math.abs(d) < sp * dt) { L.y = L.target; L.moving = false; L.drive = false; g.audio.mech(L.plat.position.clone(), 'latch', { open: false }); g.audio.beep(990, 0.12, 0.1, { pos: L.plat.position.clone(), when: 0.15 }); g.audio.stopLoop('lift'); }
         else { L.y += Math.sign(d) * sp * dt; if (health < 0.5 && Math.random() < dt * 2) L.y -= Math.sign(d) * 0.01; }
         g.audio.humLoop('lift', { pos: L.plat.position.clone(), freq: 95, gain: 0.05 });
         g.audio.setLoopPos('lift', L.plat.position.clone().add(V(0, -1, 0)));
@@ -404,6 +410,9 @@ export class Machines {
   updateShower(dt) {
     const s = this.shower, g = this.g;
     if (!s.door) return;
+    // (the glass door slides round on its track)
+    if (s.doorWas !== undefined && s.on !== s.doorWas) g.audio.mech(s.door.position.clone(), 'door', { open: !s.on, dur: 0.7, pitch: 1.35, gain: 0.7 });
+    s.doorWas = s.on;
     s.door.rotation.y += ((s.on ? 0 : Math.PI * 0.8) - s.door.rotation.y) * Math.min(1, dt * 3);
     // standing under the running water: steam and drops on the eyes (read by the crew effects)
     const pp = g.player.pos;
@@ -588,94 +597,39 @@ export class Machines {
   }
 
   // ------------------------------------------------------------------ EVA suit on its rack
+  /**
+   * B-29's suit (civilian, mid grade) standing on its rack: a turntable in the deck (the suit turns
+   * its back to the wearer to be climbed into), the charging and oxygen umbilical on a post behind
+   * it, a status lamp. The suit itself is the shared model (suitModel.js).
+   */
   buildSuit() {
     const g = this.g, M = this.M;
     const p = g.layout.spots.suit;
     if (!p) return;
-    // EVA suit hanging on its rack (local front = -z): hard upper torso, bearings at every joint,
-    // bellows knees, gloves, boots, life-support backpack with umbilicals, helmet with gold visor
+    const feet = V(p.x, 0.02, p.z + 0.06);
+    // the rack: a turntable disc with a bright rim, a post with the umbilical reel and the lamp
     const SB = new Builder();
-    const cloth = M.suit ? 'suit' : 'plasticW', hard = 'plasticW', dark = 'plasticK', metal = 'steel';
-    const key = (mat) => (typeof mat === 'string' ? mat : Object.keys(M).find((k) => M[k] === mat));
-    const add = (geo, mat, pos, rot, scl) => {
-      const m4 = new THREE.Matrix4().compose(pos ? V(...pos) : V(0, 0, 0), new THREE.Quaternion().setFromEuler(new THREE.Euler(...(rot || [0, 0, 0]))), scl ? V(...scl) : V(1, 1, 1));
-      SB.add(geo.applyMatrix4(m4), key(mat));
-      return { rotation: { set: () => {} } };
-    };
-    const limb = (a, b, r, mat) => {
-      const A = V(...a), B = V(...b), d = B.clone().sub(A), len = d.length();
-      const m4 = new THREE.Matrix4().compose(A.clone().lerp(B, 0.5), new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize()), V(1, 1, 1));
-      SB.add(new THREE.CapsuleGeometry(r, Math.max(0.001, len - 2 * r * 0.4), 6, 14).applyMatrix4(m4), key(mat));
-    };
-    const ring = (pos, axis, R, r, mat = metal) => {
-      const m4 = new THREE.Matrix4().compose(V(...pos), new THREE.Quaternion().setFromUnitVectors(V(0, 0, 1), V(...axis).normalize()), V(1, 1, 1));
-      SB.add(new THREE.TorusGeometry(R, r, 8, 24).applyMatrix4(m4), key(mat));
-    };
-    // torso + hips
-    add(new THREE.CapsuleGeometry(0.2, 0.24, 8, 20), hard, [0, 0.38, 0], null, [1.22, 1, 0.86]);
-    add(new THREE.CapsuleGeometry(0.17, 0.08, 6, 18), cloth, [0, 0.04, 0], null, [1.12, 1, 0.9]);
-    ring([0, 0.15, 0], [0, 1, 0], 0.19, 0.018);                       // waist bearing
-    // chest control module with knobs and a little lit display
-    add(new RoundedBoxGeometry(0.26, 0.13, 0.08, 3, 0.02), M.panel, [0, 0.42, -0.2]);
-    add(new THREE.BoxGeometry(0.07, 0.035, 0.005), M.ledGreen, [-0.06, 0.45, -0.243]);
-    for (const [x, key] of [[0.05, 'plasticR'], [0.09, 'plasticY'], [0.02, 'plasticK']]) add(new THREE.CylinderGeometry(0.013, 0.013, 0.02, 12), M[key], [x, 0.4, -0.245], [Math.PI / 2, 0, 0]);
-    // umbilicals from the backpack to the chest module
-    for (const [s2, key] of [[-1, 'pipeBlue'], [1, 'pipeRed']]) {
-      const pts = [V(s2 * 0.2, 0.55, 0.2), V(s2 * 0.27, 0.48, 0.0), V(s2 * 0.2, 0.38, -0.18), V(s2 * 0.1, 0.4, -0.22)];
-      add(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(pts), 20, 0.014, 8), M[key]);
-    }
-    // neck ring + helmet: white shell, clear bubble, gold sun visor, lights
-    ring([0, 0.64, 0], [0, 1, 0], 0.125, 0.024);
-    add(new THREE.SphereGeometry(0.16, 28, 20, 0, Math.PI * 2, 0, Math.PI * 0.62), hard, [0, 0.8, 0.02]);
-    add(new THREE.SphereGeometry(0.152, 28, 18, Math.PI * 0.62, Math.PI * 0.76, Math.PI * 0.22, Math.PI * 0.5), 'visorGold', [0, 0.8, -0.005]);
-    add(new THREE.TorusGeometry(0.155, 0.012, 8, 32, Math.PI * 0.9), hard, [0, 0.8, -0.005], [Math.PI / 2 - 0.25, 0, 0]);
-    for (const s2 of [-1, 1]) {
-      add(new THREE.CylinderGeometry(0.022, 0.026, 0.07, 12), dark, [s2 * 0.15, 0.86, -0.04], [Math.PI / 2, 0, 0]);
-      add(new THREE.CircleGeometry(0.018, 12), M.lampCool, [s2 * 0.15, 0.86, -0.076], [0, Math.PI, 0]);
-    }
-    // arms: shoulder / elbow / wrist bearings, gloves with a thumb
-    for (const s2 of [-1, 1]) {
-      const sh = [s2 * 0.29, 0.54, 0], el = [s2 * 0.34, 0.25, -0.03], wr = [s2 * 0.33, 0.0, -0.06];
-      ring(sh, [1, -0.2, 0], 0.085, 0.016);
-      limb(sh, el, 0.07, cloth);
-      ring(el, [0.1, 1, 0.1], 0.066, 0.012);
-      limb(el, wr, 0.062, cloth);
-      ring(wr, [0, 1, 0.2], 0.058, 0.016);
-      add(new RoundedBoxGeometry(0.065, 0.12, 0.09, 3, 0.025), dark, [s2 * 0.33, -0.08, -0.07]);
-      limb([s2 * 0.3, -0.06, -0.1], [s2 * 0.29, -0.11, -0.12], 0.016, dark);
-      add(new THREE.CylinderGeometry(0.064, 0.06, 0.05, 14), M.plasticR, [s2 * 0.335, 0.11, -0.045], [0.1, 0, 0]);   // cuff checklist band
-    }
-    // legs: hip bearing, bellows knee, boots with treads
-    for (const s2 of [-1, 1]) {
-      const hp = [s2 * 0.11, -0.04, 0], kn = [s2 * 0.12, -0.42, -0.02], an = [s2 * 0.12, -0.76, 0.0];
-      ring(hp, [0, 1, 0], 0.09, 0.016);
-      limb(hp, kn, 0.088, cloth);
-      for (let k = -1; k <= 1; k++) ring([kn[0], kn[1] + k * 0.028, kn[2]], [0, 1, 0.05], 0.084, 0.012, cloth);
-      limb(kn, an, 0.078, cloth);
-      add(new THREE.CylinderGeometry(0.081, 0.081, 0.03, 16), M.plasticR, [s2 * 0.12, -0.3, -0.01]);   // commander stripe
-      add(new RoundedBoxGeometry(0.13, 0.12, 0.27, 3, 0.04), hard, [s2 * 0.12, -0.83, -0.04]);
-      add(new RoundedBoxGeometry(0.14, 0.03, 0.28, 2, 0.01), dark, [s2 * 0.12, -0.9, -0.04]);
-    }
-    // life-support backpack: vents, antenna, oxygen bottles
-    add(new RoundedBoxGeometry(0.46, 0.62, 0.22, 4, 0.06), hard, [0, 0.4, 0.29]);
-    for (let k = 0; k < 5; k++) add(new THREE.BoxGeometry(0.3, 0.012, 0.01), dark, [0, 0.2 + k * 0.035, 0.405]);
-    for (const s2 of [-1, 1]) add(new THREE.CylinderGeometry(0.04, 0.04, 0.4, 14), metal, [s2 * 0.19, 0.42, 0.37]);
-    add(new THREE.CylinderGeometry(0.006, 0.004, 0.28, 6), metal, [0.16, 0.85, 0.32]);
-    add(new THREE.SphereGeometry(0.012, 8, 6), M.ledRed, [0.16, 0.99, 0.32]);
-    // patch + name tag
-    add(new THREE.PlaneGeometry(0.09, 0.06), M.decal, [0.255, 0.44, -0.05], [0, Math.PI / 2 + 0.25, 0]);
-    add(new THREE.PlaneGeometry(0.11, 0.035), M.labels, [-0.11, 0.53, -0.215], [0, Math.PI, 0]);
-    // hanger through the shoulders up to the rack
-    add(new THREE.CylinderGeometry(0.012, 0.012, 0.66, 8), metal, [0, 0.6, 0.1], [0, 0, Math.PI / 2]);
-    add(new THREE.CylinderGeometry(0.01, 0.01, 0.3, 8), metal, [0, 0.76, 0.12]);
-    const suit = SB.build(M);
-    suit.position.copy(p);
-    suit.rotation.y = Math.PI;
-    suit.matrixAutoUpdate = true;
-    suit.traverse((o) => { o.matrixAutoUpdate = true; });
-    this.root.add(suit);
-    this.suitModel = suit;
-    g.interact.addSphere(p.clone().add(V(0, 0.3, 0)), 0.5, () => g.systems.suitTapped(), { maxDist: 2.2 });
+    SB.cyl(0.36, 0.38, 0.04, 'metalDark', [feet.x, 0.02, feet.z], null, 40);
+    SB.torus(0.37, 0.008, 'ledBlue', [feet.x, 0.042, feet.z], [Math.PI / 2, 0, 0], 48);
+    SB.box(0.08, 1.9, 0.08, 'metalDark', [feet.x, 0.95, feet.z - 0.42], null, 0.01);
+    SB.box(0.26, 0.34, 0.08, 'panelDark', [feet.x, 1.25, feet.z - 0.38], null, 0.02);
+    SB.cyl(0.07, 0.07, 0.1, 'plasticY', [feet.x, 1.25, feet.z - 0.32], [Math.PI / 2, 0, 0], 16);
+    SB.box(0.18, 0.05, 0.012, 'ledGreen', [feet.x, 1.48, feet.z - 0.335], null, 0);
+    const rack = SB.build(M);
+    this.root.add(rack);
+    // the suit on its turntable (facing the room, +z)
+    const pivot = new THREE.Group();
+    pivot.position.copy(feet);
+    this.root.add(pivot);
+    const api = buildSuit(SUITS.b29, { wearer: false });
+    pivot.add(api.root);
+    api.root.traverse((o) => { if (o.isMesh) o.layers.set(LAYER_NEAR); });
+    this.suitApi = api;
+    this.suitPivot = pivot;
+    this.suitIdle = Math.PI;
+    pivot.rotation.y = Math.PI;
+    this.suitModel = api.root;
+    g.interact.addSphere(feet.clone().add(V(0, 1.1, 0)), 0.55, () => g.systems.suitTapped(), { maxDist: 2.2 });
   }
 
   // ------------------------------------------------------------------ engineering floor hatch
@@ -711,7 +665,7 @@ export class Machines {
     this.root.add(rails);
     this.engHatch = { hinge, open: 0, target: 0, col, w, d, rails };
     g.engHatch = this.engHatch;
-    g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0.05, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; g.audio.click(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2)); }, { maxDist: 2.2 });
+    g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0.05, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; g.audio.mech(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, 0, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 'hatch', { open: !!this.engHatch.target, dur: 0.8, pitch: 1.25 }); }, { maxDist: 2.2 });
     g.interact.addSphere(V((ENG_HATCH.x0 + ENG_HATCH.x1) / 2, -0.4, (ENG_HATCH.z0 + ENG_HATCH.z1) / 2), 0.4, () => { this.engHatch.target = this.engHatch.target ? 0 : 1; }, { maxDist: 2.2 });
   }
 
@@ -781,6 +735,7 @@ export class Machines {
       h.rails.position.y = h.railY;
     }
     // suit model visible only when not worn
-    if (this.suitModel) this.suitModel.visible = !g.player.suit;
+    // (on its rack unless worn — or going on / coming off, when the sequence shows it)
+    if (this.suitModel && !(g.suits && g.suits.seq && g.suits.seq.kind === 'b29')) this.suitModel.visible = !(g.player.suit && !g.player.suitH8);
   }
 }

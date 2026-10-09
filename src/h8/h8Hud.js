@@ -14,6 +14,7 @@
 import * as THREE from 'three';
 import { fmtDist } from './h8Display.js';
 import { STATUS_JP } from '../world/worldDamage.js';
+import { HACK_FOCUS, HACK_RANGE, HACK_STAGES, HACK_TIME } from '../world/escapePods.js';
 
 const FONT = '"Hiragino Sans","Noto Sans JP",sans-serif';
 const MONO = '"SF Mono","Menlo","Consolas",monospace';
@@ -118,6 +119,7 @@ export class H8Hud {
     if (c.kind === 'b29') return out.copy(g.flight.quat);
     if (c.kind === 'drone' && c.ref && c.ref.q) return out.copy(c.ref.q);
     if (c.kind === 'h8' && g.h8) return out.copy(g.h8.flight.quat);
+    if (c.kind === 'pod' && c.ref) return out.copy(c.ref.q);
     return out.identity();
   }
 
@@ -129,6 +131,12 @@ export class H8Hud {
     if (c.kind === 'drone' && g.drones && g.drones.templates) {
       if (this._droneBox === undefined) this._droneBox = localBox(g.drones.templates.lo);
       return this._droneBox;
+    }
+    if (c.kind === 'pod' && c.ref) {
+      // (its hull: nose dome to the bell; a gun's turret on its back)
+      const P = c.ref, k = P.grade + (P.armed ? 'A' : '');
+      const B = this._podBox || (this._podBox = {});
+      return B[k] || (B[k] = new THREE.Box3(new THREE.Vector3(-P.G.R, -P.G.R, -P.G.len / 2), new THREE.Vector3(P.G.R, P.G.R * (P.armed ? 1.35 : 1.02), P.G.len / 2 + P.G.R * 0.5)));
     }
     return null;
   }
@@ -153,6 +161,10 @@ export class H8Hud {
       return { k: 1 - integ, text: `損傷 ${Math.round((1 - integ) * 100)}%` };
     }
     if (c.kind === 'drone' && c.ref) return { k: 1 - c.ref.hp, text: `損傷 ${Math.round((1 - c.ref.hp) * 100)}%${c.ref.state === 'evade' ? '  後退中' : ''}` };
+    if (c.kind === 'pod' && c.ref) {
+      const P = c.ref, k = 1 - Math.max(0, P.hp) / P.G.hp;
+      return { k, text: `損傷 ${Math.round(k * 100)}%  最大 ${P.G.vMax} m/s` };
+    }
     if (c.kind === 'rock' && c.ref) {
       const a = c.ref, hp0 = Math.pow(a.radius / 0.5, 3) * 0.6;
       const k = a.hp !== undefined ? 1 - Math.max(0, a.hp) / hp0 : 0;
@@ -170,6 +182,7 @@ export class H8Hud {
    */
   frame(dt, cands, orbit, show, live) {
     const g = this.g, v = this.v, cv = this.cv, ctx = this.ctx;
+    this.lastCands = cands;
     // ---- the locks follow what is still tracked
     const byId = new Map(cands.map((c) => [c.id, c]));
     this.locks = this.locks.filter((l) => { const c = byId.get(l.id); if (!c) return false; l.c = c; return true; });
@@ -182,6 +195,10 @@ export class H8Hud {
       if (t) this.primaryId = t.id;
     }
     this.pulse = Math.max(0, this.pulse - dt * 3);
+    // how long the focus has been the focus, watched (an escape pod can be broken into after a while)
+    if (this.primaryId !== this._primId) { this._primId = this.primaryId; this.primT = 0; }
+    else if (show) this.primT = (this.primT || 0) + dt;
+    this.hackBtn = null; this.hackAbort = null;
     if (!cv || !ctx) return;
     if (!show) {
       if (this.on) { ctx.clearRect(0, 0, cv.width, cv.height); cv.style.display = 'none'; this.on = false; }
@@ -198,9 +215,10 @@ export class H8Hud {
     ctx.clearRect(0, 0, W, H);
     // ---- this frame's view: the magnified one (the outside) and the plain one (the tabs)
     const cam = g.engine.camera, origin = g.origin;
-    _view.compose(g.camWorld, g.camQuat, ONE).invert();
+    // (the outside through the cameras' gimbal; the tabs on the glass with the head)
+    _view.compose(g.camWorld, g.viewQuat || g.camQuat, ONE).invert();
     _vp.multiplyMatrices(cam.projectionMatrix, _view);
-    _vpUi.multiplyMatrices(g.engine.uiProjection(_proj), _view);
+    _vpUi.multiplyMatrices(g.engine.uiProjection(_proj), _m.compose(g.camWorld, g.camQuat, ONE).invert());
     const tanH = Math.tan(cam.fov * Math.PI / 360);
     const rootInv = _m.copy(v.root.matrixWorld).invert();
     const eyeL = _v2.copy(g.camWorld).applyMatrix4(rootInv).clone();
@@ -214,7 +232,7 @@ export class H8Hud {
     };
     // where on the display a thing is seen: dead there, or under a tab?
     const dirL = new THREE.Vector3();
-    const hidden = (p) => {
+    const hidden = v.hudCam ? () => null : (p) => {
       dirL.set(p.x - origin.x, p.y - origin.y, p.z - origin.z).applyMatrix4(rootInv).sub(eyeL).normalize();
       const P = _v.copy(eyeL).addScaledVector(dirL, D.surface(eyeL, dirL));
       if (D.deadAt(dirL, P)) return 'dead';
@@ -242,14 +260,17 @@ export class H8Hud {
       }
     }
     const isPrim = best && best.id === this.primaryId;
-    if (best && !isPrim) {
+    // (while H8's computer is breaking into a pod the focus stays on it: nothing passing through the
+    // frame takes it over)
+    const hacking = !!(g.pods && g.pods.hack);
+    if (best && !isPrim && !hacking) {
       if (this.dwell.id !== best.id) { this.dwell.id = best.id; this.dwell.t = 0; }
       this.dwell.t += dt;
       if (this.dwell.t >= DWELL) { this.lock(best, true); this.dwell.t = 0; this.dwell.id = null; }
     } else { this.dwell.id = null; this.dwell.t = 0; }
     const dk = this.dwell.id ? Math.min(1, this.dwell.t / DWELL) : 0;
     this.dwellK += (dk - this.dwellK) * Math.min(1, dt * (dk > this.dwellK ? 30 : 10));
-    _fwd.set(0, 0, -1).applyQuaternion(g.camQuat).multiplyScalar(1e4).add(g.camWorld).add(origin);
+    _fwd.set(0, 0, -1).applyQuaternion(g.viewQuat || g.camQuat).multiplyScalar(1e4).add(g.camWorld).add(origin);
     if (hidden(_fwd) !== 'dead') {
       this.drawFocusFrame(ctx, fx0, fy0, fx1, fy1, this.dwellK, this.pulse, best && this.dwell.id ? best : null);
     }
@@ -320,6 +341,63 @@ export class H8Hud {
       if (l.t < 0.8 && Math.floor(l.t * 8) % 2 === 0) { ctx.font = `700 11px ${MONO}`; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText('LOCK', x0, y0 - 3); }
       ctx.globalAlpha = 1;
     }
+    // ---- breaking into an escape pod: H8's computer at work
+    const P = g.pods;
+    if (P && P.hack) this.drawHackPanel(ctx, P.hack, W, H);
+    ctx.restore();
+  }
+
+  /** the intrusion's terminal (bottom right): the layers it works through, its chatter, the bar */
+  drawHackPanel(ctx, Hk, W, H) {
+    const t = performance.now() / 1000;
+    const S = Math.min(W, H);
+    const pw = Math.min(400, Math.max(300, W * 0.34)), ph = 236;
+    const m = S * 0.05;
+    const x = W - m - pw, y = Math.max(m + 60, H - m - 44 - ph);
+    const green = 'rgba(120,255,170,0.96)', gdim = 'rgba(120,255,170,0.55)';
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,10,6,0.82)'; ctx.strokeStyle = green; ctx.lineWidth = 1.2;
+    ctx.beginPath(); ctx.rect(x, y, pw, ph); ctx.fill(); ctx.stroke();
+    ctx.fillStyle = green; ctx.fillRect(x, y, pw, 22);
+    ctx.fillStyle = '#021006'; ctx.font = `700 12px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+    ctx.fillText('HACHI 侵入端末', x + 8, y + 11);
+    ctx.textAlign = 'right'; ctx.font = `700 11px ${MONO}`;
+    ctx.fillText(`→ ${Hk.pod.label}`, x + pw - 8, y + 11);
+    // the layers
+    ctx.textAlign = 'left';
+    const k = Math.min(1, Hk.t / Hk.dur);
+    for (let i = 0; i < HACK_STAGES.length; i++) {
+      const yy = y + 36 + i * 17;
+      const done = i < Hk.stage, now = i === Hk.stage;
+      ctx.font = `${now ? 700 : 500} 11.5px ${FONT}`;
+      ctx.fillStyle = done ? green : now ? 'rgba(255,230,140,0.98)' : gdim;
+      ctx.fillText(`${done ? '✔' : now ? (Math.floor(t * 6) % 2 ? '▶' : '▷') : '·'} ${String(i + 1).padStart(2, '0')} ${HACK_STAGES[i]}`, x + 10, yy);
+      if (now) {
+        const sk = Math.min(1, (k * HACK_STAGES.length) - i);
+        const bx = x + pw - 120;
+        ctx.fillStyle = 'rgba(120,255,170,0.15)'; ctx.fillRect(bx, yy - 3, 100, 6);
+        ctx.fillStyle = 'rgba(255,230,140,0.95)'; ctx.fillRect(bx, yy - 3, 100 * sk, 6);
+      }
+    }
+    // the chatter
+    ctx.font = `500 10.5px ${MONO}`;
+    const lines = Hk.lines.slice(-6);
+    lines.forEach((s, i) => {
+      ctx.fillStyle = s.startsWith('==') ? 'rgba(255,230,140,0.95)' : `rgba(120,255,170,${0.35 + 0.6 * (i + 1) / lines.length})`;
+      ctx.fillText(`> ${s}`, x + 10, y + 112 + i * 14);
+    });
+    if (Math.floor(t * 3) % 2) { ctx.fillStyle = green; ctx.fillRect(x + 10, y + 112 + lines.length * 14 - 5, 7, 11); }
+    // the whole of it
+    const by = y + ph - 22;
+    ctx.fillStyle = 'rgba(120,255,170,0.15)'; ctx.fillRect(x + 10, by - 4, pw - 100, 8);
+    ctx.fillStyle = green; ctx.fillRect(x + 10, by - 4, (pw - 100) * k, 8);
+    ctx.font = `700 11px ${MONO}`; ctx.fillText(`${Math.round(k * 100)}%`, x + pw - 84, by);
+    // abort
+    const ax0 = x + pw - 52, ay0 = by - 13, ax1 = x + pw - 8, ay1 = by + 13;
+    ctx.strokeStyle = 'rgba(255,120,90,0.95)'; ctx.strokeRect(ax0, ay0, ax1 - ax0, ay1 - ay0);
+    ctx.fillStyle = 'rgba(255,120,90,0.95)'; ctx.font = `700 11px ${FONT}`; ctx.textAlign = 'center';
+    ctx.fillText('中止', (ax0 + ax1) / 2, by);
+    this.hackAbort = { x0: ax0 - 6, y0: ay0 - 8, x1: ax1 + 6, y1: ay1 + 8 };
     ctx.restore();
   }
 
@@ -435,6 +513,24 @@ export class H8Hud {
         lines.push({ t: `命中見込み  25mm ${f(p1)}  レール ${f(p2)}`, c: C.cyan });
       } else if (c.dist > 30000) lines.push({ t: '射程外（30 km 超）', c: C.dim });
     }
+    // an escape pod: how near H8's computer is to being able to break into it
+    let hs = null;
+    const PD = this.g.pods;
+    if (c.kind === 'pod' && c.ref && PD) {
+      hs = PD.hackState(c.ref);
+      if (PD.hack && PD.hack.pod === c.ref) { lines.push({ t: `侵入中… ${HACK_STAGES[PD.hack.stage]}`, c: C.green }); hs = null; }
+      else if (hs.ok) {
+        lines.push({ t: 'ハッキング可能', c: C.green });
+        if (!c.ref.saidReady) {
+          c.ref.saidReady = true;
+          this.v.say('hachi_hack_ready', { n: c.ref.label }, { minGap: 4 });
+          const A = this.g.audio;
+          if (A.beep) { A.beep(1200, 0.05, 0.04, { direct: true, type: 'square' }); A.beep(1800, 0.08, 0.04, { direct: true, type: 'square', when: 0.08 }); }
+        }
+      }
+      else if (hs.far) lines.push({ t: `侵入するには ${fmtDist(HACK_RANGE)} 以内へ`, c: C.dim, small: true });
+      else if (!hs.busy && hs.ready) lines.push({ t: `侵入準備 ${Math.min(HACK_FOCUS, hs.focus).toFixed(1)} / ${HACK_FOCUS} 秒`, c: C.cyan, bar: 1 - Math.min(1, hs.focus / HACK_FOCUS) });
+    }
     lines.push({ t: l.aim ? '照準：指定点（枠内をタップで変更）' : '照準：中心（枠内をタップで指定）', c: l.aim ? C.amber : C.dim, small: true });
     ctx.font = `600 12px ${FONT}`;
     let w = ctx.measureText(`◆ ${c.name}`).width + 24;
@@ -461,13 +557,42 @@ export class H8Hud {
       }
       yy += lh;
     }
+    // the way in: a button under the card once it can be tried
+    if (hs && hs.ok) {
+      const bh = 40, bx0 = x, by0 = Math.min(H - bh - 6, y + h + 6), bw = Math.max(w, 170);
+      const t = performance.now() / 1000, glow = 0.55 + 0.45 * Math.sin(t * 5);
+      ctx.fillStyle = `rgba(10,40,22,${0.75 + 0.15 * glow})`; ctx.strokeStyle = C.green; ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.rect(bx0, by0, bw, bh); ctx.fill(); ctx.stroke();
+      ctx.fillStyle = C.green; ctx.font = `700 14px ${FONT}`; ctx.textAlign = 'center';
+      ctx.fillText('▶ ハッキング開始', bx0 + bw / 2, by0 + bh / 2);
+      ctx.font = `500 10px ${MONO}`; ctx.textAlign = 'right'; ctx.fillStyle = 'rgba(120,255,170,0.6)';
+      ctx.fillText(`${c.ref.G.name}  ${HACK_TIME[c.ref.grade]} 秒`, bx0 + bw - 6, by0 + bh - 7);
+      this.hackBtn = { x0: bx0, y0: by0, x1: bx0 + bw, y1: by0 + bh, pod: c.ref };
+    }
   }
 
   // ------------------------------------------------------------------ touch
   /** a tap on the view (client px): true if a lock's box took it */
   tap(px, py) {
+    // breaking into an escape pod: its button under the card, the terminal's abort
+    const PD = this.g.pods;
+    const inR = (r) => r && px >= r.x0 && px <= r.x1 && py >= r.y0 && py <= r.y1;
+    if (PD && inR(this.hackAbort)) { PD.cancelHack('中止した'); return true; }
+    if (PD && inR(this.hackBtn)) { PD.startHack(this.hackBtn.pod); return true; }
     const b = this.boxAt(px, py);
-    if (!b) { this.lastTap = null; return false; }
+    if (!b) {
+      // a tap on something seen but not locked yet: focus on it (twice quickly: and go there)
+      const c = this.candAt(px, py);
+      if (!c || !this.lock(c, true)) { this.lastTap = null; return false; }
+      this.setPrimary(c.id);
+      const now = performance.now();
+      const dbl = this.lastTap && this.lastTap.id === c.id && now - this.lastTap.t < DOUBLE;
+      this.lastTap = dbl ? null : { id: c.id, t: now };
+      const A = this.g.audio;
+      A.beep && A.beep(1500, 0.035, 0.04, { direct: true });
+      if (dbl) { A.beep && A.beep(2200, 0.06, 0.05, { direct: true, when: 0.07 }); this.v.goTo && this.v.goTo(c); }
+      return true;
+    }
     const now = performance.now();
     const l = b.l;
     const dbl = this.lastTap && this.lastTap.id === l.id && now - this.lastTap.t < DOUBLE;
@@ -495,6 +620,22 @@ export class H8Hud {
     for (const id of [...this.held]) if (!live.has(id)) this.held.delete(id);
   }
 
+  /** the tracked thing (not locked yet) seen nearest a tap, within a fingertip of it */
+  candAt(px, py) {
+    if (!this.W) return null;
+    const o = this.g.origin, v4 = new THREE.Vector4();
+    let best = null, bd = 34;
+    for (const c of this.lastCands || []) {
+      if (c.locked || c.kind === 'body' || !c.pos) continue;
+      v4.set(c.pos.x - o.x, c.pos.y - o.y, c.pos.z - o.z, 1).applyMatrix4(_vp);
+      if (v4.w <= 1e-6) continue;
+      const x = (v4.x / v4.w * 0.5 + 0.5) * this.W, y = (0.5 - v4.y / v4.w * 0.5) * this.H;
+      const d = Math.hypot(x - px, y - py);
+      if (d < bd) { bd = d; best = c; }
+    }
+    return best;
+  }
+
   boxAt(px, py) {
     const pad = 12;
     let best = null;
@@ -511,7 +652,7 @@ export class H8Hud {
   setAim(l, px, py) {
     const g = this.g, cam = g.engine.camera, c = l.c;
     const ndc = new THREE.Vector3(px / this.W * 2 - 1, -(py / this.H) * 2 + 1, 0.5);
-    const dir = ndc.applyMatrix4(_m.copy(cam.projectionMatrix).invert()).normalize().applyQuaternion(g.camQuat);
+    const dir = ndc.applyMatrix4(_m.copy(cam.projectionMatrix).invert()).normalize().applyQuaternion(g.viewQuat || g.camQuat);
     const eye = g.camWorld.clone().add(g.origin);
     const q = this.quatOf(c, _q), qi = _q2.copy(q).invert();
     const o = eye.sub(c.pos).applyQuaternion(qi), d = dir.applyQuaternion(qi);

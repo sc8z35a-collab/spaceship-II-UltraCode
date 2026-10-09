@@ -71,14 +71,36 @@ html, body {
   background: radial-gradient(circle at 40% 35%, rgba(255, 255, 255, 0.55), rgba(190, 210, 255, 0.18));
   box-shadow: 0 0 2vh rgba(140, 180, 255, 0.35);
 }
-.btn-col { position: absolute; right: calc(2.2vw + env(safe-area-inset-right, 0px)); top: 50%; transform: translateY(-50%); display: flex; flex-direction: column; gap: 3vh; }
-.btn-row { position: absolute; left: calc(2vw + env(safe-area-inset-left, 0px)); top: calc(3vh + env(safe-area-inset-top, 0px)); display: flex; gap: 2vw; }
-#cam-ui { position: absolute; right: calc(2vw + env(safe-area-inset-right, 0px)); top: calc(3vh + env(safe-area-inset-top, 0px)); }
+/* the controls live in the four corners, small, out of the picture's way:
+   top left — leave / camera / put down; top right — the cameras' own (previous, next, photo);
+   bottom left — H8's zoom and shutter; bottom right — the guns, or up / down on foot */
+.btn-col { position: absolute; right: calc(1.8vh + env(safe-area-inset-right, 0px)); bottom: calc(2vh + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: column; gap: 1.3vh; }
+.btn-row { position: absolute; left: calc(1.6vh + env(safe-area-inset-left, 0px)); top: calc(1.6vh + env(safe-area-inset-top, 0px)); display: flex; gap: 1.1vh; }
+#cam-ui { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); top: calc(1.6vh + env(safe-area-inset-top, 0px)); display: flex; gap: 1.1vh; }
 /* weapons (pilot seat of B-29 or H8) */
 #hud-tgt { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
-#btns-wpn { position: absolute; right: calc(2.2vw + env(safe-area-inset-right, 0px)); top: 12vh; display: flex; flex-direction: column; align-items: center; gap: 1.5vh; }
+/* (a quarter round the fire button in the corner) */
+#btns-wpn { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); bottom: calc(1.6vh + env(safe-area-inset-bottom, 0px)); width: 27vh; height: 21vh; }
+#btns-wpn .hbtn { position: absolute; }
+#b-rail { right: 11.6vh; bottom: 3vh; }
+#b-auto { right: 19.6vh; bottom: 3vh; }
+#b-msl { right: 10.6vh; bottom: 12vh; }
+#b-tgt { right: 2vh; bottom: 13.4vh; }
+/* a label under a button, a count on its shoulder */
+.hbtn.lbl { position: relative; }
+.hbtn .bl {
+  position: absolute; left: 50%; top: 100%; transform: translate(-50%, 0.25vh); white-space: nowrap; pointer-events: none;
+  font: 600 clamp(8px, 1.6vh, 11px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; letter-spacing: 0.02em;
+  color: rgba(225, 236, 255, 0.88); text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 0 1px rgba(0, 0, 0, 1);
+}
+.hbtn .bn {
+  position: absolute; right: -0.7vh; top: -0.7vh; min-width: 2.7vh; height: 2.7vh; padding: 0 0.55vh; box-sizing: border-box; pointer-events: none;
+  border-radius: 1.35vh; background: rgba(230, 90, 60, 0.92); color: #fff; text-align: center;
+  font: 700 clamp(9px, 1.75vh, 11px)/2.7vh -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+#b-msl { border-color: rgba(255, 150, 110, 0.55); }
 #btns-wpn .hbtn.dim { opacity: 0.32; }
-#b-fire { width: 12vh; height: 12vh; padding: 2.4vh; border-color: rgba(255, 120, 90, 0.55); background: rgba(60, 14, 10, 0.45); }
+#b-fire { right: 0; bottom: 0; width: 10vh; height: 10vh; padding: 2vh; border-color: rgba(255, 120, 90, 0.55); background: rgba(60, 14, 10, 0.45); }
 #b-fire.on { background: rgba(255, 90, 60, 0.5); }
 #b-fire svg { fill: rgba(255, 210, 200, 0.9); }
 #b-auto.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
@@ -86,30 +108,30 @@ html, body {
 #hud-zoom, #hud-suit, #hud-ext, #hud-h8 { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
 /* the speed / where-to line, always in view (small, top centre) */
 #hud-info {
-  position: absolute; left: 50%; transform: translateX(-50%); top: calc(1.1vh + env(safe-area-inset-top, 0px));
-  max-width: 56vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
-  padding: 0.35em 0.9em; border-radius: 999px; pointer-events: none; display: none;
-  font: 500 clamp(10px, 2.7vh, 14px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; letter-spacing: 0.03em;
+  position: absolute; left: 50%; transform: translateX(-50%); top: calc(0.9vh + env(safe-area-inset-top, 0px));
+  max-width: 48vw; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  padding: 0.3em 0.8em; border-radius: 999px; pointer-events: none; display: none;
+  font: 500 clamp(9px, 2.1vh, 12px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; letter-spacing: 0.03em;
   color: rgba(225, 238, 255, 0.92); background: rgba(6, 12, 22, 0.42); border: 1px solid rgba(160, 200, 255, 0.18);
   text-shadow: 0 0 4px rgba(0, 0, 0, 0.8);
 }
 /* H8's camera controls: big zoom buttons, the shutter, the zoom ring along the bottom */
-#btns-zoom { position: absolute; left: calc(2.2vw + env(safe-area-inset-left, 0px)); top: 13vh; display: flex; flex-direction: column; align-items: center; gap: 1.6vh; }
-#btns-zoom .zbtn { width: 10.5vh; height: 10.5vh; padding: 2.3vh; }
+#btns-zoom { position: absolute; left: calc(1.6vh + env(safe-area-inset-left, 0px)); bottom: calc(1.8vh + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: row; align-items: flex-end; gap: 1.1vh; }
+#btns-zoom .zbtn { width: 6.6vh; height: 6.6vh; padding: 1.4vh; }
 #b-zfol.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
-#b-zshot { width: 12.5vh; height: 12.5vh; padding: 1.6vh; border: 2.5px solid rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.12); }
+#b-zshot { width: 9vh; height: 9vh; padding: 1.2vh; border: 2.5px solid rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.12); }
 #b-zshot svg { fill: rgba(255, 255, 255, 0.92); }
 #b-zshot.on, #b-zshot:active { background: rgba(255, 255, 255, 0.45); }
 #zoom-ring {
   position: absolute; left: 50%; transform: translateX(-50%); bottom: calc(1.6vh + env(safe-area-inset-bottom, 0px));
-  width: 38vw; height: 7.5vh; border-radius: 1.2vh; pointer-events: auto; touch-action: none; overflow: hidden;
+  width: 30vw; height: 5.6vh; border-radius: 1vh; pointer-events: auto; touch-action: none; overflow: hidden;
   border: 1.5px solid rgba(220, 230, 255, 0.3); background: rgba(10, 16, 28, 0.5);
 }
 #zoom-ring.on { border-color: rgba(160, 225, 255, 0.75); background: rgba(30, 50, 80, 0.55); }
 #zoom-ring .zr-ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, rgba(220, 230, 255, 0.35) 0 2px, transparent 2px 1.2vh); -webkit-mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
 #zoom-ring .zr-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 600 clamp(9px, 2.2vh, 12px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: rgba(230, 240, 255, 0.85); text-shadow: 0 0 4px #000; pointer-events: none; }
 /* photographs: the toast after a shot, the gallery */
-#photo-toast { position: absolute; right: calc(2vw + env(safe-area-inset-right, 0px)); top: calc(12vh + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 1vh; padding: 0.8vh; border-radius: 1vh; background: rgba(6, 12, 22, 0.75); border: 1px solid rgba(160, 200, 255, 0.3); opacity: 0; transform: translateY(-1vh); transition: opacity 0.25s, transform 0.25s; pointer-events: none; }
+#photo-toast { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); top: calc(9.6vh + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 1vh; padding: 0.8vh; border-radius: 1vh; background: rgba(6, 12, 22, 0.75); border: 1px solid rgba(160, 200, 255, 0.3); opacity: 0; transform: translateY(-1vh); transition: opacity 0.25s, transform 0.25s; pointer-events: none; }
 #photo-toast.on { opacity: 1; transform: none; }
 #photo-toast img { height: 9vh; border-radius: 0.6vh; }
 #photo-toast span { font: 600 clamp(10px, 2.3vh, 13px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; white-space: nowrap; }
@@ -128,16 +150,66 @@ html, body {
 #photo-gallery .pg-btn { font: 600 clamp(12px, 2.8vh, 15px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; background: rgba(40, 60, 95, 0.6); border: 1px solid rgba(160, 200, 255, 0.4); border-radius: 999px; padding: 1vh 2.6vh; }
 #photo-gallery .pg-btn.danger { background: rgba(110, 30, 25, 0.6); border-color: rgba(255, 120, 100, 0.5); }
 .hbtn {
-  pointer-events: auto; width: 9vh; height: 9vh; border-radius: 50%; padding: 1.9vh;
+  pointer-events: auto; width: 7vh; height: 7vh; border-radius: 50%; padding: 1.5vh;
   border: 1.5px solid rgba(220, 230, 255, 0.28); background: rgba(10, 16, 28, 0.42); color: #e6ecf7;
   box-sizing: border-box;
 }
-.hbtn.small { width: 7.6vh; height: 7.6vh; padding: 1.7vh; }
+.hbtn.small { width: 6vh; height: 6vh; padding: 1.3vh; }
 .hbtn svg { width: 100%; height: 100%; fill: rgba(230, 238, 255, 0.85); }
 .hbtn:active, .hbtn.on { background: rgba(110, 150, 230, 0.35); }
 #hold-ring {
-  position: absolute; width: 9vh; height: 9vh; margin: -4.5vh 0 0 -4.5vh; border-radius: 50%; opacity: 0;
+  position: absolute; width: 7vh; height: 7vh; margin: -3.5vh 0 0 -3.5vh; border-radius: 50%; opacity: 0;
   background: conic-gradient(rgba(190, 220, 255, 0.85) var(--p, 0%), rgba(255, 255, 255, 0.08) 0);
   -webkit-mask: radial-gradient(circle, transparent 58%, #000 60%); mask: radial-gradient(circle, transparent 58%, #000 60%);
 }
 #hold-ring.on { opacity: 1; }
+
+/* the missile button's question when the focus is out of range */
+#msl-ask {
+  display: none; position: absolute; left: 50%; top: 22vh; transform: translateX(-50%); z-index: 30; pointer-events: auto;
+  padding: 1.6vh 2.2vh; border-radius: 1.4vh; background: rgba(28, 8, 6, 0.86); border: 1.5px solid rgba(255, 120, 90, 0.6);
+  font: 600 clamp(11px, 2.6vh, 15px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #ffe2da; text-align: center;
+  box-shadow: 0 0 3vh rgba(0, 0, 0, 0.5);
+}
+#msl-ask .ma-b { display: flex; gap: 1.4vh; margin-top: 1.4vh; justify-content: center; }
+#msl-ask button {
+  font: 600 clamp(11px, 2.4vh, 14px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #fff;
+  background: rgba(150, 40, 25, 0.75); border: 1px solid rgba(255, 150, 120, 0.6); border-radius: 999px; padding: 1vh 2vh;
+}
+#msl-ask button[data-k="no"] { background: rgba(40, 48, 64, 0.8); border-color: rgba(170, 190, 220, 0.45); }
+
+/* ---------- the suit's visor display ---------- */
+#visor { display: none; position: absolute; inset: 0; z-index: 12; pointer-events: none; }
+#visor.on { display: block; }
+#visor canvas { position: absolute; inset: 0; width: 100%; height: 100%; }
+#visor .vz-bar {
+  position: absolute; left: 50%; bottom: 3.2vh; transform: translateX(-50%); display: flex; gap: 1vh; pointer-events: auto;
+}
+#visor.busy .vz-bar, #visor.busy .vz-cam, #visor.busy .vz-call { display: none; }
+#visor button {
+  font: 600 clamp(10px, 2.1vh, 13px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #eaf4ff;
+  background: rgba(20, 40, 64, 0.45); border: 1px solid rgba(150, 210, 255, 0.45); border-radius: 999px; padding: 0.9vh 1.7vh;
+  backdrop-filter: blur(2px); -webkit-backdrop-filter: blur(2px);
+}
+#visor button:active { background: rgba(110, 170, 240, 0.45); }
+#visor button.red { background: rgba(130, 30, 20, 0.55); border-color: rgba(255, 140, 110, 0.6); }
+#visor button.dim { background: rgba(40, 46, 58, 0.6); border-color: rgba(170, 190, 220, 0.35); }
+#visor .vz-bar button:nth-child(1), #visor .vz-bar button:nth-child(6) { transform: translateY(-1.4vh) rotate(var(--r, 0deg)); }
+#visor .vz-bar button:nth-child(1) { --r: -6deg; }
+#visor .vz-bar button:nth-child(6) { --r: 6deg; }
+#visor .vz-bar button:nth-child(2) { transform: translateY(-0.4vh) rotate(-3deg); }
+#visor .vz-bar button:nth-child(5) { transform: translateY(-0.4vh) rotate(3deg); }
+#visor .vz-call {
+  display: none; position: absolute; left: 50%; top: 30vh; transform: translateX(-50%); pointer-events: auto;
+  flex-direction: column; gap: 1.2vh; padding: 1.8vh 2.4vh; border-radius: 1.6vh; background: rgba(40, 10, 8, 0.6); border: 1.5px solid rgba(255, 130, 100, 0.55);
+}
+#visor.calling .vz-call { display: flex; }
+#visor .vz-call .vz-t { font: 700 clamp(11px, 2.4vh, 15px) -apple-system, "Hiragino Sans", sans-serif; color: #ffd9cf; text-align: center; }
+#visor .vz-cam { display: none; position: absolute; right: 3vh; top: 18vh; bottom: 16vh; width: 9vh; pointer-events: auto; flex-direction: column; align-items: center; gap: 1.2vh; }
+#visor.cam .vz-cam { display: flex; }
+#visor.cam .vz-bar { display: none; }
+#visor .vz-slider { position: relative; flex: 1; width: 1.2vh; border-radius: 1vh; background: rgba(150, 210, 255, 0.25); touch-action: none; }
+#visor .vz-knob { position: absolute; left: 50%; width: 4.4vh; height: 2.4vh; margin: 0 0 -1.2vh -2.2vh; border-radius: 1.2vh; background: rgba(230, 245, 255, 0.85); }
+#visor button.shoot { width: 8vh; height: 8vh; border-radius: 50%; padding: 0; background: rgba(255, 255, 255, 0.75); border: 0.6vh solid rgba(255, 255, 255, 0.35); }
+#visor .vz-hatch { display: none; position: absolute; left: 50%; top: 58vh; transform: translateX(-50%); pointer-events: auto; font-size: clamp(12px, 2.8vh, 16px) !important; padding: 1.4vh 3vh !important; background: rgba(30, 110, 60, 0.55) !important; border-color: rgba(140, 255, 170, 0.6) !important; }
+#visor.hatch .vz-hatch { display: block; }
