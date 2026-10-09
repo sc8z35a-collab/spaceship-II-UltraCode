@@ -844,11 +844,34 @@ export function setGlobeTexture(lobby, tex) {
 }
 
 /** the module's outer shell for the station model (station-local, centred on the module axis) */
-export function lobbyShellExterior(b, cx, cy, cz) {
+export function lobbyShellExterior(b, cx, cy, cz, sky = false) {
   const { R: RR, z0, z1 } = LOBBY;
   const L = z1 - z0;
   const Ro = RR + 0.35;
-  b.cyl(Ro, Ro, L + 0.6, 'hull', [cx, cy, cz], [Math.PI / 2, 0, 0], 64, true);
+  {
+    // the skin, with the mouth of B-29's docking tunnel left open (the orange collar rings it) and,
+    // at Shirasagi, the skybridge's (its glass roof joins there)
+    const nT = 160, nZ = 80, za = -(L + 0.6) / 2, zb = (L + 0.6) / 2, P = [], N = [], U = [];
+    const hole = (th, z) => {
+      const y = Ro * Math.sin(th);
+      if (Math.cos(th) < -0.8 && Math.hypot(z - 0.95, y + 1.03) < 1.28) return true;
+      return sky && Math.cos(th) > 0.85 && z > 1.88 && z < 4.72 && y > -2.2 && y < 0.92;
+    };
+    const q = (t, z) => [cx + Ro * Math.cos(t), cy + Ro * Math.sin(t), cz + z];
+    for (let i = 0; i < nT; i++) for (let j = 0; j < nZ; j++) {
+      const ta = i / nT * Math.PI * 2, tb = (i + 1) / nT * Math.PI * 2, z0 = za + (zb - za) * j / nZ, z1 = za + (zb - za) * (j + 1) / nZ;
+      if (hole((ta + tb) / 2, (z0 + z1) / 2)) continue;
+      const A = q(ta, z0), B = q(tb, z0), C = q(tb, z1), D = q(ta, z1);
+      const na = [Math.cos(ta), Math.sin(ta), 0], nb = [Math.cos(tb), Math.sin(tb), 0];
+      const u0 = ta / (Math.PI * 2), u1 = tb / (Math.PI * 2), v0 = (z0 - za) / (zb - za), v1 = (z1 - za) / (zb - za);
+      for (const [p, n, u, v] of [[A, na, u0, v0], [B, nb, u1, v0], [C, nb, u1, v1], [A, na, u0, v0], [C, nb, u1, v1], [D, na, u0, v1]]) { P.push(...p); N.push(...n); U.push(u, v); }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+    b.add(g, 'hull', [0, 0, 0], [0, 0, 0]);
+  }
   for (const s of [-1, 1]) {
     b.cyl(Ro, Ro * 0.86, 0.9, 'hullDark', [cx, cy, cz + s * (L / 2 + 0.75)], [Math.PI / 2, 0, 0], 64);
     b.sphere(Ro * 0.86, 'hull', [cx, cy, cz + s * (L / 2 + 1.2)], 48, [1, 1, 0.32]);

@@ -648,13 +648,20 @@ export class Suits {
     if (this.rescuer.heldAt(E.p, E.v)) {
       E.fresh = false;
       this.throttle = 0;
+      // (the tug moves on later in the frame, after him: hold him where its arm will be)
+      E.p.addScaledVector(E.v, dt);
       pl.vel.copy(this.toLocal(F, E.p, _e1)).sub(pl.pos).divideScalar(Math.max(1e-4, dt));
       return false;
     }
     const want = _e1.set(0, 0, 0).addScaledVector(camF, input.moveY || 0).addScaledVector(camR, input.moveX || 0).addScaledVector(camU, input.up || 0);
     const asked = Math.min(1, want.length());
     // (against the vessel: the speed of its frame where he is — its slow turn adds next to nothing)
-    const rel = _e2.copy(E.v).sub(F.vel);
+    // (B-29 on its way to him: the suit holds its own course, not the ship's, or the ship could
+    // never close on it; once B-29 is here it matches the ship again for the boarding)
+    const coming = !!(this.rescuer && this.rescuer.approaching && this.rescuer.approaching());
+    if (coming && !this.holdRef) this.holdRef = E.v.clone();
+    else if (!coming) this.holdRef = null;
+    const rel = _e2.copy(E.v).sub(this.holdRef || F.vel);
     const a = _e3.set(0, 0, 0);
     let thrusting = false;
     this.throttle = 0;

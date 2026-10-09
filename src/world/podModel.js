@@ -357,6 +357,12 @@ export function buildPod(grade, armed, level, label, station) {
         if (!c.person) {
           // (as tall as the cabin allows over that seat: the liner's height there, the head's room)
           c.person = buildPerson(randomLook(c.seed, 'pod'));
+          // (the cabin has no lamp: the screens' and strips' glow on them)
+          c.person.root.traverse((o) => {
+            if (!o.isMesh) return;
+            const lit = (m) => { if (!m || !m.emissive) return m; const q = m.clone(); q.emissive.copy(q.color).multiplyScalar(0.32); q.emissiveIntensity = 1; return q; };
+            o.material = Array.isArray(o.material) ? o.material.map(lit) : lit(o.material);
+          });
           const room = Math.sqrt(Math.max(0.05, Rl * Rl - c.seat.x * c.seat.x)) - c.seat.y - 0.05;
           const k = Math.min(c.person.k, room / 0.86);
           c.person.root.scale.setScalar(k);

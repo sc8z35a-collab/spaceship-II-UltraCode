@@ -329,7 +329,7 @@ function hubModel(def, M) {
   // ---- the grand lobby (B-29's berth) and the service tube to the core under its floor
   const L = LOBBY_AT;
   const shell = new Builder();
-  lobbyShellExterior(shell, L.x, L.y, L.z);
+  lobbyShellExterior(shell, L.x, L.y, L.z, def.id === 'shirasagi');
   const RO = LOBBY.R + 0.36;
   const shellPt = (th, z) => [L.x + RO * Math.cos(th), L.y + RO * Math.sin(th), L.z + z];
   // warm window glows where the lobby has windows (same angles as inside)
@@ -343,8 +343,10 @@ function hubModel(def, M) {
   shell.torus(1.45, 0.16, 'hullOrange', [L.x - Math.sqrt(RO * RO - 1.03 * 1.03), L.y - 1.03, L.z + 0.95], [0, Math.PI / 2, 0], 32);
   // the promenade wing behind the lobby (same frame as the lobby: ship-local + DOCK_AT)
   const pe = promenadeShellExterior(shell, PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, DOCK_AT.z);
-  if (def.id === 'shirasagi') atriumExterior(shell, DOCK_AT);
+  const shellB = new Builder();
+  if (def.id === 'shirasagi') atriumExterior(shellB, DOCK_AT);
   const shellGroup = shell.build(M, { castShadow: false });
+  const bridgeShell = def.id === 'shirasagi' ? shellB.build(M, { castShadow: false }) : null;
   P.push({ type: 'cyl', a: new THREE.Vector3(L.x, L.y, L.z - 12.6), b: new THREE.Vector3(L.x, L.y, L.z + 12.6), r: RO + 0.08 });
   P.push({ type: 'cyl', a: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.za), b: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.zb + PROM.R), r: pe.Ro + 0.05 });
   {
@@ -422,6 +424,7 @@ function hubModel(def, M) {
   b.pop();
   const g = b.build(Object.assign({}, M, { nameSign: sign }), { castShadow: false });
   g.add(shellGroup);
+  if (bridgeShell) { g.add(bridgeShell); g.userData.bridgeShell = bridgeShell; }
   // Shirasagi: AKAMO's tower and berth drum, and the station grown round it (akamoBase.js)
   if (def.id === 'shirasagi') {
     const ak = buildAkamoExterior(M, DOCK_AT, { cap, sph, box });
@@ -646,6 +649,8 @@ export class Stations {
         s.model.matrixWorld.copy(s.model.matrix);
         const shell = s.model.userData.lobbyShell;
         if (shell) shell.visible = this.shellHiddenFor !== s.id;
+        const bsh = s.model.userData.bridgeShell;
+        if (bsh) bsh.visible = this.bridgeHiddenFor !== s.id;
         // the Origin: its port's cover while no ship lies in it; its robots at work up close
         const cov = s.model.userData.portCover;
         if (cov) cov.visible = this.dockedId !== s.id;

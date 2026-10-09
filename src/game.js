@@ -727,9 +727,16 @@ export class Game {
     const origin = this.origin;
     this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
     // inside the docked station's lobby its outer shell is hidden so the windows look out
-    // (from AKAMO's tower and platform the lobby's shell is seen through the windows: kept)
-    const akT = this.docking && this.docking.lobby && this.docking.lobby.terminal;
-    this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) && !(akT && akT.showsShell(eyeLocal)) ? this.docking.station.id : null;
+    // the docked station's shells are hidden from within where they would stand in front of its
+    // windows: the lobby's from the lobby and the promenade (at Shirasagi; from anywhere inside at the
+    // others), the skybridge's from the lobby, the bridge and the core. From AKAMO's tower and
+    // platform both are seen from outside, through the windows.
+    const lob = this.docking && this.docking.lobby, sid = lob && this.docking.station ? this.docking.station.id : null;
+    const inside = !!(lob && lob.contains(eyeLocal));
+    let sec = inside && lob.sectionAt ? lob.sectionAt(eyeLocal) : null;
+    if (sec === 'akamo' && !lob.terminal.showsShell(eyeLocal)) sec = 'atrium';
+    this.stations.shellHiddenFor = inside && (!lob.terminal || sec === 'lobby' || sec === 'promenade') ? sid : null;
+    this.stations.bridgeHiddenFor = inside && sec !== 'akamo' ? sid : null;
     this.stations.update(this.time, origin, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.pr);
     this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);

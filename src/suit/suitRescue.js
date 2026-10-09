@@ -219,6 +219,7 @@ export class SuitRescue {
     };
     s.kaitoEci(obj.pos, obj.vel);
     if (!ap.engageObj(obj)) { this.say('suit_b29_cant'); return; }
+    this.b29Target = obj; this.b29Ap = ap;
     this.R = { who: 'b29', t: 0, phase: 'coming', obj, dist: d, eta: 0 };
     this.say('suit_call_b29', { m: Math.round(d) });
   }
@@ -307,6 +308,12 @@ export class SuitRescue {
   }
 
   /** the craft holding him this step: his position and velocity in space, or null */
+  /** B-29's autopilot closing on him (the suit then holds its own course) */
+  approaching() {
+    const ap = this.b29Ap;
+    return !!(ap && this.b29Target && ap.target === this.b29Target && ap.state !== 'hold' && ap.state !== 'off');
+  }
+
   heldAt(p, v) {
     if (!this.hold || !this.tug) return null;
     this.tug.capture(p);

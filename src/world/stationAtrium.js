@@ -183,7 +183,7 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
   b.colCyl(rF, 0.16, [CX, floorY - 0.08, CZ]);
   b.torus(rF - 0.05, 0.04, 'gold', [CX, floorY + 0.02, CZ], [Math.PI / 2, 0, 0], 96);
   const LX0 = CX - Math.sqrt(RA * RA - (CY - bridgeY) * (CY - bridgeY)) + 0.1, LX1 = LX0 + 2.6;
-  b.box(LX1 - LX0, 0.25, 4.2, 'marble', [(LX0 + LX1) / 2, bridgeY - 0.125, BRIDGE.zc], null, 0.02);
+  b.box(LX1 - LX0, 0.253, 4.2, 'marble', [(LX0 + LX1) / 2, bridgeY - 0.1235, BRIDGE.zc], null, 0.02);     // (3 mm proud of the bridge's grate)
   b.colBox(LX1 - LX0, 0.25, 4.2, [(LX0 + LX1) / 2, bridgeY - 0.125, BRIDGE.zc]);
   // balustrade along the landing edge (glass with a brass rail), gap at the stair head
   for (const [za, zb] of [[BRIDGE.zc - 2.1, BRIDGE.zc - 0.1], [BRIDGE.zc + 1.4, BRIDGE.zc + 2.1]]) {
