@@ -5,6 +5,7 @@
 // globe, a lounge facing the big forward window, a bar with back-lit bottles and a reception desk
 // under the station's name.
 import * as THREE from 'three';
+import { buildTerminal } from './akamoTerminal.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Builder, rng } from '../ship/geom.js';
 import { OPENINGS } from '../ship/hullShape.js';
@@ -787,6 +788,7 @@ export function buildLobby(renderer, def) {
   if (core) doors.push(new StationDoor({ c: V(BRIDGE_DOOR.x, floorY, BRIDGE.zc), normal: 'x', w: BRIDGE_DOOR.w, h: BRIDGE_DOOR.h, depth: BRIDGE_DOOR.depth, label: 'bridge', link: ['lobby', 'atrium'] }, M));
   for (const d of doors) { d.group.traverse((o) => o.layers.set(LAYER_NEAR)); group.add(d.group); }
 
+  let terminal = null;      // Shirasagi: AKAMO's terminal (akamoTerminal.js)
   const inLobby = (p) => {
     if (p.x > 2.9 && p.x < TUNNEL.xEnd + 0.3 && Math.abs(p.z - TUNNEL.zc) < TUNNEL.hv + 0.05 && p.y > floorY - 0.3 && p.y < TUNNEL.yc + TUNNEL.hu + 0.05) return true;
     const dx = p.x - xc, dy = p.y - yc;
@@ -794,6 +796,7 @@ export function buildLobby(renderer, def) {
   };
   /** which air section of the station a point is in (null: not inside) */
   const sectionAt = (p) => {
+    if (terminal && terminal.contains(p)) return 'akamo';
     if (core && core.contains(p)) return p.x < BRIDGE_DOOR.x ? 'lobby' : 'atrium';
     if (prom.contains(p)) return p.z < PROM_DOOR.z ? 'lobby' : 'promenade';
     return inLobby(p) ? 'lobby' : null;
@@ -822,7 +825,14 @@ export function buildLobby(renderer, def) {
     ring.group.traverse((o) => o.layers.set(LAYER_NEAR));
     ring.terminal = { button: V(CORE.x + 1.55, CORE.y - 0.12, TERMINAL.z1 - 0.12), out: V(CORE.x, CORE.y - 0.4, TERMINAL.z1 - 1.3) };
   }
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring };
+  if (core) {
+    terminal = buildTerminal(M, lamp);
+    terminal.group.traverse((o) => o.layers.set(LAYER_NEAR));
+    group.add(terminal.group);
+    b.colliders.push(...terminal.colliders);
+    breachSpots.akamo = terminal.breachSpots;
+  }
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, update: terminal ? (dt, g) => terminal.update(dt, g) : undefined };
 }
 
 /** paint the globe with the Earth colour map once it is available */

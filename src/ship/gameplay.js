@@ -173,6 +173,9 @@ export class Gameplay {
       const lp = L.plat.position;
       if (Math.abs(p.x - lp.x) < 0.55 && Math.abs(p.z - lp.z) < 0.55 && p.y - lp.y < 1.3 && p.y - lp.y > -0.2) env.liftDelta = V(0, L.delta, 0);
     }
+    // AKAMO's lift at Shirasagi carries whoever stands in its car
+    const AT = g.docking && g.docking.lobby && g.docking.lobby.terminal;
+    if (AT && !env.liftDelta) { const d = AT.liftDelta(p); if (d) env.liftDelta = d.clone(); }
     const gMag = g.gLocal ? g.gLocal.length() : 0;
     // crouch under the deck (not in the lift shaft / floor hatch) and through the airlock hatch
     const inShaft = p.x > LIFT.x0 && p.x < LIFT.x1 && p.z > LIFT.z0 && p.z < LIFT.z1;
@@ -687,7 +690,7 @@ export class Gameplay {
   updateCrew(dt) {
     const g = this.g, pl = g.player, ls = g.lifeSupport;
     ls.zoneOfPlayer = ls.zoneAt(pl.pos);
-    ls.inStation = !!(g.docking && g.docking.contains(pl.pos));
+    ls.inStation = !!(g.docking && g.docking.contains(pl.pos)) || !!(g.akamo && g.akamo.airAt(pl.pos));
     this.herePressure = ls.pressureAt(pl.pos, pl.outside);
     const br = ls.breathing();
     let hurt = 0, blur = 0;

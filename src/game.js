@@ -727,7 +727,9 @@ export class Game {
     const origin = this.origin;
     this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
     // inside the docked station's lobby its outer shell is hidden so the windows look out
-    this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
+    // (from AKAMO's tower and platform the lobby's shell is seen through the windows: kept)
+    const akT = this.docking && this.docking.lobby && this.docking.lobby.terminal;
+    this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) && !(akT && akT.showsShell(eyeLocal)) ? this.docking.station.id : null;
     this.stations.update(this.time, origin, this.camWorld, dt);
     this.stations.setPixelScale(this.engine.pr);
     this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);

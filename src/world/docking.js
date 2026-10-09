@@ -248,6 +248,7 @@ export class Docking {
     lobby.group.updateMatrixWorld(true);
     this.cols = g.phys.addColliders(lobby.colliders);
     for (const d of lobby.doors || []) d.attach(g.phys);
+    if (lobby.terminal) lobby.terminal.attach(g);
     this.lamps = lobby.lamps;
     g.systems.lamps.push(...this.lamps);
     g.stations.dockedId = s.id;
@@ -438,7 +439,8 @@ export class Docking {
     if (!ring || this._ringDetail === on) return;
     this._ringDetail = on;
     const M = this.g.stations.M;
-    ring.traverse((o) => { if (o.isMesh && (o.material === M.gold || o.material === M.windowLit || o.material === M.strobe)) o.visible = on; });
+    const lm = this.station.lm || {};     // (each station's lit materials are its own clones)
+    ring.traverse((o) => { if (o.isMesh && (o.material === M.gold || o.material === M.windowLit || o.material === M.strobe || o.material === lm.windowLit || o.material === lm.strobe)) o.visible = on; });
   }
 
   despawn() {
@@ -451,6 +453,7 @@ export class Docking {
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
     this.cols = null;
     for (const d of this.lobby.doors || []) d.detach(g.phys);
+    if (this.lobby.terminal) this.lobby.terminal.detach(g);
     g.systems.lamps = g.systems.lamps.filter((l) => !this.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && this.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     this.lamps = [];

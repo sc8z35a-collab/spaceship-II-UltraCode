@@ -12,6 +12,7 @@
 // and take hold of a loop or a rail, brace at the launch, sway with the cabin, look out; at the
 // other end some walk out and others come in.
 import * as THREE from 'three';
+import { AK_SITE } from './akamoSite.js';
 import { AKAMO, thePlan, at as runAt, standPull } from './akamoProfile.js';
 import { buildCabin, setDoors, CABIN, ovalAt } from './akamoCabin.js';
 import { AkamoTether } from './akamoTether.js';
@@ -54,7 +55,8 @@ export class Akamo {
     this.st = null;                       // Shirasagi (found once the stations exist)
     // the bottom berth: the cabin's floor's middle, station-local (the ribbon goes up from it);
     // set by the terminal's builder (akamoTerminal.js)
-    this.baseLocal = V(0, 46, 0);
+    // the berth over Shirasagi's core (akamoSite.js: the terminal's platform is round it)
+    this.baseLocal = V(AK_SITE.berth.x, AK_SITE.berth.y, AK_SITE.berth.z).add(DOCK_AT);
     // ---- the cabin
     this.cab = buildCabin();
     this.cab.group.matrixAutoUpdate = false;
@@ -194,6 +196,14 @@ export class Akamo {
     this.setDoorCols(false);
     this.topCols = g.phys.addColliders(this.top.colliders.map((d) => Object.assign({}, d, { m: off.clone().multiply(d.m) })));
     this.colsOn = { cab: true, top: true };
+    // the same room at the bottom berth, in B-29's frame (walked into from the terminal's platform)
+    const bo = this.berthShip(new THREE.Vector3());
+    const offB = new THREE.Matrix4().makeTranslation(bo.x, bo.y, bo.z), offI = off.clone().invert();
+    const atB = (d) => Object.assign(d, { m: offB.clone().multiply(offI.clone().multiply(d.m)) });
+    this.colsB = g.phys.addColliders(C.boxes.map((x) => atB(toDesc(x))));
+    this.doorColsB = g.phys.addColliders(C.doorBoxes.map((x) => atB(toDesc(x))));
+    for (const c of [...this.colsB, ...this.doorColsB]) c.setEnabled(false);
+    this.berthOn = false;
     this.setCols(false, false);
     // the lamps' places in the physics frame
     for (const l of [...this.cabLamps, ...this.top.lamps]) { l.pos = l.local.clone().add(AK_OFF); l.base = l.intensity; }
@@ -222,6 +232,7 @@ export class Akamo {
     if (this._doorShut === shut) return;
     this._doorShut = shut;
     for (const c of this.doorCols || []) c.setEnabled(shut);
+    for (const c of this.doorColsB || []) c.setEnabled(shut && !!this.berthOn);
   }
 
   // ------------------------------------------------------------------ where things are
@@ -326,6 +337,8 @@ export class Akamo {
     if (g.ride === this.rideObj) this.updateRide(dt);
     // ---- H8 / B-29 called along (the buttons only while Kaito rides AKAMO)
     this.updatePanel(g.ride === this.rideObj);
+    // ---- the cabin's room at the bottom berth (walkable while it is in and B-29 is docked)
+    this.setBerth(this.state !== 'run' && this.end === 'bottom' && this.isDockedHere());
     // B-29 sent back to its berth: once it holds at Shirasagi, it docks again
     if (this.b29Return && g.autopilot.state === 'hold' && g.autopilot.target === this.st && g.docking.state === 'free') { this.b29Return = false; g.docking.request(); }
     // ---- the people
@@ -445,10 +458,13 @@ export class Akamo {
     if (want && !this.peopleOn) this.spawnPeople();
     if (!want && this.peopleOn && !aboard) this.clearPeople();
     if (!this.peopleOn) return;
+    this.paxFlow(dt);
     const t = this.t;
     const braced = Math.max(0, Math.min(1, (this.felt - 1.15) / 1.0));
-    for (const P of this.people) {
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const P = this.people[i];
       const p = P.pose;
+      if (P.leaving && !P.walk && this.paxUnseen(P)) { this.dropPerson(i); continue; }
       if (P.walk) {
         // walking in or out along its path
         const W = P.walk;
@@ -462,6 +478,10 @@ export class Akamo {
           P.face = Math.atan2(-d.x, -d.z);
           p.mode = 'walk'; p.speed = 1; p.phase = (p.phase || 0) + sp * dt * 5.2;
         }
+      } else if (P.out) {
+        // off the cabin, standing about on the platform (let go once nobody is looking)
+        p.mode = 'stand'; p.brace = 0; p.lean = 0; p.lookPitch = 0;
+        p.lookYaw = Math.sin(t * 0.3 + P.seed) * 0.6;
       } else {
         p.mode = P.spot.hold === 'loop' || (P.spot.hold === 'rail' && braced > 0.2) ? 'hold' : 'stand';
         p.holdY = P.spot.hold === 'loop' ? 0.95 : 0.55;
@@ -498,6 +518,103 @@ export class Akamo {
     for (const P of this.people) { P.person.root.removeFromParent(); P.person.dispose(); }
     this.people.length = 0;
     this.peopleOn = false;
+  }
+
+  // ---- passengers: off at each end, new ones on through the dwell, all settled when it goes. Their
+  // paths are in the cabin's frame, out through the nearer door, the gangway, onto the platform
+  // (the bottom) or the apex hall's floor
+  paxFlow(dt) {
+    const key = this.state === 'dwell' ? 'dwell:' + this.end : this.state;
+    if (key !== this.paxKey) {
+      const prev = this.paxKey;
+      this.paxKey = key;
+      if (this.state === 'dwell' && prev === 'run') this.paxAlight();
+      if (this.state === 'run') this.paxSettle();
+      this.paxT = 0;
+    }
+    if (this.state !== 'dwell' || this.doors < 0.95) return;
+    if (this.end === 'bottom' && !this.berthOn) return;      // (the platform is there only with B-29 in)
+    this.paxT += dt;
+    if (this.paxT < 8 || (this.countdown || 0) < 9) return;
+    this.paxNext = (this.paxNext || 0) - dt;
+    if (this.paxNext > 0) return;
+    this.paxNext = 1.4 + Math.random() * 2.6;
+    if (this.people.filter((P) => !P.out).length < 12) this.paxBoardOne();
+  }
+  paxAlight() {
+    const A = CABIN.A;
+    for (const P of this.people) {
+      if (P.out || Math.random() > 0.85) continue;
+      const sx = P.x >= 0 ? 1 : -1, side = Math.random() < 0.5 ? -1 : 1;
+      P.out = true;
+      P.walk = { i: 0, path: [V(sx * (A - 0.7), 0, Math.max(-0.4, Math.min(0.4, P.z))), V(sx * (A + 0.3), 0, 0), V(sx * (A + 1.7), 0, side * 0.5), V(sx * (A + 3.4), 0, side * (2.2 + Math.random() * 2.2))], done: (Q) => { Q.leaving = true; Q.face = Math.atan2(-sx, 0); } };
+    }
+  }
+  paxBoardOne() {
+    const free = this.spots.filter((s) => !this.people.some((P) => !P.out && P.spot === s));
+    if (!free.length) return;
+    const spot = free[Math.floor(Math.random() * free.length)];
+    const A = CABIN.A, sx = spot.p.x >= 0 ? 1 : -1, side = Math.random() < 0.5 ? -1 : 1;
+    const P = this.addPerson(spot, sx * (A + 3.6), side * (2.0 + Math.random() * 2.4), Math.atan2(sx, 0));
+    P.walk = { i: 0, path: [V(sx * (A + 1.7), 0, side * 0.3), V(sx * (A + 0.3), 0, 0), V(sx * (A - 0.8), 0, 0), spot.p.clone()], done: (Q) => { Q.face = Q.spot.face; } };
+  }
+  paxSettle() {
+    for (let i = this.people.length - 1; i >= 0; i--) {
+      const P = this.people[i];
+      if (P.out) { this.dropPerson(i); continue; }
+      if (P.walk) { P.walk = null; P.x = P.spot.p.x; P.z = P.spot.p.z; P.face = P.spot.face; }
+    }
+  }
+  /** someone who has walked off is let go once nobody is looking (or far off) */
+  paxUnseen(P) {
+    const m = this._pm || (this._pm = new THREE.Matrix4()), e = this._pe || (this._pe = new THREE.Vector3()), d = this._pd || (this._pd = new THREE.Vector3());
+    const cam = this.g.engine.camera;
+    m.copy(this.cab.group.matrixWorld).invert();
+    cam.getWorldPosition(e).applyMatrix4(m);
+    cam.getWorldDirection(d).transformDirection(m);
+    const dx = P.x - e.x, dy = 1 - e.y, dz = P.z - e.z, L = Math.hypot(dx, dy, dz);
+    return L > 16 || (dx * d.x + dy * d.y + dz * d.z) / L < 0.25;
+  }
+  addPerson(spot, x, z, face) {
+    const seed = 2000 + Math.floor(Math.random() * 1e6);
+    const person = buildPerson(randomLook(seed, 'passenger'));
+    person.root.traverse((o) => { if (o.isMesh) o.layers.set(LAYER_NEAR); });
+    this.cab.group.add(person.root);
+    const P = { person, spot, x, z, face, pose: { mode: 'stand' }, seed: seed * 0.37, walk: null };
+    this.people.push(P);
+    return P;
+  }
+  dropPerson(i) {
+    const P = this.people[i];
+    P.person.root.removeFromParent(); P.person.dispose();
+    this.people.splice(i, 1);
+  }
+
+  /** the cabin's room at the bottom berth: on while it is in there with B-29 docked */
+  setBerth(on) {
+    if (this.berthOn === on) return;
+    this.berthOn = on;
+    for (const c of this.colsB || []) c.setEnabled(on);
+    for (const c of this.doorColsB || []) c.setEnabled(on && this._doorShut !== false);
+  }
+  /** the cabin's own air (riding it, in the apex hall, or in it at the bottom berth), or null */
+  airAt(p) {
+    const g = this.g;
+    const inside = (g.ride === this.rideObj && this.rideObj.contains && this.rideObj.contains(p)) || (this.berthOn && this.inCabinShip(p));
+    return inside ? (this._air || (this._air = { p: 101.3, o2: 21.2, co2: 0.04 })) : null;
+  }
+  /** the platform's screen doors open with the cabin's own (only when it is in at the bottom) */
+  platformDoorK() { return this.end === 'bottom' && this.state !== 'run' && this.berthOn ? this.doors : 0; }
+  /** the departure boards on the platform */
+  boardInfo() {
+    const fmt = (s) => { s = Math.max(0, Math.ceil(s)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
+    const T = this.plan.total, turn = DOOR_T + 1.2;
+    if (this.state === 'dwell' && this.end === 'bottom') return { text: 'ご乗車いただけます', sub: '発車まで ' + fmt(this.countdown || 0), tone: 'go' };
+    if (this.state === 'closing' && this.end === 'bottom') return { text: 'まもなく発車します', sub: 'ドアが閉まります。ご注意ください', tone: 'wait' };
+    if (this.state === 'run' && this.dir > 0) return { text: '頂上へ運行中', sub: '次の到着まで ' + fmt(T - this.runT + DWELL.top + turn + T), tone: 'run' };
+    if (this.state === 'run') return { text: 'まもなく到着します', sub: '到着まで ' + fmt(T - this.runT), tone: 'run' };
+    const left = this.state === 'dwell' ? Math.max(0, DWELL.top - this.tState) + turn : Math.max(0, turn - this.tState);
+    return { text: '頂上ステーションに停車中', sub: '次の到着まで ' + fmt(left + T), tone: 'wait' };
   }
 
   // ------------------------------------------------------------------ the info display

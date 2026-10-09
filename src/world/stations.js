@@ -2,6 +2,7 @@
 // network of 5G relay base stations on circular orbits, rendered as 3D models up close and
 // blinking lights far away.
 import * as THREE from 'three';
+import { shirasagiCore, buildAkamoExterior } from './akamoBase.js';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
 import { Builder, rng } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR, setLayersDeep } from '../core/layers.js';
@@ -284,14 +285,16 @@ function hubModel(def, M) {
   box([0, 0, 0], [2.7, 2.7, 116]);
   // Shirasagi: the pressurised transit tube inside the aft truss, from the core to the ring hub
   if (def.id === 'shirasagi') {
-    b.cyl(1.55, 1.55, 38 - coreR, 'hull', [0, 0, (coreR + 38) / 2], [Math.PI / 2, 0, 0], 24);
+    b.cyl(1.55, 1.55, 38 - coreR, 'hull', [0, 0, (coreR + 38) / 2], [Math.PI / 2, 0, 0], 24, true);
     for (let z = coreR + 3; z < 36; z += 4) b.torus(1.6, 0.08, 'gold', [0, 0, z], [0, 0, 0], 24);
-    b.cyl(2.45, 2.45, 3.4, 'hullDark', [0, 0, 38.1], [Math.PI / 2, 0, 0], 32);
+    b.cyl(2.45, 2.45, 3.4, 'hullDark', [0, 0, 38.1], [Math.PI / 2, 0, 0], 32, true);
+    b.add(new THREE.RingGeometry(1.55, 2.45, 32), 'hullDark', [0, 0, 36.4], [0, Math.PI, 0]);
   }
   // ---- core: big sphere with window bands, node modules on the spine
-  b.sphere(coreR, 'hull', [0, 0, 0], 48);
+  if (def.id === 'shirasagi') shirasagiCore(b, coreR, DOCK_AT);
+  else b.sphere(coreR, 'hull', [0, 0, 0], 48);
   for (const y of [-0.35, 0.35]) b.torus(coreR * Math.cos(y) + 0.05, 0.16, 'gold', [0, coreR * Math.sin(y), 0], [Math.PI / 2, 0, 0], 64);
-  for (let k = 0; k < 48; k++) {
+  for (let k = 0; k < (def.id === 'shirasagi' ? 0 : 48); k++) {
     const a = k / 48 * Math.PI * 2;
     for (const y of [-0.15, 0.15]) {
       const rr = coreR * Math.cos(y) + 0.02;
@@ -299,7 +302,7 @@ function hubModel(def, M) {
     }
   }
   sph([0, 0, 0], coreR + 0.4);
-  for (const z of [-24, 22]) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
+  for (const z of [-24, 22]) { if (def.id !== 'shirasagi' || z < 0) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); } cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
   // ---- elevator terminal: the two ribbons run up through this tower (station y, at x = -+4.2);
   // at both ends a berth deck where the climbers dock (the berth gantries, traversers and
   // bridges are the elevator's own: see elevatorPort.js)
@@ -400,10 +403,12 @@ function hubModel(def, M) {
   dish(b, 5.0, [6, 7, -100], [0, 0, -0.6]);
   dish(b, 3.0, [-6, 6, -96], [0.3, 0, 0.7]);
   box([0, 6, -98], [9, 5, 5]);
-  b.cyl(1.6, 1.6, 7, 'hull', [0, coreR + 4.2, -6], null, 24);
-  b.cyl(0.45, 1.6, 2.4, 'hull', [0, coreR + 8.9, -6], null, 24);
-  b.box(7.5, 2.2, 0.15, 'solarPanel', [0, coreR + 4.2, -6], null, 0);
-  cap([0, coreR, -6], [0, coreR + 10, -6], 2.2);
+  if (def.id !== 'shirasagi') {      // (Shirasagi's stands on AKAMO's berth drum instead)
+    b.cyl(1.6, 1.6, 7, 'hull', [0, coreR + 4.2, -6], null, 24);
+    b.cyl(0.45, 1.6, 2.4, 'hull', [0, coreR + 8.9, -6], null, 24);
+    b.box(7.5, 2.2, 0.15, 'solarPanel', [0, coreR + 4.2, -6], null, 0);
+    cap([0, coreR, -6], [0, coreR + 10, -6], 2.2);
+  }
   for (const z of [115, -115]) for (const [x, y] of [[2.4, 2.4], [-2.4, -2.4]]) { b.sphere(0.5, 'strobe', [x, y, z], 10); strobes.push([x, y, z]); }
   b.sphere(0.45, 'navR', [-2.4, 2.4, 115], 10);
   b.sphere(0.45, 'navG', [2.4, -2.4, 115], 10);
@@ -417,6 +422,13 @@ function hubModel(def, M) {
   b.pop();
   const g = b.build(Object.assign({}, M, { nameSign: sign }), { castShadow: false });
   g.add(shellGroup);
+  // Shirasagi: AKAMO's tower and berth drum, and the station grown round it (akamoBase.js)
+  if (def.id === 'shirasagi') {
+    const ak = buildAkamoExterior(M, DOCK_AT, { cap, sph, box });
+    g.add(ak.group);
+    g.userData.ring2 = ak.ring2;
+    g.userData.akBand = ak.band;
+  }
   // ---- rotating habitat ring
   const rb = new Builder();
   rb.torus(58, 3.6, 'hull', [0, 0, 0], [0, 0, 0], 128);
@@ -435,7 +447,7 @@ function hubModel(def, M) {
   for (let k = 0; k < 28; k++) { const a = k / 28 * Math.PI * 2; sph([Math.cos(a) * 58, Math.sin(a) * 58, 44], 4.3); }
   g.userData.ring = ring;
   g.userData.strobes = strobes;
-  g.userData.radius = 150;
+  g.userData.radius = def.id === 'shirasagi' ? 240 : 150;
   g.userData.proxies = P;
   g.userData.lobbyShell = shellGroup;
   g.userData.hub = true;
@@ -648,6 +660,11 @@ export class Stations {
         // (about half a g on the deck: 0.28 rad/s at 60 m; the ring B-29 is docked to is turned by
         // the docking, together with its walkable inside)
         if (ring && !s.ringDriven) { ring.rotation.z += dt * 0.28 * s.ringK; ring.updateMatrix(); }
+        // (Shirasagi's second ring turns the other way; the AKAMO shaft's outside band gives way to
+        // the platform inside while B-29 is docked)
+        const ring2 = s.model.userData.ring2;
+        if (ring2) { ring2.rotation.z -= dt * 0.28 * s.ringK; ring2.updateMatrix(); }
+        if (s.model.userData.akBand) s.model.userData.akBand.visible = this.dockedId !== s.id;
         s.model.updateMatrixWorld(true);
         const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });

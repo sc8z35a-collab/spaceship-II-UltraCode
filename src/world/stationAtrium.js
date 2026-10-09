@@ -4,6 +4,7 @@
 // floor, and the glowing axial shaft along the station's spine overhead (the way on toward the
 // habitat ring). Ship-local coordinates (B-29 docked), like the lobby.
 import * as THREE from 'three';
+import { AK_SITE } from './akamoSite.js';
 import { loft } from '../ship/sweep.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -119,6 +120,8 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
   // the bridge mouth on the -x side (lon ~ PI), the axial shaft on +-z (lon ~ +-PI/2 at lat 0)
   const bridgeHole = (p) => p.x < CX - 5 && Math.abs(p.z - BRIDGE.zc) < BRIDGE.hw + 0.05 && p.y > bridgeY - 0.1 && p.y < bridgeY + BRIDGE.h + 0.05;
   const shaftHole = (p) => Math.hypot(p.x - CX, p.y - CY) < SHAFT.r + 0.05;
+  // AKAMO's lift goes up through the dome here (its gold collar covers the cut)
+  const liftHole = (p, m) => p.y > CY && Math.hypot(p.x - AK_SITE.lift.x, p.z - AK_SITE.lift.z) < AK_SITE.lift.r + m;
   {
     const pos = [], win = [];
     for (let i = 0; i < nLat; i++) for (let j = 0; j < nLon; j++) {
@@ -127,7 +130,7 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
       const lm = (la + lb) / 2, om = (oa + ob) / 2;
       const pm = sp(lm, om);
       if (pm.y < floorY - 0.05) continue;                 // under the main floor: not seen
-      if (bridgeHole(pm) || shaftHole(pm)) continue;
+      if (bridgeHole(pm) || shaftHole(pm) || liftHole(pm, 0.3)) continue;
       const A = sp(la, oa), B = sp(la, ob), C = sp(lb, ob), D = sp(lb, oa);
       (isWin(lm, om) ? win : pos).push(...A.toArray(), ...B.toArray(), ...C.toArray(), ...A.toArray(), ...C.toArray(), ...D.toArray());
     }
@@ -166,7 +169,7 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
     const a = gp.attributes.position.array, out = [];
     for (let i = 0; i < a.length; i += 9) {
       const c = V((a[i] + a[i + 3] + a[i + 6]) / 3 + CX, (a[i + 1] + a[i + 4] + a[i + 7]) / 3 + CY, (a[i + 2] + a[i + 5] + a[i + 8]) / 3 + CZ);
-      if (bridgeHole(c) || shaftHole(c)) continue;
+      if (bridgeHole(c) || shaftHole(c) || liftHole(c, 1.3)) continue;
       for (let k = 0; k < 9; k += 3) out.push(a[i + k] + CX, a[i + k + 1] + CY, a[i + k + 2] + CZ);
     }
     const cg = new THREE.BufferGeometry();
@@ -204,6 +207,7 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
   b.colCyl(1.2, 1.2, [CX + 0.4, floorY + 0.6, CZ + 0.6]);
   for (let k = 0; k < 8; k++) {
     const a = k / 8 * Math.PI * 2 + 0.2;
+    if (k === 7) continue;     // (AKAMO's lift stands there)
     const x = CX + Math.cos(a) * 4.4, z = CZ + Math.sin(a) * 4.4;
     if (k % 2) {
       b.box(1.5, 0.42, 0.5, 'wood', [x, floorY + 0.21, z], [0, -a + Math.PI / 2, 0], 0.03);

@@ -170,6 +170,8 @@ export class LifeSupport {
   /** air pressure at a ship-local point: docked station, outside, or the cabin zone */
   pressureAt(p, outside = false) {
     const g = this.g;
+    const ak = g.akamo && g.akamo.airAt(p);     // AKAMO's cabin (and its apex hall) keep their own air
+    if (ak) return ak.p;
     if (g.docking && g.docking.contains(p)) return g.docking.airAt(p).p;
     if (outside) return this.ambient;
     return this.pressure(this.zoneAt(p));
@@ -276,6 +278,8 @@ export class LifeSupport {
     const pl = this.g.player;
     if (pl.suit) return { p: 30, o2: pl.suitO2 > 0.003 ? 29.6 : 0, co2: 0.1, suit: true };
     if (pl.outside) { const a = this.ambient; return { p: a, o2: a * 0.2095, co2: a * 0.0004, suit: false }; }
+    const ak = this.g.akamo && this.g.akamo.airAt(pl.pos);
+    if (ak) return { p: ak.p, o2: ak.o2, co2: ak.co2, suit: false };
     if (this.inStation) { const a = this.g.docking.airAt(pl.pos); return { p: a.p, o2: a.o2, co2: a.co2, suit: false }; }   // station air
     const z = this.z[this.zoneOfPlayer];
     return { p: z.n2 + z.o2 + z.co2, o2: z.o2, co2: z.co2, suit: false };
