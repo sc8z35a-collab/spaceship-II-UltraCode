@@ -13,7 +13,7 @@
 //    aft, a second habitat ring turning the other way, more solar wings
 import * as THREE from 'three';
 import { Builder } from '../ship/geom.js';
-import { AK_SITE } from './akamoSite.js';
+import { AK_SITE, AK_POD_DEG } from './akamoSite.js';
 import { TERM, band, level, ellipse } from './akamoTerminal.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
@@ -183,8 +183,22 @@ export function buildAkamoExterior(M, dock, P) {
   bb.add(band(s.bx, s.bz, S.a, S.b, 0, TAU, 96, s.floor + 0.16, s.ceil - 0.32, 1, true), 'windowLit', O, O);
   bb.add(band(s.bx, s.bz, S.a, S.b, 0, TAU, 96, s.ceil - 0.32, s.ceil, 1, true), 'hullDark', O, O);
   bb.box(1.5, 0.3, 0.9, 'metalDark', [s.bx, s.pit + 0.15, s.bz], O, 0.03);
+  // the escape pods on the drum's wall, their hatches inside (gone once the station's pods are away)
+  const pb = new Builder();
+  for (const deg of AK_POD_DEG) {
+    const a = deg * Math.PI / 180, ca = Math.cos(a), sa = Math.sin(a), y = s.floor + 1.15;
+    const at = (r) => [s.bx + r * ca, y, s.bz + r * sa];
+    pb.torus(0.86, 0.08, 'hullDark', at(R + 0.05), [0, Math.PI / 2 - a, 0], 32);
+    pb.cyl(0.75, 0.75, 1.3, 'hull', at(R + 0.75), [0, -a, -Math.PI / 2], 24);
+    pb.torus(0.77, 0.06, 'hullOrange', at(R + 0.95), [0, Math.PI / 2 - a, 0], 32);
+    pb.sphere(0.75, 'hull', at(R + 1.4), 20);
+    pb.sphere(0.12, 'strobe', [s.bx + (R + 0.6) * ca, y + 0.8, s.bz + (R + 0.6) * sa], 8);
+  }
   const group = b.build(M, { castShadow: false });
   group.name = 'akamoBase';
+  const pods = pb.build(M, { castShadow: false });
+  pods.name = 'akamoPods';
+  group.add(pods);
   const shaftBand = bb.build(M, { castShadow: false });
   shaftBand.name = 'akamoShaftBand';
   group.add(shaftBand);
@@ -192,7 +206,7 @@ export function buildAkamoExterior(M, dock, P) {
   // ===================================================================== the station grown
   const x = buildExpansion(M, P);
   group.add(x.group);
-  return { group, ring2: x.ring2, band: shaftBand };
+  return { group, ring2: x.ring2, band: shaftBand, pods };
 }
 
 function buildExpansion(M, P) {

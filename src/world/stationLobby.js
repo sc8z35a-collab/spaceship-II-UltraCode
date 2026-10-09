@@ -6,6 +6,7 @@
 // under the station's name.
 import * as THREE from 'three';
 import { buildTerminal } from './akamoTerminal.js';
+import { ShirasagiLife } from './shirasagiLife.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Builder, rng } from '../ship/geom.js';
 import { OPENINGS } from '../ship/hullShape.js';
@@ -832,7 +833,9 @@ export function buildLobby(renderer, def) {
     b.colliders.push(...terminal.colliders);
     breachSpots.akamo = terminal.breachSpots;
   }
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, update: terminal ? (dt, g) => terminal.update(dt, g) : undefined };
+  // Shirasagi: its crew on their rounds, the escape pod hatches (shirasagiLife.js)
+  const life = core ? new ShirasagiLife(M, group) : null;
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); } : undefined };
 }
 
 /** paint the globe with the Earth colour map once it is available */

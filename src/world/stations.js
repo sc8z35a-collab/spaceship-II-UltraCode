@@ -431,6 +431,7 @@ function hubModel(def, M) {
     g.add(ak.group);
     g.userData.ring2 = ak.ring2;
     g.userData.akBand = ak.band;
+    g.userData.akPods = ak.pods;
   }
   // ---- rotating habitat ring
   const rb = new Builder();
@@ -670,6 +671,7 @@ export class Stations {
         const ring2 = s.model.userData.ring2;
         if (ring2) { ring2.rotation.z -= dt * 0.28 * s.ringK; ring2.updateMatrix(); }
         if (s.model.userData.akBand) s.model.userData.akBand.visible = this.dockedId !== s.id;
+        if (s.model.userData.akPods) s.model.userData.akPods.visible = !(s.dmg && s.dmg.podsOut);
         s.model.updateMatrixWorld(true);
         const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });

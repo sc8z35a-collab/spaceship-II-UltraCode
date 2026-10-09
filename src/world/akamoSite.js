@@ -8,3 +8,6 @@ export const AK_SITE = {
   lift: { x: 38.0, z: -6.0, r: 1.32, y0: -2.55 },
   berth: { x: 38.0 + 7.4 * 0.6, y: 48.25, z: -6.0 - 7.4 * 0.8 },
 };
+// the escape pods on the berth drum's wall (degrees round the berth from +x toward +z): their hatches
+// open off the platform between its windows
+export const AK_POD_DEG = [60, 165, 240, 345];
