@@ -69,7 +69,7 @@ export class ExtMarkers {
     ctx.stroke();
     // top left, under the buttons: REC, which camera, how far it is zoomed, its sensor
     const x0 = 1.8 * vh;
-    let y = 10.4 * vh;
+    let y = 11.6 * vh;
     ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
     if (!lost && (t % 1) < 0.6) { ctx.fillStyle = 'rgba(255,70,60,0.95)'; ctx.beginPath(); ctx.arc(x0 + 5, y, 4.5, 0, Math.PI * 2); ctx.fill(); }
     ctx.font = `700 12px ${MONO}`; ctx.fillStyle = lost ? 'rgba(255,110,90,0.95)' : 'rgba(240,245,255,0.95)';
@@ -100,13 +100,13 @@ export class ExtMarkers {
     const tc = `${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}:${String(d.getUTCSeconds()).padStart(2, '0')}:${String(ff).padStart(2, '0')}`;
     ctx.textAlign = 'right';
     ctx.font = `700 13px ${MONO}`; ctx.fillStyle = 'rgba(240,245,255,0.95)';
-    ctx.fillText(`${tc} UTC`, W - 1.8 * vh, 10.4 * vh);
+    ctx.fillText(`${tc} UTC`, W - 1.8 * vh, 11.6 * vh);
     const sc = g.space && g.space.sunColor;
     const lit = sc ? Math.min(1, (sc.r + sc.g + sc.b) / 3) : 1;
     const ev = 8 + 7 * lit;
     const N = 8, sh = (N * N) / Math.pow(2, ev - 2);
     ctx.font = `500 11px ${MONO}`; ctx.fillStyle = 'rgba(210,225,245,0.85)';
-    ctx.fillText(`${sh >= 1 ? sh.toFixed(1) + '"' : '1/' + Math.round(1 / Math.max(1e-5, sh))}  F${N.toFixed(1)}  ISO ${lit > 0.3 ? 100 : 1600}`, W - 1.8 * vh, 13.2 * vh);
+    ctx.fillText(`${sh >= 1 ? sh.toFixed(1) + '"' : '1/' + Math.round(1 / Math.max(1e-5, sh))}  F${N.toFixed(1)}  ISO ${lit > 0.3 ? 100 : 1600}`, W - 1.8 * vh, 14.4 * vh);
     // along the top: the ship's cameras (a tap picks one)
     const cw = 9.5 * vh, ch = 3.6 * vh, gap = 0.8 * vh;
     let cx0 = W / 2 - (n * cw + (n - 1) * gap) / 2;

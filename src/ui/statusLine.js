@@ -32,7 +32,11 @@ export class StatusLine {
     this.el = document.getElementById('hud-info');
     this.t = 0;
     this.last = '';
+    this.noteText = ''; this.noteT = 0;
   }
+
+  /** a short notice in place of the destination for a few seconds */
+  note(text, sec = 3.5) { this.noteText = text; this.noteT = sec; this.t = 0; }
 
   /** { who, speed (m/s), tags, dest } of the vessel Kaito is aboard */
   read() {
@@ -45,7 +49,7 @@ export class StatusLine {
       const f = h.flight, P = h.pilot;
       const sp = f.vel.clone().sub(f.refVelocity(f.pos, _v)).length();
       const tags = f.maxMode ? ' MAX' : f.ultra ? ' ULTRA' : '';
-      let dest = '手動操縦';
+      let dest = g.aim && g.aim.active ? '手動・視点追従' : '手動操縦';
       const hs = P.dock && P.dock.host && P.dock.host.s;
       const nm = (st) => st.name.replace('（修理基地）', '');
       if (h.berthAt) dest = `${nm(h.berthAt)} に係留中`;
@@ -57,7 +61,7 @@ export class StatusLine {
     const f = g.flight, ap = g.autopilot, dk = g.docking;
     const sp = f.vel.clone().sub(f.refVelocity(f.pos, _v)).length();
     const tags = (f.maxMode ? ' MAX' : f.ultra ? ' ULTRA' : '') + (h && h.docked ? ' +H8' : '');
-    let dest = f.landed ? (f.inWater ? '着水中' : '着陸中') : '手動';
+    let dest = f.landed ? (f.inWater ? '着水中' : '着陸中') : g.aim && g.aim.active ? '手動・視点追従' : '手動';
     if (dk && dk.state === 'docked') dest = `${dk.station ? dk.station.name.replace('（修理基地）', '') : 'ステーション'} に係留中`;
     else if (dk && dk.state === 'approach') dest = `→ ${dk.station ? dk.station.name : ''} へドッキング中`;
     else if (dk && dk.state === 'leaving') dest = '離脱中';
@@ -71,6 +75,7 @@ export class StatusLine {
   update(dt) {
     const g = this.g;
     if (!this.el) return;
+    if (this.noteT > 0) this.noteT -= dt;
     this.t -= dt;
     if (this.t > 0) return;
     this.t = 0.2;
@@ -78,7 +83,7 @@ export class StatusLine {
     let txt = '';
     if (show) {
       const r = this.read();
-      txt = `${r.who}${r.tags}  ${fmtSpeed(r.speed)}  ${r.dest}`;
+      txt = `${r.who}${r.tags}  ${fmtSpeed(r.speed)}  ${this.noteT > 0 ? this.noteText : r.dest}`;
     }
     if (txt === this.last) return;
     this.last = txt;

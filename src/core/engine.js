@@ -3,6 +3,7 @@ import * as THREE from 'three';
 import { EffectComposer, EffectPass, Pass, BloomEffect, SMAAEffect, SMAAPreset, Effect, EffectAttribute, BlendFunction } from 'postprocessing';
 import { LAYER_FAR, LAYER_MID, LAYER_NEAR, LAYER_CABIN, RANGES } from './layers.js';
 import { QUALITY, loadQuality } from './quality.js';
+import { CrispLayer } from './crisp.js';
 
 const _ONE = new THREE.Vector3(1, 1, 1);
 // shared uniform: ownership range [min,max) of the pass currently rendering (for blended shells)
@@ -137,6 +138,52 @@ class MultiFrustumPass extends Pass {
       renderer.render(this.scene, c);
     }
     this.frames++;
+  }
+}
+
+/**
+ * The picture, drawn at its own (lower) resolution, brought up to the screen's: a Catmull-Rom
+ * filter in five bilinear taps — sharper than the plain stretch the browser would give it, without
+ * the ringing of a stronger kernel. The screen itself stays at its full resolution, so whatever is
+ * drawn over the picture afterwards (the screens' text, crisp.js) is drawn at that.
+ */
+class UpscalePass extends Pass {
+  constructor() {
+    super('UpscalePass');
+    this.needsSwap = false;
+    this.fullscreenMaterial = new THREE.ShaderMaterial({
+      uniforms: { inputBuffer: { value: null }, uSize: { value: new THREE.Vector4(1, 1, 1, 1) } },
+      vertexShader: 'varying vec2 vUv; void main(){ vUv = position.xy * 0.5 + 0.5; gl_Position = vec4(position.xy, 1.0, 1.0); }',
+      fragmentShader: /* glsl */`
+        uniform sampler2D inputBuffer; uniform vec4 uSize; varying vec2 vUv;
+        void main(){
+          vec2 sp = vUv * uSize.xy;
+          vec2 t1 = floor(sp - 0.5) + 0.5;
+          vec2 f = sp - t1;
+          vec2 w0 = f * (-0.5 + f * (1.0 - 0.5 * f));
+          vec2 w1 = 1.0 + f * f * (-2.5 + 1.5 * f);
+          vec2 w2 = f * (0.5 + f * (2.0 - 1.5 * f));
+          vec2 w3 = f * f * (-0.5 + 0.5 * f);
+          vec2 w12 = w1 + w2;
+          vec2 t0 = (t1 - 1.0) * uSize.zw, t3 = (t1 + 2.0) * uSize.zw, t12 = (t1 + w2 / w12) * uSize.zw;
+          vec3 c = texture2D(inputBuffer, vec2(t12.x, t0.y)).rgb * (w12.x * w0.y)
+                 + texture2D(inputBuffer, vec2(t0.x, t12.y)).rgb * (w0.x * w12.y)
+                 + texture2D(inputBuffer, t12).rgb * (w12.x * w12.y)
+                 + texture2D(inputBuffer, vec2(t3.x, t12.y)).rgb * (w3.x * w12.y)
+                 + texture2D(inputBuffer, vec2(t12.x, t3.y)).rgb * (w12.x * w3.y);
+          float ws = w12.x * w0.y + w0.x * w12.y + w12.x * w12.y + w3.x * w12.y + w12.x * w3.y;
+          gl_FragColor = linearToOutputTexel(vec4(clamp(c / ws, 0.0, 1.0), 1.0));
+        }`,
+      depthTest: false, depthWrite: false,
+    });
+  }
+
+  setSize(w, h) { this.fullscreenMaterial.uniforms.uSize.value.set(w, h, 1 / w, 1 / h); }
+
+  render(renderer, inputBuffer) {
+    this.fullscreenMaterial.uniforms.inputBuffer.value = inputBuffer.texture;
+    renderer.setRenderTarget(null);
+    renderer.render(this.scene, this.camera);
   }
 }
 
@@ -443,13 +490,21 @@ export class Engine {
     this.camera = new THREE.PerspectiveCamera(60, 2, 0.03, 2e9);
     this.camera.matrixAutoUpdate = false;
     this.maxPR = Math.min(window.devicePixelRatio || 1, 2.25);
+    // the screen is always kept at its full resolution (uiPR); the picture is drawn at its own (pr,
+    // lower at low quality and when the frame rate sags) and brought up to it — so the text on the
+    // screens, drawn again over the finished picture at the screen's resolution, stays sharp at any
+    // quality
+    this.uiPR = this.maxPR;
     loadQuality();
     this.low = QUALITY.level !== 'high';
     this.low2 = QUALITY.level === 'low2';
     this.pr = this.basePR();
-    renderer.setPixelRatio(this.pr);
+    renderer.setPixelRatio(this.uiPR);
 
     this.composer = new EffectComposer(renderer, { frameBufferType: THREE.HalfFloatType, multisampling: 0 });
+    // the scene's depth kept as a texture (what the crisp text is hidden behind)
+    this.composer.inputBuffer.depthTexture = new THREE.DepthTexture(1, 1, THREE.UnsignedIntType);
+    this.composer.inputBuffer.dispose();
     this.mfPass = new MultiFrustumPass(this.scene, this.camera);
     this.exposure = new AutoExposurePass();
     this.bloom = new BloomEffect({ mipmapBlur: true, luminanceThreshold: 1.05, luminanceSmoothing: 0.3, intensity: 0.75, radius: 0.75, levels: 8 });
@@ -464,6 +519,11 @@ export class Engine {
     if (this.low) this.bloom.mipmapBlurPass.levels = this.low2 ? 4 : 5;
     this.smaaPass = new EffectPass(this.camera, this.smaa);
     this.composer.addPass(this.smaaPass);
+    this.upPass = new UpscalePass();
+    this.composer.addPass(this.upPass);
+    this.upscaling = false;
+    this.rw = 1; this.rh = 1;
+    this.crisp = new CrispLayer(this);
     this.setAA();
     // drawn over the finished picture, with the unmagnified view (H8's tabs: they are part of its
     // display, so the zoom does not magnify them; the picture's grading does not touch them)
@@ -486,13 +546,29 @@ export class Engine {
 
   resize() {
     const w = window.innerWidth, h = window.innerHeight;
-    this.renderer.setPixelRatio(this.pr);
+    this.renderer.setPixelRatio(this.uiPR);
     this.renderer.setSize(w, h, false);
-    this.composer.setSize(w, h, false);
+    this.width = w; this.height = h;
+    this.setRenderScale();
     this.camera.aspect = w / h;
     this.setHFov(this.hfov || 92);
-    this.width = w; this.height = h;
   }
+
+  /** the picture's own resolution (pr): the composer's buffers and passes at it, the screen at uiPR */
+  setRenderScale() {
+    const w = this.width || window.innerWidth, h = this.height || window.innerHeight;
+    const pr = Math.min(this.pr, this.uiPR);
+    const rw = Math.max(1, Math.round(w * pr)), rh = Math.max(1, Math.round(h * pr));
+    const C = this.composer;
+    C.inputBuffer.setSize(rw, rh);
+    C.outputBuffer.setSize(rw, rh);
+    for (const p of C.passes) p.setSize(rw, rh);
+    this.rw = rw; this.rh = rh;
+    this.setAA();
+  }
+
+  /** pixels per radian of the picture's height (what point sprites are sized by) */
+  pxPerRad(cam = this.camera) { return this.rh / (2 * Math.tan(cam.fov * Math.PI / 360)); }
 
   setHFov(deg) {
     this.hfov = deg;
@@ -557,11 +633,17 @@ export class Engine {
     this.resize();
   }
 
-  /** LOW II: no anti-aliasing pass at all (the grade goes straight to the screen) */
+  /** LOW II: no anti-aliasing pass at all (the grade goes straight on); a picture drawn smaller than
+   *  the screen goes through the upscale last */
   setAA() {
+    const w = this.width || window.innerWidth;
+    const up = this.upscaling = Math.round(w * Math.min(this.pr, this.uiPR)) < Math.round(w * this.uiPR) - 1;
+    const toScreen = (p, on) => { if (p.renderToScreen !== on) p.renderToScreen = on; };
     this.smaaPass.enabled = !this.low2;
-    this.smaaPass.renderToScreen = !this.low2;
-    this.gradePass.renderToScreen = this.low2;
+    this.upPass.enabled = up;
+    toScreen(this.smaaPass, !this.low2 && !up);
+    toScreen(this.gradePass, this.low2 && !up);
+    toScreen(this.upPass, true);
   }
 
   /** frame-time based dynamic resolution */
@@ -587,7 +669,7 @@ export class Engine {
     else if (!this.resDropped && med < 1 / 58 && pr < cap) pr = Math.min(cap, pr + 0.1);
     if (Math.abs(pr - this.pr) > 0.01) {
       this.pr = pr;
-      this.resize();
+      this.setRenderScale();
       this.lastAdjust = now;
       this.frameTimes.length = 0;
     }
@@ -607,6 +689,8 @@ export class Engine {
     this.camera.updateMatrixWorld(true);
     this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
     this.composer.render(dt);
+    // the screens' text, again at the screen's own resolution over the finished picture
+    if (this.upscaling) this.crisp.render(this.renderer);
     if (this.onFrame) { const f = this.onFrame; this.onFrame = null; try { f(this.renderer.domElement); } catch (e) { console.warn(e); } }
     if (this.uiOn) {
       const c = this.uiCam;

@@ -51,6 +51,7 @@ import { ExtMarkers } from './ui/extMarkers.js';
 import { Photos } from './ui/photos.js';
 import { EscapePods } from './world/escapePods.js';
 import { PlumeHeat } from './fx/plumeHeat.js';
+import { AimPilot } from './ship/aimPilot.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -132,6 +133,7 @@ export class Game {
     this.elevator = new SpaceElevator(this.engine, this.stations.M, this.stations, this);
     this.shafts = new LightShafts(this.shipVis.root);
     this.autopilot = new Autopilot(this);
+    this.aim = new AimPilot(this);
     this.docking = new Docking(this);
     this.asteroids = new Asteroids(this);
     this.asteroids.setHull(this.shipVis.exterior.children.filter((m) => m.isMesh && !m.material.transparent));
@@ -276,13 +278,33 @@ export class Game {
     if (!limp && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
-    this.lastFlightIn = flightIn;
     // flying a stolen escape pod from H8's seat: the sticks are the pod's, H8 holds as it is
     const remote = !!(this.pods && this.pods.remote);
+    // flying where he looks (aimPilot.js): at the controls, the drag aims the vessel he is in
+    const seatNow = pl.state === 'seated' ? pl.seat : null;
+    const h8Solo = !!(this.h8 && this.h8.mode === 'free' && this.h8.crew && this.h8.isH8Seat(seatNow));
+    const ctlFlight = h8Solo ? this.h8.flight : this.flight;
+    const h8Busy = h8Solo && (this.h8.pilot.goal || this.h8.pilot.state === 'dock' || this.h8.pilot.state === 'undock' || this.h8.berthAt);
+    const canAim = !limp && !focused && !remote && this.mode === 'pilot' && this.aim.on && !h8Busy && !(this.h8 && this.h8.mode === 'pod') &&
+      !(seatNow && seatNow.lockAim) && !(!h8Solo && this.docking.state === 'docked');
+    let aiming = false;
+    if (canAim) {
+      const fi = this.aim.input(sdt, inp, ctlFlight, seatNow, this.h8 && seatNow === this.h8.seat ? this.h8.zoom.z : 1);
+      if (fi) { flightIn = fi; aiming = true; }
+    } else this.aim.active = false;
+    // (B-29 swings round quicker after the look than on the sticks: it is told where to point)
+    this.flight.followTurn = aiming && ctlFlight === this.flight && (this.flight.turnK || 1) < 2.2 ? 2.2 / (this.flight.turnK || 1) : 1;
+    if (this.h8) this.h8.flight.followTurn = 1;
+    this.lastFlightIn = flightIn;
     if (remote) { this.pods.remoteInput(limp ? null : flightIn, limp ? null : inp); flightIn = null; }
     if (!limp) {
       if (inp.pressed['b-exit']) { if (remote) this.pods.release(); else if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
+      if (inp.pressed['b-follow']) {
+        this.aim.setOn(!this.aim.on);
+        if (this.statusLine) this.statusLine.note(this.aim.on ? '視点追従 ON：見た方向へ機体が向く・左スティックで前進と横移動' : '視点追従 OFF：右スティックで操縦', 4);
+        if (this.audio.ready) this.audio.beep(this.aim.on ? 1320 : 880, 0.06, 0.05, { direct: true });
+      }
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (inp.pressed['b-cam-prev']) this.extCam--;
       if (this.mode === 'camera' && !focused) {
@@ -312,6 +334,8 @@ export class Game {
     if (!this.docking.preStep(sdt)) this.flight.step(sdt, flightIn, (pos) => this.terrainAt(pos));
     this.docking.postStep(sdt);
     if (this.h8) this.h8.update(sdt, dt);
+    // (the head looks along the aim, the cockpit having turned under it)
+    if (aiming) this.aim.head(pl, ctlFlight, seatNow, sdt);
     // apparent gravity in the ship frame
     const qInv = this.flight.quat.clone().invert();
     this.gLocal.copy(this.flight.properAcc).negate().applyQuaternion(qInv);
@@ -344,7 +368,7 @@ export class Game {
     }
     // out in a suit: its own thrusters and boosters fly him
     env.suit = this.suits && pl.suit ? this.suits : null;
-    let lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    let lookInp = this.mode === 'camera' || focused || aiming ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
@@ -693,7 +717,7 @@ export class Game {
     // inside the docked station's lobby its outer shell is hidden so the windows look out
     this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
     this.stations.update(this.time, origin, this.camWorld, dt);
-    this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
+    this.stations.setPixelScale(this.engine.pr);
     this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     if (this.combat) this.combat.updateVisual(dt, origin, this.camWorld);
@@ -717,7 +741,7 @@ export class Game {
     }
     this.shipVis.update(dt, this.time / 1000);
     // particles: point size scale from the projection
-    const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const sc = this.engine.pxPerRad(cam);
     this.fx.add.pts.material.uniforms.uScale.value = sc;
     this.fx.alpha.pts.material.uniforms.uScale.value = sc;
     this.fx.update(Math.min(dt * this.timeScale, 0.1));

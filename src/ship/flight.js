@@ -48,6 +48,8 @@ export class Flight {
     this.boostDamp = false;
     this.extHealth = 0;
     this.offsetVel = new THREE.Vector3();   // a short evasive step on top of the command (ECI)
+    this.strafeVel = new THREE.Vector3();   // sliding sideways / up and down (own axes, m/s)
+    this.followTurn = 1;                    // a quicker turn while it follows the pilot's look
     this.pos = new THREE.Vector3();
     this.vel = new THREE.Vector3();
     this.hRef = new THREE.Vector3(0, 1, 0);
@@ -206,7 +208,7 @@ export class Flight {
     this.groundAlt = alt - surf.h - HB;
 
     // --- attitude control (relative to LVLH)
-    const tk = this.turnK || 1;
+    const tk = (this.turnK || 1) * (this.followTurn || 1);
     const maxRate = (this.ultra ? 9 : 6) * Math.PI / 180 * tk;
     const rcs = Math.max(0.15, this.rcsHealth);
     const angAcc = (this.autopilot && this.autopilot.fast ? 12.0 : 4.0) * Math.PI / 180 * rcs * (this.mul > 1 ? 2 : 1) * tk;
@@ -257,6 +259,17 @@ export class Flight {
     // --- desired velocity
     const vRef = this.refVelocity(pos, new THREE.Vector3());
     let vDes = vRef.clone().addScaledVector(fwd, this.setSpeed);
+    // sliding sideways, up or down on the thrusters (the pilot's left stick across, the up / down
+    // buttons): a slow, steady slide that stops when let go
+    {
+      const vS = (this.spec.strafe || 6) * Math.min(4, Math.max(1, this.mul || 1));
+      const sx = inp && !this.autopilot ? (inp.strafeX || 0) : 0, sy = inp && !this.autopilot ? (inp.strafeY || 0) : 0;
+      const k = 1 - Math.exp(-dt * 1.6);
+      this.strafeVel.x += (sx * vS - this.strafeVel.x) * k;
+      this.strafeVel.y += (sy * vS - this.strafeVel.y) * k;
+      this.strafeVel.z = 0;
+      if (this.strafeVel.lengthSq() > 1e-6) vDes.add(_v3.copy(this.strafeVel).applyQuaternion(this.quat));
+    }
     if (this.autopilot && this.autopilot.vRel) vDes = vRef.clone().add(this.autopilot.vRel);
     if (this.offsetVel.lengthSq() > 1e-6) vDes.add(this.offsetVel);
     // feed-forward: the curvature of a constant-altitude path at our horizontal speed

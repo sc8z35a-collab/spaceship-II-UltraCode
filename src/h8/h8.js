@@ -102,6 +102,8 @@ export class H8Vessel {
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
+    // the tabs on its glass drawn again at the screen's own resolution (sharp at any quality)
+    if (game.engine.crisp) { game.engine.crisp.add(this.display.sphere); game.engine.crisp.add(this.display.floor); }
     this.tabs = new H8Tabs(this);
     this.zoom = new H8Zoom(this);
     this.hud = new H8Hud(this);
@@ -2356,7 +2358,7 @@ export class H8Vessel {
     // ---- sparks, spall, venting air (H8's own particles, in H8's frame)
     const live = this.fx.add.p.length || this.fx.alpha.p.length || this.fx.emitters.length;
     if (live || !this.fxIdle) {
-      const sc = g.engine.renderer.domElement.height / (2 * Math.tan(g.engine.camera.fov * Math.PI / 360));
+      const sc = g.engine.pxPerRad();
       this.fx.add.pts.material.uniforms.uScale.value = sc;
       this.fx.alpha.pts.material.uniforms.uScale.value = sc;
       this.fx.update(Math.min(dt, 0.1));

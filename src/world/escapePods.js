@@ -763,8 +763,7 @@ export class EscapePods {
     }
     if (!this.list.length) { this.far.visible = false; this.drawRemote(); return; }
     const cam = g.engine.camera;
-    const H = g.engine.renderer.domElement.height;
-    const pxK = H / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const pxK = g.engine.pxPerRad(cam);
     this.fMat.uniforms.uScale.value = pxK;
     let nf = 0, builds = 0;
     for (const p of this.list) {

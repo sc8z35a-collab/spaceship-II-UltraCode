@@ -112,8 +112,8 @@ export class Player {
    */
   update(dt, input, gLocal, env) {
     if (this.state === 'dead') return;
-    // look
-    const sens = 0.0042;
+    // look (quick: a short drag turns the head a long way)
+    const sens = 0.0064;
     this.yaw -= input.lookDX * sens;
     this.pitch -= input.lookDY * sens;
     const pLim = this.state === 'seated' ? (this.seat && this.seat.gimbal ? 1.5 : 1.2) : 1.5;

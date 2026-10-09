@@ -80,17 +80,17 @@ html, body {
 /* weapons (pilot seat of B-29 or H8) */
 #hud-tgt { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; display: none; }
 /* (a quarter round the fire button in the corner) */
-#btns-wpn { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); bottom: calc(1.6vh + env(safe-area-inset-bottom, 0px)); width: 27vh; height: 21vh; }
+#btns-wpn { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); bottom: calc(1.6vh + env(safe-area-inset-bottom, 0px)); width: 32.5vh; height: 25.5vh; }
 #btns-wpn .hbtn { position: absolute; }
-#b-rail { right: 11.6vh; bottom: 3vh; }
-#b-auto { right: 19.6vh; bottom: 3vh; }
-#b-msl { right: 10.6vh; bottom: 12vh; }
-#b-tgt { right: 2vh; bottom: 13.4vh; }
+#b-rail { right: 14vh; bottom: 3.6vh; }
+#b-auto { right: 23.6vh; bottom: 3.6vh; }
+#b-msl { right: 12.8vh; bottom: 14.6vh; }
+#b-tgt { right: 2.4vh; bottom: 16.2vh; }
 /* a label under a button, a count on its shoulder */
 .hbtn.lbl { position: relative; }
 .hbtn .bl {
   position: absolute; left: 50%; top: 100%; transform: translate(-50%, 0.25vh); white-space: nowrap; pointer-events: none;
-  font: 600 clamp(8px, 1.6vh, 11px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; letter-spacing: 0.02em;
+  font: 600 clamp(9px, 1.85vh, 12px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; letter-spacing: 0.02em;
   color: rgba(225, 236, 255, 0.88); text-shadow: 0 0 3px rgba(0, 0, 0, 0.95), 0 0 1px rgba(0, 0, 0, 1);
 }
 .hbtn .bn {
@@ -100,7 +100,7 @@ html, body {
 }
 #b-msl { border-color: rgba(255, 150, 110, 0.55); }
 #btns-wpn .hbtn.dim { opacity: 0.32; }
-#b-fire { right: 0; bottom: 0; width: 10vh; height: 10vh; padding: 2vh; border-color: rgba(255, 120, 90, 0.55); background: rgba(60, 14, 10, 0.45); }
+#b-fire { right: 0; bottom: 0; width: 12vh; height: 12vh; padding: 2.4vh; border-color: rgba(255, 120, 90, 0.55); background: rgba(60, 14, 10, 0.45); }
 #b-fire.on { background: rgba(255, 90, 60, 0.5); }
 #b-fire svg { fill: rgba(255, 210, 200, 0.9); }
 #b-auto.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
@@ -117,9 +117,9 @@ html, body {
 }
 /* H8's camera controls: big zoom buttons, the shutter, the zoom ring along the bottom */
 #btns-zoom { position: absolute; left: calc(1.6vh + env(safe-area-inset-left, 0px)); bottom: calc(1.8vh + env(safe-area-inset-bottom, 0px)); display: flex; flex-direction: row; align-items: flex-end; gap: 1.1vh; }
-#btns-zoom .zbtn { width: 6.6vh; height: 6.6vh; padding: 1.4vh; }
+#btns-zoom .zbtn { width: 7.9vh; height: 7.9vh; padding: 1.65vh; }
 #b-zfol.active { border-color: rgba(120, 255, 170, 0.75); background: rgba(20, 70, 40, 0.45); }
-#b-zshot { width: 9vh; height: 9vh; padding: 1.2vh; border: 2.5px solid rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.12); }
+#b-zshot { width: 10.8vh; height: 10.8vh; padding: 1.45vh; border: 2.5px solid rgba(255, 255, 255, 0.75); background: rgba(255, 255, 255, 0.12); }
 #b-zshot svg { fill: rgba(255, 255, 255, 0.92); }
 #b-zshot.on, #b-zshot:active { background: rgba(255, 255, 255, 0.45); }
 #zoom-ring {
@@ -131,7 +131,7 @@ html, body {
 #zoom-ring .zr-ticks { position: absolute; inset: 0; background: repeating-linear-gradient(90deg, rgba(220, 230, 255, 0.35) 0 2px, transparent 2px 1.2vh); -webkit-mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); mask: linear-gradient(90deg, transparent, #000 18%, #000 82%, transparent); }
 #zoom-ring .zr-label { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 600 clamp(9px, 2.2vh, 12px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: rgba(230, 240, 255, 0.85); text-shadow: 0 0 4px #000; pointer-events: none; }
 /* photographs: the toast after a shot, the gallery */
-#photo-toast { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); top: calc(9.6vh + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 1vh; padding: 0.8vh; border-radius: 1vh; background: rgba(6, 12, 22, 0.75); border: 1px solid rgba(160, 200, 255, 0.3); opacity: 0; transform: translateY(-1vh); transition: opacity 0.25s, transform 0.25s; pointer-events: none; }
+#photo-toast { position: absolute; right: calc(1.6vh + env(safe-area-inset-right, 0px)); top: calc(11vh + env(safe-area-inset-top, 0px)); display: flex; align-items: center; gap: 1vh; padding: 0.8vh; border-radius: 1vh; background: rgba(6, 12, 22, 0.75); border: 1px solid rgba(160, 200, 255, 0.3); opacity: 0; transform: translateY(-1vh); transition: opacity 0.25s, transform 0.25s; pointer-events: none; }
 #photo-toast.on { opacity: 1; transform: none; }
 #photo-toast img { height: 9vh; border-radius: 0.6vh; }
 #photo-toast span { font: 600 clamp(10px, 2.3vh, 13px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; white-space: nowrap; }
@@ -150,11 +150,12 @@ html, body {
 #photo-gallery .pg-btn { font: 600 clamp(12px, 2.8vh, 15px) -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif; color: #e6eefc; background: rgba(40, 60, 95, 0.6); border: 1px solid rgba(160, 200, 255, 0.4); border-radius: 999px; padding: 1vh 2.6vh; }
 #photo-gallery .pg-btn.danger { background: rgba(110, 30, 25, 0.6); border-color: rgba(255, 120, 100, 0.5); }
 .hbtn {
-  pointer-events: auto; width: 7vh; height: 7vh; border-radius: 50%; padding: 1.5vh;
+  pointer-events: auto; width: 8.4vh; height: 8.4vh; border-radius: 50%; padding: 1.8vh;
   border: 1.5px solid rgba(220, 230, 255, 0.28); background: rgba(10, 16, 28, 0.42); color: #e6ecf7;
   box-sizing: border-box;
 }
-.hbtn.small { width: 6vh; height: 6vh; padding: 1.3vh; }
+.hbtn.small { width: 7.2vh; height: 7.2vh; padding: 1.55vh; }
+#b-follow.active { border-color: rgba(120, 220, 255, 0.8); background: rgba(20, 60, 90, 0.5); }
 .hbtn svg { width: 100%; height: 100%; fill: rgba(230, 238, 255, 0.85); }
 .hbtn:active, .hbtn.on { background: rgba(110, 150, 230, 0.35); }
 #hold-ring {

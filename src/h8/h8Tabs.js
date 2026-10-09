@@ -57,11 +57,11 @@ const ROW = 44;
 /** the eye point the tabs are laid out for: the pilot's eye in the seat (H8-local) */
 const E0 = SEAT.G.clone().add(SEAT.eye);
 
-/** texels per degree (at scale 1): about one per screen pixel on a phone held sideways, a little
- * more where it can be afforded (sharper text) */
+/** texels per degree (at scale 1): a little more than one per screen pixel on a phone held
+ * sideways — at every quality (the tabs are drawn again at the screen's own resolution, crisp.js:
+ * their text has to be as sharp at LOW II as at the top quality) */
 function pxDeg() {
-  const q = QUALITY.level;
-  return q === 'low2' ? 12 : q === 'low' ? 16 : 23;
+  return 24;
 }
 
 class Tab {

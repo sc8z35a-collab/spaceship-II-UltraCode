@@ -36,6 +36,39 @@ const seg = (t, a, b) => ease((t - a) / (b - a));
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const EYE_IN = V(0, 1.62, -0.035);          // the eye inside the helmet (suit frame)
 const FINE = { h8: { acc: 2.6, v: 6 }, b29: { acc: 1.4, v: 4 } };   // the fine thrusters
+// the flight computer's assist: how much harder than the bare thrusters it may push to fly what the
+// stick asks (both nozzles of a pair together), how quickly it closes on it (s)
+const ASSIST = { k: 2.0, tau: 0.22 };
+const _ac = new THREE.Vector3(), _av = new THREE.Vector3();
+
+/**
+ * The suit's flight computer: the stick asks for a velocity against the vessel — forward and back
+ * along the view, sideways, up and down — and the thrusters fly it, quick and firm; let go and it
+ * brings him to rest against the vessel (the boosters braking the last of a fast run). With the
+ * boosters armed, a push forward asks for their speed. want: the direction asked (unit, the
+ * frame's axes), asked 0..1, rel: his velocity against the vessel (same axes), out: the
+ * acceleration to make. Returns the throttle (0..1) it takes.
+ */
+function assistAcc(want, asked, boosting, fwd, rel, S, Fn, tk, autoV, out) {
+  const P = S.spec.propulsion;
+  const vFine = Fn.v;
+  // what is asked: the fine speed along the stick; the boosters' along the view while armed
+  const vCmd = _av.set(0, 0, 0);
+  if (autoV) vCmd.copy(autoV);
+  else if (asked > 0.02) {
+    vCmd.copy(want).multiplyScalar(vFine * asked);
+    if (boosting) vCmd.addScaledVector(fwd, Math.max(0, P.vMax * asked - vFine * asked));
+  }
+  const dv = _ac.copy(vCmd).sub(rel);
+  const err = dv.length();
+  if (err < 0.004) { out.set(0, 0, 0); return 0; }
+  // the bare thrusters' push (more for the boosters when the gap is large: fast runs, braking)
+  const big = boosting || err > vFine * 1.2;
+  const aMax = (big ? Math.max(P.accel, Fn.acc * ASSIST.k) : Fn.acc * ASSIST.k) * tk;
+  out.copy(dv).multiplyScalar(1 / ASSIST.tau);
+  if (out.length() > aMax) out.setLength(aMax);
+  return Math.min(1, out.length() / Math.max(1e-4, aMax)) * (big ? 1 : 0.18);
+}
 const ZERO = V(0, 0, 0);
 const _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _e3 = new THREE.Vector3(), _qe = new THREE.Quaternion(), _qe2 = new THREE.Quaternion(), _eu = new THREE.Euler();
 const gravE = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
@@ -50,7 +83,9 @@ export class Suits {
     for (const k of Object.keys(this.st)) this.st[k].onEvent = (kind, info) => this.onEvent(k, kind, info);
     this.cam = new SuitCamera();
     this.boost = false;          // the boosters armed (else the fine thrusters)
-    this.hold = false;           // asked to, the flight computer brakes him to a stop against the ship
+    this.hold = true;            // the flight computer's assist (on: the stick asks for a velocity,
+                                 // let go and it stops him against the ship; off: bare thrusters)
+    this.autoV = null;           // a velocity the computer flies on its own (the rescue bringing him in)
     this.eva = null;             // out in space: his own state { p, v (ECI), q (the frame's turn), solo }
     this.throttle = 0;           // what is being asked of the boosters now (0..1)
     this.lamp = false;
@@ -515,7 +550,17 @@ export class Suits {
     const asked = Math.min(1, want.length());
     let thrusting = false;
     this.throttle = 0;
-    if (asked > 0.02 && tk > 0) {
+    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
+      // the flight computer flies what the stick asks (against the ship's frame: his velocity here)
+      if (asked > 0.02) want.normalize();
+      const boosting = this.boost && (input.moveY || 0) > 0.2;
+      const a = _v2.set(0, 0, 0);
+      const th = assistAcc(want, asked, boosting, camF, pl.vel, S, Fn, tk, this.autoV, a);
+      pl.vel.addScaledVector(a, dt);
+      if (boosting && S.asymmetry()) pl.vel.addScaledVector(camR, S.asymmetry() * a.length() * 0.12 * dt);
+      this.throttle = th;
+      thrusting = th > 0.02;
+    } else if (asked > 0.02 && tk > 0) {
       want.normalize();
       const boosting = this.boost && (input.moveY || 0) > 0.2;
       const acc = (boosting ? P.accel : Fn.acc) * tk * asked;
@@ -605,7 +650,19 @@ export class Suits {
     let thrusting = false;
     this.throttle = 0;
     E.vCap = 0;
-    if (asked > 0.02 && tk > 0) {
+    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
+      // the flight computer flies what the stick asks, against the vessel (its frame's motion here)
+      if (asked > 0.02) want.normalize();
+      want.applyQuaternion(F.quat);
+      const boosting = this.boost && (input.moveY || 0) > 0.2;
+      const fwdE = _v2.copy(camF).applyQuaternion(F.quat);
+      const autoE = this.autoV ? _v.copy(this.autoV).applyQuaternion(F.quat) : null;
+      const th = assistAcc(want, asked, boosting, fwdE, rel, S, Fn, tk, autoE, a);
+      if (boosting && S.asymmetry()) a.addScaledVector(_e1.copy(camR).applyQuaternion(F.quat), S.asymmetry() * a.length() * 0.12);
+      this.throttle = th;
+      thrusting = th > 0.02;
+      E.vCap = boosting || rel.length() > Fn.v * 1.2 ? P.vMax : 0;
+    } else if (asked > 0.02 && tk > 0) {
       want.normalize().applyQuaternion(F.quat);
       const boosting = this.boost && (input.moveY || 0) > 0.2;
       const acc = (boosting ? P.accel : Fn.acc) * tk * asked;
@@ -893,7 +950,7 @@ export class Suits {
 
   // ================================================================== save
   serialize() {
-    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, holdV: 2, lamp: this.lamp };
+    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, holdV: 3, lamp: this.lamp };
   }
 
   restore(s) {
@@ -901,7 +958,7 @@ export class Suits {
     this.st.h8.restore(s.h8); this.st.b29.restore(s.b29);
     this.cam.restore(s.cam);
     // (the automatic stop is off unless it was chosen: older saves had it on by default)
-    this.boost = !!s.boost; this.hold = s.holdV === 2 && s.hold === true; this.lamp = !!s.lamp;
+    this.boost = !!s.boost; this.hold = s.holdV === 3 ? s.hold !== false : true; this.lamp = !!s.lamp;
     this.mirror();
   }
 

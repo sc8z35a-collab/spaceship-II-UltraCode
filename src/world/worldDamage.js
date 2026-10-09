@@ -639,7 +639,7 @@ export class WorldDamage {
   updateVisual(dt, camWorld) {
     const g = this.g;
     this.visT += dt;
-    const sc = g.engine.renderer.domElement.height / (2 * Math.tan(g.engine.camera.fov * Math.PI / 360));
+    const sc = g.engine.pxPerRad();
     const tt = performance.now() / 1000;
     for (const s of g.stations.list) {
       const D = s.dmg;

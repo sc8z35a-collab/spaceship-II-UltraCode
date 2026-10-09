@@ -612,9 +612,8 @@ export class Combat {
     this.tColAttr.needsUpdate = true;
     this.tracers.visible = n > 0;
     if (n) {
-      const size = g.engine.renderer.getDrawingBufferSize(this._size || (this._size = new THREE.Vector2()));
-      this.tMat.resolution.set(size.x, size.y);
-      this.tMat.linewidth = 2.4 * g.engine.renderer.getPixelRatio();
+      this.tMat.resolution.set(g.engine.rw, g.engine.rh);
+      this.tMat.linewidth = 2.4 * g.engine.pr;
     }
     // flashes
     let m = 0;
@@ -631,7 +630,7 @@ export class Combat {
     fg.attributes.position.needsUpdate = fg.attributes.color.needsUpdate = fg.attributes.size.needsUpdate = true;
     this.flashPts.visible = m > 0;
     const cam = g.engine.camera;
-    const sc = g.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const sc = g.engine.pxPerRad(cam);
     this.fMat.uniforms.uScale.value = sc;
     // particle frames pinned in space
     for (const A of this.anchors) {
