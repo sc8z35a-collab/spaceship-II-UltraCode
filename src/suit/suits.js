@@ -691,7 +691,7 @@ export class Suits {
     } else if (pl._nearRail) {
       // a hand on a rail: the hull carries him (his grip takes up what he had against it)
       E.v.copy(F.vel).addScaledVector(rel, Math.exp(-h * 2.5));
-    } else if (this.hold && tk > 0) {
+    } else if (this.hold && !coming && tk > 0) {
       // asked to hold still against the vessel: the thrusters brake him, taking the time and the
       // charge it costs
       const v = rel.length();
