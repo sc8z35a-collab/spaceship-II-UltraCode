@@ -484,6 +484,22 @@ export class SuitRescue {
     if (!w) { this.tuck = false; return true; }
     // (waiting at the gate for the hatch)
     if (R.gate <= 0 && !open && R.wp.length <= 2) w = R.wp[0];
+    // (stuck on something on the way in (a boom, an array, a rim): back off and slip round it, a
+    // wider way each time, the other side each time)
+    const far = pl.pos.distanceTo(w);
+    if (R.last && pl.pos.distanceTo(R.last) < 0.003 && far > 0.3) R.stuck = (R.stuck || 0) + 1; else R.stuck = 0;
+    R.last = (R.last || new THREE.Vector3()).copy(pl.pos);
+    if (R.stuck > 50) {
+      R.stuck = 0; R.tries = (R.tries || 0) + 1;
+      const to = new THREE.Vector3().copy(w).sub(pl.pos).normalize();
+      const side = new THREE.Vector3().crossVectors(to, Math.abs(to.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0)).normalize();
+      if (R.tries % 2 === 0) side.negate();
+      const up = new THREE.Vector3().crossVectors(side, to).normalize();
+      const k = 1.2 + 0.6 * R.tries;
+      R.wp.unshift(pl.pos.clone().addScaledVector(to, -0.8).addScaledVector(side, k).addScaledVector(up, (R.tries % 3 === 0 ? 1 : 0.4) * k));
+      R.gate++;
+      w = R.wp[0];
+    }
     const err = _a.copy(w).sub(pl.pos);
     s.autoV = closeIn(err, 1.6, BOARD_V, s.autoV || new THREE.Vector3());
     return false;
