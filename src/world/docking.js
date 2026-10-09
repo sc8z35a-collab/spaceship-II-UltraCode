@@ -205,7 +205,7 @@ export class Docking {
    */
   undock(after = null) {
     const g = this.g;
-    if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
+    if ((this.lobby && this.lobby.contains(g.player.pos)) || this.inRing || (!g.ride && g.akamo && g.akamo.berthOn && g.akamo.inCabinShip && g.akamo.inCabinShip(g.player.pos))) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
     if (g.hatch.target > 0.5 || g.hatch.open > 0 || !g.hatch.sealed) {
       if (g.hatch.target > 0.5) { g.hatch.target = 0; g.audio.mech(g.hatch.o.center, 'hatch', { open: false }); }
       this.pendingUndock = { after, t: 0 };
@@ -283,6 +283,7 @@ export class Docking {
     });
     this.ringCols = g.phys.addColliders(cols);
     if (R.lift) R.lift.attach(g, C);
+    if (R.rooms) R.rooms.attach(g, C);
     this.ringLamps = R.lamps;
     g.systems.lamps.push(...R.lamps);
     // the call panel at the hub terminal, the call buttons in the ring's elevator halls
@@ -303,6 +304,7 @@ export class Docking {
     if (this.ringCols) for (const c of this.ringCols) g.phys.world.removeCollider(c, true);
     this.ringCols = null;
     if (R.lift) R.lift.detach(g);
+    if (R.rooms) R.rooms.detach(g);
     g.systems.lamps = g.systems.lamps.filter((l) => !R.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && R.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     for (const t of this.ringTaps || []) g.interact.remove(t);
@@ -366,7 +368,7 @@ export class Docking {
     }
     setTimeout(() => {
       const pl = g.player;
-      if (this.state !== 'docked' || !this.lobby || this.lobby.ring !== R) { this.riding = false; g.hud.setFade(0); return; }
+      if (g.player && g.player.state === 'dead') { this.riding = false; return; } if (this.state !== 'docked' || !this.lobby || this.lobby.ring !== R) { this.riding = false; g.hud.setFade(0); return; }
       if (down) {
         // step out of the car in the first hall, facing along the deck
         const h = R.halls[0];
@@ -520,7 +522,7 @@ export class Docking {
       const h = this.g.hatch;
       P.t += dt;
       if (this.state !== 'docked' || h.target > 0.5) this.pendingUndock = null;      // opened again
-      else if (h.sealed) this.undock(P.after);
+      else if (h.sealed) { if (this.undock(P.after) === false) this.pendingUndock = null; }
       else if (P.t > 25) { this.pendingUndock = null; this.g.asphalt.say('st_dock_hatch', {}, { force: true }); }
     }
   }
@@ -674,7 +676,7 @@ export class Docking {
     for (const l of L) if (l.base0 === undefined) { l.base0 = l.intensity; l.color0 = new THREE.Color(l.color); }
     this.emT = (this.emT || 0) + dt;
     const t = this.emT;
-    const red = new THREE.Color(1, 0.12, 0.06);
+    const red = this._red || (this._red = new THREE.Color(1, 0.12, 0.06));
     L.forEach((l, i) => {
       let k = 1, col = l.color0;
       // (smooth changes only, and a rare dip: no strobing)

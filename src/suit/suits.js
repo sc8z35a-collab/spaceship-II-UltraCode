@@ -660,6 +660,9 @@ export class Suits {
     // it; holding to the ship would drag him along with it, and holding a fixed course would fight
     // gravity. Once B-29 is here the hold to the ship comes back for the boarding)
     const coming = !!(this.rescuer && this.rescuer.approaching && this.rescuer.approaching());
+    // (this step's fall first, as the vessel has already had its own: the speed against it is then
+    // the one the step ends with, and the assist flies what it is asked, not g·dt off it)
+    E.v.addScaledVector(gravE(E.p, _v), h);
     const rel = _e2.copy(E.v).sub(F.vel);
     const a = _e3.set(0, 0, 0);
     let thrusting = false;
@@ -704,7 +707,7 @@ export class Suits {
       }
     }
     // gravity (he falls round the Earth as everything else does) and his push
-    E.v.addScaledVector(gravE(E.p, _e1).add(a), h);
+    E.v.addScaledVector(a, h);
     if (E.vCap) {
       const r2 = _e2.copy(E.v).sub(F.vel), sp = r2.length();
       if (sp > E.vCap) E.v.copy(F.vel).addScaledVector(r2, E.vCap / sp);

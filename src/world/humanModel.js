@@ -193,7 +193,7 @@ export const OUTFITS = {
 const FACE = new Map();
 /** the face painted on a canvas: skin, eyes, brows, nose, lips, a little colour (cached by look) */
 function faceTexture(look) {
-  const key = `${look.skin}|${look.iris}|${look.hair}|${look.fem ? 1 : 0}|${look.brow}`;
+  const key = `${look.skin}|${look.iris}|${look.hair}|${look.fem ? 1 : 0}|${Math.round((look.brow || 0) * 4)}`;
   if (FACE.has(key)) return FACE.get(key);
   const N = 256, c = document.createElement('canvas');
   c.width = N; c.height = N;

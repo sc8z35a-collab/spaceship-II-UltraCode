@@ -9,6 +9,7 @@
 // (r cos a, r sin a, z). The floor is the far side (gravity points outward).
 import * as THREE from 'three';
 import { Builder, rng } from '../ship/geom.js';
+import { RingRooms, roomAt } from './ringRooms.js';
 
 export const RING = { R: 58, floor: 60.0, ceil: 55.4, hw: 2.2, omega: 0.28, sections: 24 };
 const D2R = Math.PI / 180;
@@ -161,7 +162,7 @@ export function buildRingInterior(def, M) {
   const lamps = [];
   const lamp = (a, z, h, color = 0xfff1dc, intensity = 2.2, range = 11) => {
     const r = RF - h;
-    lamps.push({ local: new THREE.Vector3(r * Math.cos(a), r * Math.sin(a), z), pos: new THREE.Vector3(), color, intensity, range, room: 'station' });
+    lamps.push({ local: new THREE.Vector3(r * Math.cos(a * D2R), r * Math.sin(a * D2R), z), pos: new THREE.Vector3(), color, intensity, range, room: 'station' });
   };
   const at = (aDeg, z = 0, h = 0) => {
     const a = aDeg * D2R, r = RF - h;
@@ -181,10 +182,12 @@ export function buildRingInterior(def, M) {
   };
 
   const halls = [];
+  const rooms = new RingRooms(def, M, { RF, RC, hw, band, place, lamp });
   for (let k = 0; k < RING.sections; k++) {
     const a0 = k * SEG, a1 = a0 + SEG, am = a0 + SEG / 2;
     const A0 = a0 * D2R, A1 = a1 * D2R;
     const kind = k % 4 === 0 ? 'hall' : ['plaza', 'park', 'street', 'deck', 'farm', 'street'][(k + Math.floor(k / 4)) % 6];
+    const room = roomAt(def, k);           // (a street closed off as one of Shirasagi's rooms)
     // ---- floor (glass panels in the observation deck)
     if (kind === 'deck') {
       const g0 = am - 3.2, g1 = am + 3.2;
@@ -221,7 +224,7 @@ export function buildRingInterior(def, M) {
         b.colBox(1.4, 0.5, 0.45, [0, 0.25, 0]);
       });
       lamp(am, 1.2, 3.6, 0xfff3d8, 1.8, 10);
-    } else {
+    } else if (!room) {
       b.add(band(RF, A0, A1, -hw, hw, 24, true, 2), kind === 'plaza' ? 'marble' : kind === 'farm' ? 'grate' : 'ringFloor');
     }
     // ---- side walls (doors along the residential streets, shopfronts on the plaza)
@@ -246,7 +249,9 @@ export function buildRingInterior(def, M) {
     for (let ad = a0; ad < a1 - 0.01; ad += 3) place(ad, 0, RF - RC - 0.12, () => b.box(0.14, 0.22, hw * 2, 'brass', [0, 0, 0], null, 0.02));
 
     // ---- what is in the section
-    if (kind === 'hall') {
+    if (room) {
+      rooms.build(b, k, a0, a1, am);
+    } else if (kind === 'hall') {
       // the spoke elevator: a glass column from the floor into the ceiling, the car inside, doors
       // facing along the deck, a call pillar beside them
       place(am, 0, 0, () => {
@@ -353,7 +358,7 @@ export function buildRingInterior(def, M) {
       lamp(am, 0, 3.6, 0xdde8ff, 1.6, 10);
     }
     // a section sign over the way on (every section; names in Japanese)
-    if (kind !== 'hall') {
+    if (kind !== 'hall' && !room) {
       const names = { plaza: ['カフェ広場', 'PLAZA'], park: ['せせらぎ公園', 'PARK'], street: ['居住区', 'RESIDENCES'], deck: ['展望デッキ', 'OBSERVATION'], farm: ['水耕農場', 'HYDROPONICS'] };
       const [jp, en] = names[kind];
       hangSign(a0 + 0.8, 3.6, 1.8, 0.45, signMat(jp, `${en} · ${k + 1}`));
@@ -368,10 +373,11 @@ export function buildRingInterior(def, M) {
   const group = b.build(M, { castShadow: false, receiveShadow: false });
   for (const s of signs) group.add(s);
   for (const h of halls) group.add(h.button);
+  rooms.finish(group);
   group.name = 'ringInterior';
   const contains = (p) => {
     const r = Math.hypot(p.x, p.y);
     return r > RC - 0.3 && r < RF + 0.3 && Math.abs(p.z) < hw + 0.2;
   };
-  return { group, colliders: b.colliders, lamps, contains, halls };
+  return { group, colliders: b.colliders, lamps, contains, halls, rooms: rooms.count ? rooms : null };
 }

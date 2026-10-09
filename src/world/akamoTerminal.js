@@ -499,7 +499,7 @@ export function buildTerminal(M, lamp) {
     visuals();
     st.drawT -= dt;
     if (st.drawT <= 0) {
-      st.drawT = 0.25;
+      st.drawT = 0.5;
       drawCar(cp, st);
       for (let i = 0; i < 2; i++) drawInd(ind[i], i, st);
       const info = ak && ak.boardInfo ? ak.boardInfo() : null;

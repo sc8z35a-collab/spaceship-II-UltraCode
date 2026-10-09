@@ -154,10 +154,11 @@ export function buildRingLift(M, R) {
     for (let s = s0 + 1.2; s < s1 - 0.4; s += 2.5) { const t = new THREE.Mesh(lampG, M.rlRun); t.position.copy(along(s)); t.quaternion.setFromUnitVectors(V(0, 0, 1), U); ring.add(t); }
     const cap = new THREE.Mesh(new THREE.CircleGeometry(1.0, 28), M.steel);
     cap.position.copy(along(s0)); cap.quaternion.setFromUnitVectors(V(0, 0, 1), U); ring.add(cap);
-    const sh = new THREE.Shape(); sh.moveTo(-1.3, -1.3); sh.lineTo(1.3, -1.3); sh.lineTo(1.3, 1.3); sh.lineTo(-1.3, 1.3); sh.closePath();
+    const sh = new THREE.Shape(); sh.moveTo(-1.7, -RING.hw); sh.lineTo(1.7, -RING.hw); sh.lineTo(1.7, RING.hw); sh.lineTo(-1.7, RING.hw); sh.closePath();
     const hp = new THREE.Path(); hp.absarc(0, 0, 0.97, 0, TAU, true); sh.holes.push(hp);
     const collar = new THREE.Mesh(new THREE.ShapeGeometry(sh, 32), M.steel);
-    collar.position.copy(along(R_CEIL - 0.02)); collar.quaternion.setFromUnitVectors(V(0, 0, 1), U); ring.add(collar);
+    // (just under the ceiling, square with the deck: it covers the whole slot cut for the car)
+    collar.position.copy(along(R_CEIL + 0.012)); collar.quaternion.setFromRotationMatrix(new THREE.Matrix4().makeBasis(TG, Z, U)); ring.add(collar);
   }
   const rcar = buildCar(M);
   rcar.group.quaternion.copy(QR);
@@ -209,6 +210,7 @@ export function buildRingLift(M, R) {
   function step(dt, g) {
     const pl = g.player, alive = pl && pl.state !== 'dead';
     const D = g.docking, rp = alive ? ringPos(g) : null, sp = alive && !D.inRing ? pl.pos : null;
+    st.ringK = D.station && D.station.ringK != null ? D.station.ringK : 1;
     const inRingC = inRingCar(rp), inTermC = st.at === 'top' && st.phase !== 'move' && inTermCar(sp);
     const here = st.at === 'top' ? inTermC : inRingC;
     st.inside = inRingC || inTermC;
@@ -231,6 +233,12 @@ export function buildRingLift(M, R) {
         else if (!here && !nearStop(st.at) && st.timer > 6) { st.dest = st.at; st.phase = 'closing'; }
         break;
       case 'closing':
+        // (never onto someone standing in the deck doorway)
+        if (rp && st.at === 'deck') {
+          _w.copy(rp).sub(st.C).addScaledVector(U, -st.rf);
+          const dx = _w.dot(TG), dy = -_w.dot(U);
+          if (dx > 0.68 && dx < 1.7 && Math.abs(_w.z) < 0.75 && dy > -0.4 && dy < 2.4) { st.phase = 'opening'; break; }
+        }
         st.k = Math.max(0, st.k - dt / 1.3);
         if (st.k <= 0) {
           if (st.dest === st.at) st.phase = 'idle';
@@ -319,7 +327,7 @@ export function buildRingLift(M, R) {
     const name = (w) => (w === 'deck' ? 'リング居住区' : 'ハブ');
     txt(ctx, moving ? (st.dest === 'deck' ? '▼' : '▲') : '●', W / 2, H * 0.2, H * 0.1, moving ? '#7fd0ff' : '#e9eef5');
     txt(ctx, moving ? name(st.dest) + ' へ' : name(st.at), W / 2, H * 0.33, H * 0.065, '#e9eef5');
-    txt(ctx, pull().toFixed(2) + ' G', W / 2, H * 0.45, H * 0.075, '#8dffb0');
+    txt(ctx, (pull() * (st.ringK ?? 1) * (st.ringK ?? 1)).toFixed(2) + ' G', W / 2, H * 0.45, H * 0.075, '#8dffb0');
     txt(ctx, '半径 ' + st.rf.toFixed(1) + ' m', W / 2, H * 0.55, H * 0.045, '#9fb3c8', 'center', 500);
     for (const w of ['top', 'deck']) {
       const y = w === 'top' ? H * 0.63 : H * 0.8, on = (moving ? st.dest : st.at) === w;
@@ -356,14 +364,17 @@ export function buildRingLift(M, R) {
         wall.push({ type: 'box', hx: w / 2, hy: (R_DECK - R_CEIL) / 2, hz: 0.05, m: new THREE.Matrix4().compose(o.add(foot), QR.clone().multiply(new THREE.Quaternion().setFromAxisAngle(V(0, 1, 0), Math.PI / 2 - a)), V(1, 1, 1)) });
       }
       st.wallCols = ph.addColliders(wall);
+      // the slot the hall's ceiling lost to the spoke, closed again round the column (its hole stays)
+      const cp = (t, z, hx, hz) => ({ type: 'box', hx, hy: 0.1, hz, m: new THREE.Matrix4().compose(along(R_CEIL - 0.1).clone().addScaledVector(TG, t).addScaledVector(Z, z).add(st.C), QR, V(1, 1, 1)) });
+      st.ceilCols = ph.addColliders([cp(0, 1.6, 1.62, 0.6), cp(0, -1.6, 1.62, 0.6), cp(1.3, 0, 0.32, 1.02), cp(-1.3, 0, 0.32, 1.02)]);
       const lo = V(1.04, CAR.doorH / 2, 0).applyQuaternion(QR).add(foot);
       st.landCols = ph.addColliders([{ type: 'box', hx: 0.05, hy: CAR.doorH / 2, hz: 0.62, m: new THREE.Matrix4().compose(lo, QR, V(1, 1, 1)) }]);
       st.tDoorCols = ph.addColliders(tDoor);
       applyCols();
     },
     detach(g) {
-      for (const c of [...(st.cols || []), ...(st.wallCols || []), ...(st.landCols || []), ...(st.tDoorCols || [])]) g.phys.world.removeCollider(c, true);
-      st.cols = st.doorCols = st.wallCols = st.landCols = st.tDoorCols = null;
+      for (const c of [...(st.cols || []), ...(st.wallCols || []), ...(st.landCols || []), ...(st.tDoorCols || []), ...(st.ceilCols || [])]) g.phys.world.removeCollider(c, true);
+      st.cols = st.doorCols = st.wallCols = st.landCols = st.tDoorCols = st.ceilCols = null;
       if (st.interact) for (const t of st.taps) st.interact.remove(t);
       st.taps = [];
     },

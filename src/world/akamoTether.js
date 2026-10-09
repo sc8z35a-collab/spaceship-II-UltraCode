@@ -133,8 +133,10 @@ export class AkamoTether {
     put(0, a0); put(1, Math.max(a0, a1)); put(2, Math.min(b0, b1)); put(3, b1);
     const lum = 0.08 + 0.55 * k;
     for (let i = 0; i < 4; i++) { C[i * 3] = lum * 1.0; C[i * 3 + 1] = lum * 0.98; C[i * 3 + 2] = lum * 0.95; }
-    this.farGeo.setPositions(P);
-    this.farGeo.setColors(C);
+    // (into the buffers it already has: setPositions/setColors make new GPU buffers at every call)
+    const ia = this.farGeo.attributes.instanceStart, ic = this.farGeo.attributes.instanceColorStart;
+    if (ia && ia.data.array.length === P.length) { ia.data.array.set(P); ia.data.needsUpdate = true; this.farGeo.computeBoundingSphere(); } else this.farGeo.setPositions(P);
+    if (ic && ic.data.array.length === C.length) { ic.data.array.set(C); ic.data.needsUpdate = true; } else this.farGeo.setColors(C);
     this.farMat.resolution.set(this.engine.rw, this.engine.rh);
     this.farMat.linewidth = 1.4 * Math.max(1, this.engine.pr);
     this.far.visible = true;

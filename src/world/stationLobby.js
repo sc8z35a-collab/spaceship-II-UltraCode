@@ -842,7 +842,7 @@ export function buildLobby(renderer, def) {
   }
   // Shirasagi: its crew on their rounds, the escape pod hatches (shirasagiLife.js)
   const life = core ? new ShirasagiLife(M, group) : null;
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); if (ring && ring.lift) ring.lift.update(dt, g); } : undefined };
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); if (ring && ring.lift) ring.lift.update(dt, g); if (ring && ring.rooms) ring.rooms.update(dt, g); } : undefined };
 }
 
 /** paint the globe with the Earth colour map once it is available */

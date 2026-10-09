@@ -175,6 +175,30 @@ export function buildCoreAtrium(b, M, lamp, R, def) {
     const cg = new THREE.BufferGeometry();
     cg.setAttribute('position', new THREE.Float32BufferAttribute(out, 3));
     b.colMesh(cg);
+    // (that collider is coarse, so its opening round AKAMO's lift is cut wide: plates laid on the
+    // dome's own curve close the gap right up to the lift's glass, or a weightless Kaito drifts out)
+    {
+      const Rd = RA + 0.02, lx = AK_SITE.lift.x, lz = AK_SITE.lift.z, NS = 18, rr = [1.5, 2.2, 2.95];
+      const onDome = (d, t) => { const x = lx + d * Math.cos(t), z = lz + d * Math.sin(t), q = Rd * Rd - (x - CX) ** 2 - (z - CZ) ** 2; return q > 0 ? V(x, CY + Math.sqrt(q), z) : null; };
+      const mb = new THREE.Matrix4(), eu = new THREE.Euler(), ctr = V(CX, CY, CZ);
+      for (let i = 0; i < NS; i++) {
+        const t = (i + 0.5) / NS * Math.PI * 2;
+        for (let j = 0; j < rr.length - 1; j++) {
+          const A = onDome(rr[j], t), B = onDome(rr[j + 1], t);
+          if (!A || !B) continue;
+          const c = A.clone().add(B).multiplyScalar(0.5);
+          if (bridgeHole(c) || shaftHole(c)) continue;
+          const ex = B.clone().sub(A), len = ex.length();
+          ex.normalize();
+          const ey = c.clone().sub(ctr).normalize();
+          ey.addScaledVector(ex, -ey.dot(ex)).normalize();
+          const ez = new THREE.Vector3().crossVectors(ex, ey);
+          c.addScaledVector(ey, 0.04);
+          eu.setFromRotationMatrix(mb.makeBasis(ex, ey, ez), 'YXZ');
+          b.colBox(len + 0.12, 0.24, 2 * rr[j + 1] * Math.sin(Math.PI / NS) + 0.14, c.toArray(), [eu.x, eu.y, eu.z]);
+        }
+      }
+    }
   }
 
   // ---- main floor with the heron mosaic; bridge landing; curved stair; balustrades

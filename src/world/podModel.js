@@ -360,7 +360,7 @@ export function buildPod(grade, armed, level, label, station) {
           // (the cabin has no lamp: the screens' and strips' glow on them)
           c.person.root.traverse((o) => {
             if (!o.isMesh) return;
-            const lit = (m) => { if (!m || !m.emissive) return m; const q = m.clone(); q.emissive.copy(q.color).multiplyScalar(0.32); q.emissiveIntensity = 1; return q; };
+            const lit = (m) => { if (!m || !m.emissive) return m; const q = m.clone(); q.emissive.copy(q.color).multiplyScalar(0.32); q.emissiveIntensity = 1; (c.mats || (c.mats = [])).push(q); return q; };
             o.material = Array.isArray(o.material) ? o.material.map(lit) : lit(o.material);
           });
           const room = Math.sqrt(Math.max(0.05, Rl * Rl - c.seat.x * c.seat.x)) - c.seat.y - 0.05;
@@ -408,7 +408,7 @@ export function buildPod(grade, armed, level, label, station) {
       api.tick(0, 0, 0, null, true, false);
     },
     dispose() {
-      for (const c of crew) if (c.person) { c.person.dispose(); c.person = null; }
+      for (const c of crew) { if (c.person) { c.person.dispose(); c.person = null; } if (c.mats) { for (const m of c.mats) m.dispose(); c.mats = null; } }
       root.parent && root.parent.remove(root);
       mark.map.dispose(); mark.dispose();
       for (const m of Object.values(L)) m.dispose();
