@@ -126,11 +126,12 @@ export class Akamo {
     if (typeof document === 'undefined') return;
     const el = this.panel = document.createElement('div');
     el.id = 'ak-panel';
-    el.innerHTML = '<div class="ak-t">AKAMO から呼ぶ</div><button data-w="h8">H8 を追従させる</button><button data-w="b29">B-29 を追従させる</button>';
-    el.addEventListener('click', (e) => { const w = e.target && e.target.dataset && e.target.dataset.w; if (w) this.toggleFollow(w); });
+    el.innerHTML = '<div class="ak-t">AKAMO から呼ぶ</div><button data-w="h8">H8 を追従させる</button><button data-w="b29">B-29 を追従させる</button><div class="ak-t">護衛機から見る</div><button data-v="h8">H8 から見る</button><button data-v="b29">B-29 から見る</button>';
+    el.addEventListener('click', (e) => { const d = e.target && e.target.dataset; if (d && d.w) this.toggleFollow(d.w); else if (d && d.v) this.toggleView(d.v); });
     for (const ev of ['pointerdown', 'touchstart']) el.addEventListener(ev, (e) => e.stopPropagation(), { passive: true });
     (document.getElementById('hud') || document.body).appendChild(el);
     this.btn = { h8: el.querySelector('[data-w="h8"]'), b29: el.querySelector('[data-w="b29"]') };
+    this.vbtn = { h8: el.querySelector('[data-v="h8"]'), b29: el.querySelector('[data-v="b29"]') };
   }
 
   toggleFollow(who) {
@@ -152,7 +153,58 @@ export class Akamo {
         else this.say('ak_b29_follow');
       } else if (ap.target === this.b29Target) ap.disengage(true);
     }
+    if (!this.follow[who] && this.viewFrom === who) this.closeView();
     this.g.audio && this.g.audio.beep(1320, 0.05, 0.05, { direct: true });
+  }
+
+  // ------------------------------------------------------------------ watching from the escorts
+  /** Kaito riding: the view from H8 or B-29 while it escorts the cabin (the external-camera mode;
+   * the exit or camera button, or the panel again, brings him back to the cabin) */
+  toggleView(who) {
+    const g = this.g;
+    if (this.viewFrom === who && g.mode === 'camera') { this.closeView(); return; }
+    if (!this.follow[who] || g.ride !== this.rideObj || g.mode === 'dead') return;
+    if (who === 'h8' && !(g.h8 && g.h8.flight)) return;
+    this.viewFrom = who;
+    g.extCam = 0;
+    g.mode = 'camera'; g.input.setMode('camera');
+    if (g.systems && g.systems.emit) g.systems.emit('camOn');
+    g.audio && g.audio.beep(1320, 0.05, 0.05, { direct: true });
+  }
+
+  closeView() {
+    const g = this.g;
+    this.viewFrom = null;
+    if (g.mode === 'camera') { g.mode = 'walk'; g.input.setMode('walk'); if (g.systems && g.systems.emit) g.systems.emit('camOff'); }
+  }
+
+  /** the escort's view in the cabin's frame (game.updateRender): camera 0 watches the cabin from
+   * just behind the ship (a drag swings it round the cabin), the rest are the ship's own outside
+   * cameras. Returns { pos, quat } or null */
+  remoteView(idx, dt, origin, ride) {
+    const g = this.g, who = this.viewFrom;
+    if (!who || !ride || g.ride !== this.rideObj) return null;
+    const h8 = who === 'h8' ? g.h8 : null, F = h8 ? h8.flight : g.flight;
+    if (!F || (who === 'h8' && !h8)) return null;
+    const T = this._rvT || (this._rvT = { q: new THREE.Quaternion(), a: new THREE.Vector3(), b: new THREE.Vector3(), m: new THREE.Matrix4(), Y: new THREE.Vector3(0, 1, 0) });
+    const N = 1 + (h8 ? 4 : 5), i = ((idx % N) + N) % N;
+    const qi = T.q.copy(ride.quat).invert();
+    if (i === 0) {
+      const P = T.a.copy(F.pos).sub(origin).applyQuaternion(qi).add(ride.off);       // the ship, in the cabin's frame
+      const tgt = ride.off.clone().add(T.b.set(0, 1.2, 0));                             // the cabin's middle
+      const away = P.clone().sub(tgt).normalize();
+      const pos = P.clone().addScaledVector(away, h8 ? 9 : 22).add(T.b.set(0, h8 ? 3 : 7, 0));
+      const quat = new THREE.Quaternion().setFromRotationMatrix(T.m.lookAt(pos, tgt, T.Y));
+      return g.lookExternal({ pos, quat, orbit: tgt }, dt);
+    }
+    const c = h8 ? h8.externalCamera(i - 1) : g.systems.externalCamera(i - 1);
+    const v = g.lookExternal(c, dt);
+    // the ship's frame into render coordinates (the cabin is the origin), then into the cabin's frame
+    const pr = v.pos.clone();
+    if (h8) pr.applyMatrix4(h8.frameMatrix(T.m)).add(T.a.copy(F.pos).sub(origin));
+    else pr.applyQuaternion(F.quat).add(T.a.copy(F.pos).sub(origin));
+    const qr = F.quat.clone().multiply(v.quat);
+    return { pos: pr.applyQuaternion(qi).add(ride.off), quat: qi.clone().multiply(qr) };
   }
 
   /** the cabin back at the bottom with Kaito: H8 goes home to B-29, B-29 back to its berth */
@@ -178,6 +230,15 @@ export class Akamo {
       const txt = (w === 'h8' ? 'H8' : 'B-29') + (on ? ' 追従中（解除）' : ' を追従させる');
       if (b.textContent !== txt) b.textContent = txt;
       b.classList.toggle('on', on);
+    }
+    for (const w of ['h8', 'b29']) {
+      const b = this.vbtn && this.vbtn[w];
+      if (!b) continue;
+      const on = this.viewFrom === w && this.g.mode === 'camera';
+      const txt = on ? '車内の視点に戻る' : (w === 'h8' ? 'H8' : 'B-29') + ' から見る';
+      if (b.textContent !== txt) b.textContent = txt;
+      b.classList.toggle('on', on);
+      b.style.opacity = this.follow[w] || on ? '' : '0.45';
     }
   }
 
@@ -336,6 +397,10 @@ export class Akamo {
     // ---- the ride frame: its pose and the felt pull
     if (g.ride === this.rideObj) this.updateRide(dt);
     // ---- H8 / B-29 called along (the buttons only while Kaito rides AKAMO)
+    // (the escort's view closed with the ride, or once the camera mode was left another way)
+    if (this.viewFrom && (g.mode !== 'camera' || g.ride !== this.rideObj || (this.viewFrom === 'h8' && !(g.h8 && g.h8.flight)))) {
+      if (g.mode === 'camera') this.closeView(); else this.viewFrom = null;
+    }
     this.updatePanel(g.ride === this.rideObj);
     // ---- the cabin's room at the bottom berth (walkable while it is in and B-29 is docked)
     this.setBerth(this.state !== 'run' && this.end === 'bottom' && this.isDockedHere());

@@ -673,8 +673,10 @@ export class Game {
       eyeLocal = c.pos;
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
     } else if (this.mode === 'camera' && this.systems) {
-      const c = solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
-      const v = this.lookExternal(c, dt);
+      // (riding AKAMO: the view from H8 or B-29 escorting the cabin, given in the cabin's frame)
+      const rv = ride && this.akamo && this.akamo.viewFrom ? this.akamo.remoteView(this.extCam, dt, this.origin, ride) : null;
+      const c = rv ? null : solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
+      const v = rv || this.lookExternal(c, dt);
       eyeLocal = v.pos; viewQ = v.quat;
     } else if (!this.running && !this.params.has('view')) {
       // title: slow cinematic around the ship
