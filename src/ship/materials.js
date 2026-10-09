@@ -253,15 +253,18 @@ float shipAO(vec3 p, vec3 n){
   if (n.y < -0.3) ao *= 1.0 - 0.18 * smoothstep(1.9, 2.7, p.y) * (-n.y);
   return ao;
 }
+// soot: thick and black in the middle, thinning out to a ragged edge, mottled
 float scorchAt(vec3 p){
   float s = 0.0;
   for (int i = 0; i < 8; i++){
     vec4 S = uScorch[i];
     if (S.w <= 0.0) continue;
     float d = length(p - S.xyz);
-    s = max(s, 1.0 - smoothstep(0.0, S.w, d));
+    if (d > S.w * 1.15) continue;
+    float e = S.w * (0.85 + 0.25 * sn(p * 0.8 + S.xyz * 0.37));
+    s = max(s, 1.0 - smoothstep(e * 0.35, e, d));
   }
-  return s * (0.7 + 0.3 * sn(p * 0.6));
+  return s * (0.88 + 0.12 * sn(p * 1.2));
 }
 #ifdef DENTABLE
 uniform highp sampler2D tDents;
@@ -625,6 +628,7 @@ export function patchShipMaterial(mat, opts = {}) {
         float _bumpH = 0.0;
         float _detailRough = 0.0;
         float _dHeat = 0.0;
+        float _scorch = 0.0;
         float _peelOn = 0.0, _peelRough = 0.5, _peelMetal = 0.0, _peelAO = 1.0, _rimK = 0.0;
         vec3 _peelCol = vec3(0.0), _peelEm = vec3(0.0), _rimCol = vec3(0.0);
         ${o.openings ? `
@@ -701,8 +705,11 @@ export function patchShipMaterial(mat, opts = {}) {
           diffuseColor.rgb *= 1.0 - 0.45 * seam;
           diffuseColor.rgb *= 0.93 + 0.1 * tint;
           _bumpH = -seam * 0.0016 + g2 * 0.00035;` : ''}
+          // soot (matte: it takes the shine off as well as the colour), a brown tint where it thins
           float sc = scorchAt(vShipPos);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.03, 0.025, 0.02), sc * 0.85 * (0.75 + 0.25 * sn(vShipPos * 3.1)));
+          _scorch = sc;
+          diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.62, 0.5, 0.38), smoothstep(0.0, 0.35, sc) * 0.7);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.022, 0.019, 0.016), smoothstep(0.08, 0.7, sc) * 0.96);
           // around a tear: soot fading out, scraped bare metal right at the torn edge, paint
           // crazing running on from the slits, frost where the escaping air freezes
           if (_rim > 0.0) {
@@ -783,11 +790,16 @@ export function patchShipMaterial(mat, opts = {}) {
           float scr = nz(vec3(P.x * 1.3, P.y * 0.1, P.z * 1.3)).b * 2.0 - 1.0;
           roughnessFactor = mix(roughnessFactor, roughnessFactor * 0.55, smoothstep(0.82, 0.95, scr) * ${o.wear.toFixed(3)});
           #endif
+          roughnessFactor = mix(roughnessFactor, 0.96, _scorch);
           if (_peelOn > 0.5) roughnessFactor = _peelRough;
         }`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        metalnessFactor *= 1.0 - _scorch;
         if (_peelOn > 0.5) metalnessFactor = _peelMetal;`)
       .replace('#include <aomap_fragment>', `#include <aomap_fragment>
+        // (soot reflects next to nothing)
+        reflectedLight.indirectSpecular *= 1.0 - 0.9 * _scorch;
+        reflectedLight.directSpecular *= 1.0 - 0.75 * _scorch;
         #if defined(PEEL) || defined(STRIKE)
         reflectedLight.indirectDiffuse *= _peelAO;
         reflectedLight.indirectSpecular *= _peelAO;

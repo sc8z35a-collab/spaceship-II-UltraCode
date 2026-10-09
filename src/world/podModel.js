@@ -72,6 +72,10 @@ function podMats(level) {
     skin: S({ color: 0xd2a07e, roughness: 0.6, metalness: 0, emissive: new THREE.Color(0.12, 0.06, 0.05), emissiveIntensity: 1 }),
     hair: S({ color: 0x1d1612, roughness: 0.85, metalness: 0 }),
     headset: S({ color: 0x151719, roughness: 0.4, metalness: 0.4 }),
+    eye: S({ color: 0xeeeee8, roughness: 0.25, metalness: 0, emissive: new THREE.Color(0.08, 0.08, 0.08), emissiveIntensity: 1 }),
+    mouth: S({ color: 0x3a0f0e, roughness: 0.8, metalness: 0 }),
+    strap: S({ color: 0x23272d, roughness: 0.75, metalness: 0.05, emissive: new THREE.Color(0.02, 0.02, 0.025), emissiveIntensity: 1 }),
+    boot: S({ color: 0x1b1c1f, roughness: 0.6, metalness: 0.1 }),
     // the canopy: tinted glass, a little reflective (the cabin shows through)
     glass: new THREE.MeshPhysicalMaterial({ color: 0x9fb4c8, roughness: 0.06, metalness: 0.05, transparent: true, opacity: hi ? 0.28 : 0.34, depthWrite: false, side: THREE.DoubleSide, clearcoat: hi ? 1 : 0, envMapIntensity: 1.2 }),
     gun: S({ color: 0x33363b, roughness: 0.42, metalness: 0.75 }),
@@ -104,6 +108,7 @@ function crewMember(M, level, k) {
 
 function crewShape(M, level, k) {
   const lo2 = level === 'low2';
+  if (!lo2) return crewShapeFull(M, level, k);
   const suit = k % 3 === 2 ? 'suit2' : 'suit';
   const root = new THREE.Group();
   const mk = (b) => { const g = b.build(M, { castShadow: false, receiveShadow: false }); return g; };
@@ -140,6 +145,86 @@ function crewShape(M, level, k) {
     fb.sphere(0.05, 'skin', [0, -0.29, 0], lo2 ? 6 : 10);
     fo.add(mk(fb));
     arms[k2] = { sh, fo };
+  }
+  return { root };
+}
+
+/** a capsule from a to b (radius r) into a builder */
+function capsule(b, a, c, r, key, seg = 10) {
+  const A = V(...a), B = V(...c), d = B.clone().sub(A);
+  const g = new THREE.CapsuleGeometry(r, Math.max(1e-3, d.length()), 3, seg);
+  const q = new THREE.Quaternion().setFromUnitVectors(V(0, 1, 0), d.normalize());
+  g.applyMatrix4(new THREE.Matrix4().compose(A.clone().lerp(B, 0.5), q, V(1, 1, 1)));
+  b.add(g, key);
+}
+
+/**
+ * a crew member as seen close up (a stolen pod's camera turned round to them, or through the glass
+ * from near by): a flight suit with its collar and the seat's harness over it, rounded limbs,
+ * hands, boots; a face — eyes wide, brows up, the mouth open — ears, hair, and on some a headset
+ * with its boom mic. Same joints as the plain one: hips at the origin, the torso, the head, each
+ * arm's shoulder and elbow (+z behind them)
+ */
+function crewShapeFull(M, level, k) {
+  const lo = level !== 'high';
+  const suit = k % 3 === 2 ? 'suit2' : 'suit';
+  const sg = lo ? 7 : 12;
+  const root = new THREE.Group();
+  const mk = (b) => b.build(M, { castShadow: false, receiveShadow: false });
+  // legs: thighs forward along the seat, shins down, boots
+  const legs = new Builder();
+  for (const s of [-1, 1]) {
+    const x = s * 0.095;
+    capsule(legs, [x, 0.0, -0.02], [x, 0.01, -0.4], 0.078, suit, sg);
+    capsule(legs, [x, 0.0, -0.42], [x, -0.36, -0.45], 0.06, suit, sg);
+    legs.box(0.1, 0.085, 0.21, 'boot', [x, -0.43, -0.5], null, 0.03, 2);
+  }
+  // (the lap belt across the hips)
+  legs.box(0.36, 0.05, 0.03, 'strap', [0, 0.06, -0.1], null, 0.01, 1);
+  root.add(mk(legs));
+  const torso = new THREE.Group(); torso.name = 'torso'; root.add(torso);
+  const tb = new Builder();
+  tb.push([0, 0, 0], [0, 0, 0], [1, 1, 0.64]);
+  tb.lathe([[0.0, 0.0], [0.15, 0.01], [0.168, 0.1], [0.182, 0.26], [0.192, 0.4], [0.17, 0.48], [0.11, 0.53], [0.0, 0.545]], suit, [0, 0, 0], null, lo ? 12 : 20);
+  tb.pop();
+  // the collar, the reflective band, the harness's shoulder straps down to its buckle
+  tb.torus(0.058, 0.016, suit, [0, 0.53, 0], [Math.PI / 2, 0, 0], 14);
+  tb.box(0.3, 0.045, 0.02, 'strip', [0, 0.42, -0.118], null, 0, 1);
+  for (const s of [-1, 1]) tb.tube([V(s * 0.1, 0.52, 0.06), V(s * 0.1, 0.5, -0.09), V(s * 0.075, 0.36, -0.125), V(s * 0.02, 0.17, -0.13)], 0.017, 'strap', { radial: 5, seg: 10 });
+  tb.cyl(0.036, 0.036, 0.014, 'metal', [0, 0.16, -0.132], [Math.PI / 2, 0, 0], 14);
+  tb.cyl(0.042, 0.048, 0.08, 'skin', [0, 0.56, 0], null, 10);
+  torso.add(mk(tb));
+  const head = new THREE.Group(); head.name = 'head'; head.position.y = 0.56; torso.add(head);
+  const hb = new Builder();
+  hb.sphere(1, 'skin', [0, 0.11, 0], lo ? 12 : 18, [0.09, 0.112, 0.102]);
+  hb.add(new THREE.SphereGeometry(1, lo ? 10 : 16, 8, 0, Math.PI * 2, 0, 1.55), 'hair', [0, 0.126, 0.012], [-0.3, 0, 0], [0.096, 0.108, 0.106]);
+  for (const s of [-1, 1]) {
+    hb.sphere(0.024, 'skin', [s * 0.088, 0.105, 0.006], 8, [0.45, 1, 0.75]);                    // ears
+    hb.sphere(0.0145, 'eye', [s * 0.033, 0.127, -0.087], 10);                                    // eyes, wide
+    hb.sphere(0.0072, 'hair', [s * 0.033, 0.127, -0.1005], 8);
+    hb.box(0.036, 0.009, 0.01, 'hair', [s * 0.035, 0.153, -0.094], [0, 0, s * 0.28], 0, 1);      // brows up
+  }
+  hb.sphere(0.017, 'skin', [0, 0.1, -0.103], 8, [0.75, 1, 1.15]);                                 // nose
+  hb.sphere(0.021, 'mouth', [0, 0.062, -0.091], 10, [1.15, 0.85, 0.45]);                          // open
+  if (k % 2 === 0) {
+    hb.torus(0.103, 0.011, 'headset', [0, 0.13, 0.0], [0, 0, Math.PI / 2], 16, Math.PI);
+    for (const s of [-1, 1]) hb.cyl(0.032, 0.032, 0.03, 'headset', [s * 0.1, 0.1, 0], [0, 0, Math.PI / 2], 12);
+    hb.tube([V(0.11, 0.09, -0.01), V(0.095, 0.06, -0.07), V(0.035, 0.055, -0.105)], 0.005, 'headset', { radial: 4, seg: 8 });
+    hb.sphere(0.011, 'headset', [0.03, 0.055, -0.106], 6);
+  }
+  head.add(mk(hb));
+  for (const s of [-1, 1]) {
+    const k2 = s < 0 ? 'L' : 'R';
+    const sh = new THREE.Group(); sh.name = 'arm' + k2; sh.position.set(s * 0.2, 0.47, 0); torso.add(sh);
+    const ub = new Builder();
+    capsule(ub, [0, 0.0, 0], [0, -0.27, 0], 0.055, suit, sg);
+    sh.add(mk(ub));
+    const fo = new THREE.Group(); fo.name = 'fore' + k2; fo.position.y = -0.29; sh.add(fo);
+    const fb = new Builder();
+    capsule(fb, [0, 0.0, 0], [0, -0.23, 0], 0.046, suit, sg);
+    fb.sphere(0.042, 'skin', [0, -0.3, 0], 10, [0.85, 1.25, 0.62]);
+    fb.box(0.03, 0.06, 0.03, 'skin', [s * -0.035, -0.29, -0.02], [0, 0, s * 0.5], 0.012, 1);      // thumb
+    fo.add(mk(fb));
   }
   return { root };
 }
@@ -214,8 +299,10 @@ function template(grade, armed, level) {
   // the pod it lands at (r sin phi, r cos phi, -y): phi 0 is the top)
   const P3 = (r, y, phi, k = 1) => V(r * Math.sin(phi) * k, r * Math.cos(phi) * k, -y);
   const rot = (g) => { g.rotateX(-Math.PI / 2); return g; };
-  // the canopy: over the top from the nose's tip back over the front rows of seats (the one row of
-  // a small pod, the first two of the others): the crew in them seen from outside
+  // the canopy: the nose a glass bubble down to the floor's level (a dark chin under it), and a
+  // band of glass over the top from there back over the front rows of seats (the one row of a
+  // small pod, the first two of the others): the crew seen from outside, the way ahead seen from
+  // the cockpit
   const yDome = L / 2 - R * 1.1;
   const zDome = -yDome, zFront = zDome + 0.1;
   const rowZ = (r) => zFront + 0.85 + r * 0.95;
@@ -230,22 +317,38 @@ function template(grade, armed, level) {
   const hz = midB - midA >= 1.0 ? (midA + midB) / 2 : zCan - 0.55;
   const hh = Math.min(0.45, R * 0.4);
   const split = prof.findIndex((p) => p.y >= yCan0);
-  const back = prof.slice(0, split + 1), front = prof.slice(split);
-  front[0] = new THREE.Vector2(front[0].x, yCan0);
+  const back = prof.slice(0, split + 1);
   back[back.length - 1] = new THREE.Vector2(back[back.length - 1].x, yCan0);
   b.add(rot(new THREE.LatheGeometry(back, seg)), 'hull');
-  // (the front: opaque below and round the sides, glass over the top)
-  b.add(rot(new THREE.LatheGeometry(front, seg, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'hull');
-  const glassG = rot(new THREE.LatheGeometry(front.map((p) => new THREE.Vector2(p.x * 1.002, p.y)), seg, canPhi0, canPhi));
+  // (between the canopy's back edge and the nose: opaque below and round the sides, the glass band
+  // over the top; the nose: glass but for its chin)
+  const mid = [new THREE.Vector2(R, yCan0), new THREE.Vector2(R, yDome)];
+  const dome = prof.filter((q) => q.y >= yDome - 1e-6);
+  const chin = Math.acos(Math.max(-0.95, Math.min(0.2, (-R * 0.42) / R)));   // the glass's edge (from the top)
+  b.add(rot(new THREE.LatheGeometry(mid, seg, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'hull');
+  b.add(rot(new THREE.LatheGeometry(dome, seg, chin, Math.PI * 2 - chin * 2)), 'hull');
+  const sc = (pts) => pts.map((q) => new THREE.Vector2(q.x * 1.002, q.y));
+  const glassG = [rot(new THREE.LatheGeometry(sc(mid), seg, canPhi0, canPhi)), rot(new THREE.LatheGeometry(sc(dome), seg * 2, -chin, chin * 2))];
   // the orange bands, the dark engine section
   for (const z of frontBand ? [zBand2, zCan + 0.25] : [zBand2]) b.add(rot(new THREE.CylinderGeometry(R * 1.006, R * 1.006, 0.22, seg, 1, true)), 'orange', [0, 0, z]);
   b.add(rot(new THREE.CylinderGeometry(R * 0.84, R * 0.57, 0.28, seg, 1, true)), 'dark', [0, 0, L / 2 - 0.14]);
   if (!lo2) {
-    // the canopy's frame: its two side rails and its back edge
-    for (const phi of [canPhi0, canPhi0 + canPhi]) b.tube(front.map((p) => P3(p.x, p.y, phi, 1.01)), 0.035, 'frame', { radial: 6, seg: 24 });
+    // the canopy's frame: the band's two side rails and its back edge, the bubble's rim where it
+    // meets the body (down each side to the chin), the chin's edges out to the nose's tip
+    for (const phi of [canPhi0, canPhi0 + canPhi]) b.tube(mid.map((p) => P3(p.x, p.y, phi, 1.01)), 0.035, 'frame', { radial: 6, seg: 8 });
     const ring = [];
-    for (let i = 0; i <= 16; i++) ring.push(P3(front[0].x, yCan0, canPhi0 + canPhi * i / 16, 1.01));
+    for (let i = 0; i <= 16; i++) ring.push(P3(R, yCan0, canPhi0 + canPhi * i / 16, 1.01));
     b.tube(ring, 0.035, 'frame', { radial: 6, seg: 24, tension: 0 });
+    for (const sgn of [-1, 1]) {
+      const rim = [];
+      for (let i = 0; i <= 10; i++) rim.push(P3(R, yDome, sgn * (-canPhi0 + (chin + canPhi0) * i / 10), 1.01));
+      b.tube(rim, 0.035, 'frame', { radial: 6, seg: 16, tension: 0 });
+      b.tube(dome.map((q) => P3(q.x, q.y, sgn * chin, 1.01)), 0.03, 'frame', { radial: 6, seg: 20 });
+    }
+    // (and the rim across the chin)
+    const chinRim = [];
+    for (let i = 0; i <= 10; i++) chinRim.push(P3(R, yDome, chin + (Math.PI * 2 - chin * 2) * i / 10, 1.01));
+    b.tube(chinRim, 0.03, 'frame', { radial: 6, seg: 16, tension: 0 });
     // the side hatch's outline and its handle (port side)
     const hatch = [];
     for (let i = 0; i < 28; i++) {
@@ -272,9 +375,8 @@ function template(grade, armed, level) {
   const lineA = zCan - zDome, lineB = cabLen - lineA;
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineA, seg, 1, true, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner', [0, 0, zDome + lineA / 2]);
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineB, seg, 1, true)), 'liner', [0, 0, zCan + lineB / 2]);
-  // (and the nose's, ahead of the cabin: the hull's skin is only drawn from outside)
-  const noseIn = prof.filter((q) => q.y >= yDome - 1e-6).map((q) => new THREE.Vector2(q.x * 0.95, q.y));
-  if (noseIn.length > 2) b.add(rot(new THREE.LatheGeometry(noseIn, seg, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner');
+  // (and the chin's, ahead of the cabin: the hull's skin is only drawn from outside)
+  b.add(rot(new THREE.LatheGeometry(dome.map((q) => new THREE.Vector2(q.x * 0.95, q.y)), seg, chin, Math.PI * 2 - chin * 2)), 'liner');
   b.box(R * 1.4, 0.04, cabLen + R * 0.6, 'floor', [0, fy, zDome + cabLen / 2 - R * 0.3], null, 0, 1);
   b.box(R * 1.3, 0.35, 0.3, 'console', [0, fy + 0.55, zFront], [-0.6, 0, 0], lo2 ? 0 : 0.03, 1);
   for (const s of [-1, 1]) {
@@ -301,9 +403,11 @@ function template(grade, armed, level) {
     gunAt = V(0, ty + 0.24, tz - 1.1);
   }
   const group = b.build(M, { castShadow: hi, receiveShadow: hi });
-  const glass = new THREE.Mesh(glassG, M.glass);
-  glass.renderOrder = 6;
-  group.add(glass);
+  for (const gg of glassG) {
+    const glass = new THREE.Mesh(gg, M.glass);
+    glass.renderOrder = 6;
+    group.add(glass);
+  }
   const tpl = {
     // (the cockpit camera: on top of the console, between the pilots' hands, looking out through
     // the canopy; turned round, it looks back at the crew)
@@ -375,27 +479,30 @@ export function buildPod(grade, armed, level, label, station) {
       L.red.color.setRGB(dead ? 0 : 3, dead ? 0 : 0.2, dead ? 0 : 0.1);
       L.green.color.setRGB(dead ? 0 : 0.2, dead ? 0 : 3, dead ? 0 : 0.4);
       if (!crewToo) return;
-      // the crew: thrown back by the push, heads snapping round, the pilots fighting the controls
+      // the crew (facing -z): pressed back into their seats by the push (thrown sideways by a turn
+      // of it), heads snapping round, the pilots fighting the controls. (A joint's +x turn swings
+      // a hanging limb forward; a torso's +x leans it back; +z swings a left arm in, a right out.)
       const ax = accel ? accel.x : 0, az = accel ? accel.z : 0;
       for (const c of crew) {
         const p = c.ph + t * (1 + panic * 1.8);
         const n = (a, b) => Math.sin(p * a + b) * 0.6 + Math.sin(p * a * 1.7 + b * 2.3) * 0.4;
-        c.torso.rotation.x = -0.12 + Math.max(-0.4, Math.min(0.5, az * 0.012)) + panic * 0.12 * n(1.3, c.k);
-        c.torso.rotation.z = Math.max(-0.35, Math.min(0.35, -ax * 0.01)) + panic * 0.1 * n(0.9, c.k + 1);
+        c.torso.rotation.x = -0.1 + Math.max(-0.3, Math.min(0.45, -az * 0.012)) + panic * 0.12 * n(1.3, c.k);
+        c.torso.rotation.z = Math.max(-0.35, Math.min(0.35, ax * 0.01)) + panic * 0.1 * n(0.9, c.k + 1);
         c.head.rotation.y = panic * 0.85 * n(2.1, c.k * 3) + (c.pilot ? 0 : 0.2 * Math.sin(p * 0.4));
-        c.head.rotation.x = -0.1 + panic * 0.35 * n(1.7, c.k + 4);
+        c.head.rotation.x = -0.08 + panic * 0.3 * n(1.7, c.k + 4);
         if (c.pilot && !dead) {
-          // hands on the console, jerking at it
-          c.armL.rotation.x = -1.25 + 0.25 * panic * n(3.1, 1); c.foreL.rotation.x = -0.55 + 0.3 * panic * n(4.3, 2);
-          c.armR.rotation.x = -1.2 + 0.25 * panic * n(2.7, 3); c.foreR.rotation.x = -0.6 + 0.3 * panic * n(3.9, 4);
-          c.armL.rotation.z = 0.15; c.armR.rotation.z = -0.15;
+          // hands out on the console, jerking at it
+          c.armL.rotation.x = 1.0 + 0.22 * panic * n(3.1, 1); c.foreL.rotation.x = 0.35 + 0.3 * panic * n(4.3, 2);
+          c.armR.rotation.x = 0.95 + 0.22 * panic * n(2.7, 3); c.foreR.rotation.x = 0.4 + 0.3 * panic * n(3.9, 4);
+          c.armL.rotation.z = 0.12; c.armR.rotation.z = -0.12;
         } else {
-          // passengers: clutching their harness, now and then an arm flung up
+          // passengers: hands clutching the harness at their chests, now and then an arm flung up
           const fling = panic > 0.4 ? Math.max(0, Math.sin(p * 0.7 + c.k)) ** 6 : 0;
-          c.armL.rotation.x = -0.35 - 2.4 * fling * (c.k % 2 ? 1 : 0.3) + 0.2 * panic * n(2.3, 5);
-          c.armR.rotation.x = -0.35 - 2.4 * fling * (c.k % 2 ? 0.3 : 1) + 0.2 * panic * n(2.9, 6);
-          c.foreL.rotation.x = -1.2 + 0.4 * panic * n(3.3, 7); c.foreR.rotation.x = -1.2 + 0.4 * panic * n(3.7, 8);
-          c.armL.rotation.z = 0.25 + 0.3 * fling; c.armR.rotation.z = -0.25 - 0.3 * fling;
+          const fL = fling * (c.k % 2 ? 1 : 0.3), fR = fling * (c.k % 2 ? 0.3 : 1);
+          c.armL.rotation.x = 0.05 + 2.6 * fL + 0.15 * panic * n(2.3, 5);
+          c.armR.rotation.x = 0.05 + 2.6 * fR + 0.15 * panic * n(2.9, 6);
+          c.foreL.rotation.x = 2.15 * (1 - fL) + 0.25 * panic * n(3.3, 7); c.foreR.rotation.x = 2.15 * (1 - fR) + 0.25 * panic * n(3.7, 8);
+          c.armL.rotation.z = 0.32 - 0.6 * fL; c.armR.rotation.z = -0.32 + 0.6 * fR;
         }
       }
     },
