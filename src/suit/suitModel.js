@@ -413,8 +413,9 @@ function decal(b, k, w, h, pos, n, up = UP) {
 
 // ------------------------------------------------------------------ the suit
 /**
- * spec: SUITS entry. opts: { wearer: true (a head inside) | false (an empty suit on its rack) }.
- * Returns the api: { root, M, spec, helm, sun, door, plumes, lamps, set... }
+ * spec: SUITS entry. opts: { wearer: true (a head inside) | false (an empty suit on its rack),
+ * jointed: its arms and legs on joints that move (suitRig.js; otherwise one merged piece, fewer
+ * draws) }. Returns the api: { root, M, spec, helm, sun, door, plumes, lamps, joints, set... }
  */
 export function buildSuit(spec, opts = {}) {
   const M = suitMaterials(spec);
@@ -439,7 +440,7 @@ export function buildSuit(spec, opts = {}) {
   // ---- boots, legs: each leg in two pieces on its joints (the thigh on the hip, the shin and the
   // boot on the knee), so that it can move
   const limbB = {};
-  const lb = (name) => { const x = new Builder(); x.plainUpTo = 0.003; limbB[name] = x; return x; };
+  const lb = (name) => { if (!opts.jointed) return b; const x = new Builder(); x.plainUpTo = 0.003; limbB[name] = x; return x; };
   for (const s of [-1, 1]) {
     const k = s < 0 ? 'L' : 'R';
     const A = J['ankle' + k], K = J['knee' + k], H = J['hip' + k];
@@ -618,7 +619,7 @@ export function buildSuit(spec, opts = {}) {
     joints[name] = pivot;
     return pivot;
   };
-  for (const k of ['L', 'R']) {
+  if (opts.jointed) for (const k of ['L', 'R']) {
     const hip = hang('thigh' + k, J['hip' + k], root, null);
     hang('shin' + k, J['knee' + k], hip, J['hip' + k]);
     const sh = hang('upper' + k, J['shoulder' + k], root, null);
@@ -720,6 +721,7 @@ export function buildSuit(spec, opts = {}) {
      * foreL: bend (+ the hand up), ... } (see suitRig.js)
      */
     setPose(P) {
+      if (!opts.jointed) return;
       for (const k of ['L', 'R']) {
         const s = k === 'L' ? -1 : 1;
         const t = P['thigh' + k], sh = P['shin' + k], u = P['upper' + k], f = P['fore' + k];

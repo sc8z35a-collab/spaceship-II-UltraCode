@@ -819,7 +819,7 @@ export class Suits {
     if (!show) { if (this.avatar) this.avatar.root.visible = false; return; }
     if (!this.avatar || this.avatar.spec.id !== k) {
       if (this.avatar) this.avatar.dispose();
-      this.avatar = buildSuit(SUITS[k], { wearer: true });
+      this.avatar = buildSuit(SUITS[k], { wearer: true, jointed: true });
       this.avatar.root.traverse((o) => { if (o.isMesh) { o.layers.set(3); o.layers.enable(2); } });
       g.shipVis.root.add(this.avatar.root);
     }
