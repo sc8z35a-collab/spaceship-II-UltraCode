@@ -57,6 +57,7 @@ export class Damage {
     this.issues = [];     // active problems for UI + repairs
     this.health = { servers: 1, comms: 1, sensors: 1, o2gen: 1, scrubber: 1, fans: 1, power: 1, reactor: 1, engine: 1, rcs: 1, lift: 1, coffee: 1, lights: 1, cameras: [1, 1, 1, 1, 1] };
     this.scorch = [];
+    this.hot = [];        // the spots an engine's flame is playing on: { p, n, dose, stage, dent, t }
     this.fractures = [];  // fatigue cracks in the cabin wall
     this.nextId = 1;
     this.stress = 0;
@@ -722,6 +723,55 @@ export class Damage {
     }
   }
 
+  /**
+   * An engine's flame playing on the skin at p (ship frame; n: the skin's outward normal) with heat
+   * q (0..: about 1 at a flame's edge, tens in its white core), for dt. The skin glows where it is,
+   * the paint scorches, then the fittings there cook off, the panel warps, and at last it burns
+   * through into what is behind it.
+   */
+  flameOn(p, n, q, dt) {
+    if (!(q > 0) || this.catchingUp) return;
+    const g = this.g;
+    let h = this.hot.find((s) => s.p.distanceTo(p) < 1.1);
+    if (!h) {
+      h = { p: p.clone(), n: n.clone(), dose: 0, stage: 0, t: 0 };
+      this.hot.push(h);
+      if (this.hot.length > 10) this.hot.shift();
+      // (the warped skin there: a shallow bowl that keeps the glow while the flame is on it)
+      this.addDent(h.p, n.clone().negate(), 0.75, 0.006, { heat: 0.3 });
+      h.dent = this.dents.reduce((a, d) => (!a || d.pos.distanceTo(h.p) < a.pos.distanceTo(h.p) ? d : a), null);
+    }
+    h.t = 0;
+    h.dose += q * dt;
+    if (h.dent) { h.dent.heat = Math.max(h.dent.heat || 0, Math.min(1, 0.3 + q / 10 + h.dose / 30)); this._hotDirty = true; }
+    // the paint scorches
+    if (h.stage < 1 && h.dose > 3) { h.stage = 1; this.addScorch(h.p, 0.7 + Math.min(0.6, q * 0.03)); }
+    // the fittings cook off, the panel warps, the pipes behind it leak
+    if (h.stage < 2 && h.dose > 12) {
+      h.stage = 2;
+      this.addScorch(h.p, 1.3);
+      this.knockMounts(h.p, n.clone().negate(), n, 4e5, false);
+      this.panelBlow(h.p, n, n.clone().negate(), 6e5, 0.6, false);
+      for (const [k, eq] of Object.entries(EQUIPMENT)) if (eq.ext && eq.pos.distanceTo(h.p) < 2.2) this.damageEquipment(k, 0.35, h.p);
+      this.events.push({ type: 'flame', stage: 2, pos: h.p.clone() });
+    }
+    // burnt through
+    if (h.stage < 3 && h.dose > 30) {
+      h.stage = 3;
+      const zone = this.zoneForHullPoint(h.p);
+      this.addDent(h.p, n.clone().negate(), 0.5, 0.06, { heat: 1, sharp: 0.2 });
+      if (zone) this.addBreach(h.p.clone(), n.clone(), 0.05 + Math.min(0.12, q * 0.004), zone);
+      for (const [k, eq] of Object.entries(EQUIPMENT)) if (eq.pos.distanceTo(h.p) < 2.5) this.damageEquipment(k, 0.5, h.p);
+      for (const s of g.layout.pipes) if (s.mid.distanceTo(h.p) < 2.5) this.pipeLeak(s, 0.6);
+      this.events.push({ type: 'burnthrough', zone, pos: h.p.clone() });
+    }
+    // (felt aboard: the hull ticking and booming as it heats; the ship warns)
+    const feel = !g.gameplay || !g.gameplay.hearsB29 || g.gameplay.hearsB29();
+    if (feel && g.audio.ready && Math.random() < dt * (0.6 + q * 0.1)) g.audio.impact(h.p, Math.min(0.35, 0.05 + q * 0.01));
+    if (g.asphalt && g.running && q > 0.6) g.asphalt.say(h.stage >= 2 ? 'w_flame_hot' : 'w_flame', {}, { minGap: 25 });
+    if (g.gameplay && q > 1.5) g.gameplay.raise && g.gameplay.raise(0.5);
+  }
+
   addScorch(pos, r) {
     if (this.scorch.length >= 8) this.scorch.shift();
     this.scorch.push({ pos: pos.clone(), r });
@@ -1228,6 +1278,10 @@ export class Damage {
       }
     }
     for (const d of this.dents) if (d.heat > 0) { d.heat = d.heat < 0.01 ? 0 : d.heat * Math.exp(-dt / 5); dirty = true; }
+    // (spots a flame was on: forgotten once they have long cooled)
+    for (const h of this.hot) h.t += dt;
+    this.hot = this.hot.filter((h) => h.t < 120);
+    if (this._hotDirty) { this._hotDirty = false; dirty = true; }
     for (const pe of [...this.peels]) {
       if (pe.heat > 0) { pe.heat = pe.heat < 0.01 ? 0 : pe.heat * Math.exp(-dt / 7); dirty = true; }
       if (this.catchingUp) continue;

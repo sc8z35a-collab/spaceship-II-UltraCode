@@ -268,14 +268,18 @@ function template(grade, armed, level) {
   // red emergency strips along the ceiling
   const fy = -R * 0.42;
   const cabLen = L / 2 - 0.6 - zDome;
-  b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, cabLen, seg, 1, true)), 'liner', [0, 0, zDome + cabLen / 2]);
+  // (under the canopy the lining leaves the glass clear: round the sides and below only)
+  const lineA = zCan - zDome, lineB = cabLen - lineA;
+  b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineA, seg, 1, true, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner', [0, 0, zDome + lineA / 2]);
+  b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineB, seg, 1, true)), 'liner', [0, 0, zCan + lineB / 2]);
   b.box(R * 1.4, 0.04, cabLen + R * 0.6, 'floor', [0, fy, zDome + cabLen / 2 - R * 0.3], null, 0, 1);
   b.box(R * 1.3, 0.35, 0.3, 'console', [0, fy + 0.55, zFront], [-0.6, 0, 0], lo2 ? 0 : 0.03, 1);
   for (const s of [-1, 1]) {
     b.box(0.32, 0.2, 0.012, 'screen', [s * R * 0.32, fy + 0.62, zFront + 0.12], [-0.6, 0, 0], 0, 1);
     if (!lo2) b.box(0.12, 0.08, 0.012, 'screenR', [s * R * 0.08, fy + 0.62, zFront + 0.11], [-0.6, 0, 0], 0, 1);
   }
-  if (!lo2) for (const s of [-1, 1]) b.box(0.03, 0.02, cabLen * 0.8, 'strip', [s * R * 0.45, R * 0.72, zDome + cabLen * 0.5], null, 0, 1);
+  // (the strips along the walls, under the canopy's sills)
+  if (!lo2) for (const s of [-1, 1]) b.box(0.03, 0.02, cabLen * 0.8, 'strip', [s * R * 0.8, R * 0.38, zDome + cabLen * 0.5], [0, 0, -s * 0.5], 0, 1);
   const seats = [];
   for (let r = 0; r < G.rows; r++) for (const s of [-1, 1]) {
     const z = rowZ(r), x = s * R * 0.33;
@@ -298,8 +302,9 @@ function template(grade, armed, level) {
   glass.renderOrder = 6;
   group.add(glass);
   const tpl = {
-    // (the cabin camera: high on the bulkhead behind the front seats, between the pilots' heads)
-    group, seats, zFront, fy, gunAt, cam: V(0, R * 0.72, rowZ(0) + 0.55), exit: V(0, 0, L / 2 + 0.1), R, L,
+    // (the cabin camera: just behind the pilots, between their heads and a little above them, under
+    // the ceiling: the two of them, the console and the canopy in its picture)
+    group, seats, zFront, fy, gunAt, cam: V(0, Math.min(fy + 1.35, R * 0.93 - 0.12), rowZ(0) + 0.6), exit: V(0, 0, L / 2 + 0.1), R, L,
     marks: marksLayout(zDome, zCan, frontBand, zBand2, hz),
     rcs: [0, 1, 2, 3].map((i) => { const a = Math.PI / 4 + i * Math.PI / 2; return V(Math.cos(a) * R * 1.02, Math.sin(a) * R * 1.02, L / 2 - 0.65); }),
   };

@@ -53,7 +53,7 @@ export class Input {
       this.pinch *= Math.exp(e.deltaY * 0.0012);
     }, opt);
     // HUD buttons
-    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto', 'b-zin', 'b-zout', 'b-zfol', 'b-zshot', 'b-shot']) {
+    for (const id of ['b-up', 'b-down', 'b-exit', 'b-cam', 'b-drop', 'b-cam-next', 'b-cam-prev', 'b-fire', 'b-rail', 'b-msl', 'b-tgt', 'b-auto', 'b-zin', 'b-zout', 'b-zfol', 'b-zshot', 'b-shot']) {
       const b = document.getElementById(id);
       if (!b) continue;
       this.btn[id] = { down: false, pressed: false };

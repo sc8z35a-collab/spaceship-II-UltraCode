@@ -108,6 +108,7 @@ export class Drones {
         // almost as it happens)
         fcM: new FireControl({ am: AMMO.d20, gun: GUNS.drone20, seed: seedOf('droneM', i), sensor: { ang: 0.3e-3, range: 3, vel: 0.2 }, accT: 0.1 }),
       });
+      plume.owner = this.list[this.list.length - 1];
     }
     // far away: their drive glow as points (visible out to a few hundred km)
     const pg = new THREE.BufferGeometry();
@@ -458,6 +459,15 @@ export class Drones {
     if (d.hp < 0.35 && d.state !== 'evade' && d.hp > 0) { d.state = 'evade'; d.evadeT = rand(40, 80); d.run = null; }
     if (d.hp <= 0) this.kill(d, r);
     else if (r && r.byPlayer && this.g.h8) this.g.h8.say('hachi_drone_hit', { id: d.id }, { minGap: 6, force: false });
+  }
+
+  /** an engine's flame on it: the plates cook (amount: of its health) */
+  heat(d, amount) {
+    if (!d.alive) return;
+    d.hp -= amount;
+    if (Math.random() < 0.25) { const A = this.combat.anchorAt(d.pos, d.vel); A.P.burst('smoke', new THREE.Vector3(), new THREE.Vector3().randomDirection(), 2, { speed: 1.2, spread: 1, size: 3, life: 1.5 }); }
+    if (d.hp < 0.35 && d.state !== 'evade' && d.hp > 0) { d.state = 'evade'; d.evadeT = rand(40, 80); d.run = null; }
+    if (d.hp <= 0) this.kill(d, null);
   }
 
   kill(d, r) {

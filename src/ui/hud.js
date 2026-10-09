@@ -96,7 +96,8 @@ export class Hud {
     }
     if (!foc && pil !== this.last.pil) {
       this.last.pil = pil;
-      for (const [s, x, y] of [[this.el.stickL, 0.17, 0.72], [this.el.stickR, 0.83, 0.72]]) {
+      // (clear of the controls in the bottom corners)
+      for (const [s, x, y] of [[this.el.stickL, 0.2, 0.6], [this.el.stickR, 0.78, 0.58]]) {
         s.classList.toggle('idle', pil);
         if (pil) { s.style.left = (x * 100) + '%'; s.style.top = (y * 100) + '%'; }
       }

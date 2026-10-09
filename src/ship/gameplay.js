@@ -126,7 +126,7 @@ export class Gameplay {
       this.flood.push(s);
     }
     // engine plume (ray-marched exhaust: core, shock cells, the flame spreading aft)
-    this.plume = new EnginePlume(g.shipVis.root, { exits: [V(0, 0.4, 15.4 + 1.25 + 2.1)], r0: 1.12, len: 52, style: 'fusion', spread: 0.24, dia: 0.5, seed: 1.3 });
+    this.plume = new EnginePlume(g.shipVis.root, { exits: [V(0, 0.4, 15.4 + 1.25 + 2.1)], r0: 1.12, len: 52, style: 'fusion', spread: 0.24, dia: 0.5, seed: 1.3, owner: 'b29' });
     // re-entry fire round the whole hull (shock layer, hot core, the long wake of flame)
     this.fire = new ReentryFire(g.shipVis.root, { center: V(0, 0.4, -0.5), shell: V(5.4, 4.6, 19.5), r0: 6, r1: 26, len: 420 });
     // and its light through the windows (lamps that join the cabin's light pool while it burns)

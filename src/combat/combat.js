@@ -209,7 +209,7 @@ export class Combat {
       r.mesh.matrixAutoUpdate = false;
       r.mesh.traverse((o) => { o.frustumCulled = false; });
       // its motor's flame out of the tail; it coasts clear of the launcher before it lights
-      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.72)], r0: 0.08, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4 });
+      r.plume = new EnginePlume(r.mesh, { exits: [new THREE.Vector3(0, 0, 0.72)], r0: 0.08, len: 11, style: 'solid', spread: 0.3, dia: 0.4, gain: 1.4, owner: r });
       r.boost = o.coast ? -o.coast : 0;
       this.g.engine.scene.add(r.mesh);
       r.q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 0, -1), r.dir);

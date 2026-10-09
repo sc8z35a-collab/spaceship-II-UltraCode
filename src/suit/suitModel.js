@@ -436,25 +436,30 @@ export function buildSuit(spec, opts = {}) {
   }
   const HC = V(0, 1.665, -0.01);          // helmet centre
   const HR = top ? 0.168 : 0.18;          // helmet radius (the civilian bubble is rounder)
-  // ---- boots, legs
+  // ---- boots, legs: each leg in two pieces on its joints (the thigh on the hip, the shin and the
+  // boot on the knee), so that it can move
+  const limbB = {};
+  const lb = (name) => { const x = new Builder(); x.plainUpTo = 0.003; limbB[name] = x; return x; };
   for (const s of [-1, 1]) {
     const k = s < 0 ? 'L' : 'R';
     const A = J['ankle' + k], K = J['knee' + k], H = J['hip' + k];
-    boot(b, A, s, top);
+    const bt = lb('thigh' + k), bs = lb('shin' + k);
+    boot(bs, A, s, top);
     // ankle bearing, the lower leg, the knee's convolutes, the thigh, the thigh bearing
-    band(b, A, K, 0.02, 0.083, 0.03, 'metal', 28);
-    ring(b, A, K, 0.06, 0.085, 0.005, 'anod', 28);
-    sleeve(b, A.clone().add(V(0, 0.02, 0)), K.clone().add(V(0, 0.07, 0)), 0.078, 0.09, 'soft', { conv: [0.72, 1.0], rings: 4, seed: s * 2.1 });
-    sleeve(b, K.clone().add(V(0, 0.06, 0)), H, 0.092, 0.11, 'soft', { conv: [0.0, 0.12], rings: 2, seed: s * 3.7 });
-    band(b, K, H, 0.62, 0.105, 0.03, 'metal', 28);
-    ring(b, K, H, 0.62, 0.107, 0.005, 'anod', 28);
-    cord(b, A.clone().add(V(0, 0.05, 0)), H.clone().add(V(0, -0.06, 0)), 0.095, V(s, 0, 0));
+    band(bs, A, K, 0.02, 0.083, 0.03, 'metal', 28);
+    ring(bs, A, K, 0.06, 0.085, 0.005, 'anod', 28);
+    sleeve(bs, A.clone().add(V(0, 0.02, 0)), K.clone().add(V(0, 0.07, 0)), 0.078, 0.09, 'soft', { conv: [0.72, 1.0], rings: 4, seed: s * 2.1 });
+    sleeve(bt, K.clone().add(V(0, 0.06, 0)), H, 0.092, 0.11, 'soft', { conv: [0.0, 0.12], rings: 2, seed: s * 3.7 });
+    band(bt, K, H, 0.62, 0.105, 0.03, 'metal', 28);
+    ring(bt, K, H, 0.62, 0.107, 0.005, 'anod', 28);
+    cord(bs, A.clone().add(V(0, 0.05, 0)), K.clone().add(V(0, 0.03, 0)), 0.095, V(s, 0, 0));
+    cord(bt, K.clone().add(V(0, 0.05, 0)), H.clone().add(V(0, -0.06, 0)), 0.099, V(s, 0, 0));
     // a thigh pocket; on the top grade, plates on the thigh and the shin, a knee cap
-    b.add(new RoundedBoxGeometry(0.03, 0.13, 0.1, 1, 0.01), top ? 'shell2' : 'plate', [A.x + s * 0.105, 0.74, -0.01]);
+    bt.add(new RoundedBoxGeometry(0.03, 0.13, 0.1, 1, 0.01), top ? 'shell2' : 'plate', [A.x + s * 0.105, 0.74, -0.01]);
     if (top) {
-      limbPlate(b, K.clone().add(V(0, 0.08, 0)), H.clone().add(V(0, -0.05, 0)), 0.116, V(s * 0.4, 0, -1), 0.75, 1.3);
-      limbPlate(b, A.clone().add(V(0, 0.06, 0)), K.clone().add(V(0, -0.02, 0)), 0.094, V(0, 0, -1), 0.8, 1.2);
-      b.sphere(1, 'shell2', K.clone().add(V(0, 0.01, -0.07)).toArray(), 16, [0.06, 0.06, 0.035]);
+      limbPlate(bt, K.clone().add(V(0, 0.08, 0)), H.clone().add(V(0, -0.05, 0)), 0.116, V(s * 0.4, 0, -1), 0.75, 1.3);
+      limbPlate(bs, A.clone().add(V(0, 0.06, 0)), K.clone().add(V(0, -0.02, 0)), 0.094, V(0, 0, -1), 0.8, 1.2);
+      bs.sphere(1, 'shell2', K.clone().add(V(0, 0.01, -0.07)).toArray(), 16, [0.06, 0.06, 0.035]);
     }
   }
   // ---- the brief and the waist bearing
@@ -513,19 +518,23 @@ export function buildSuit(spec, opts = {}) {
     b.add(new THREE.SphereGeometry(0.094, 24, 14, 0, Math.PI * 2, 0, Math.PI * 0.55), 'shell', [Sh.x, Sh.y + 0.01, Sh.z], [0, 0, -s * 0.55]);
     band(b, Sh.clone().addScaledVector(out, -0.06), Sh.clone().addScaledVector(out, 0.06), 0.62, 0.079, 0.03, 'metal', 28);
     ring(b, Sh.clone().addScaledVector(out, -0.06), Sh.clone().addScaledVector(out, 0.06), 0.66, 0.081, 0.005, 'anod', 28);
+    // (the arm in two pieces on its joints: the upper arm on the shoulder bearing, the forearm and
+    // the glove on the elbow)
+    const bu = lb('upper' + k), bf = lb('fore' + k);
     const ua = Sh.clone().addScaledVector(out, 0.03).add(V(0, -0.05, 0));
-    sleeve(b, ua, E.clone().add(V(0, 0.04, 0.01)), 0.07, 0.063, 'soft', { conv: [0.0, 0.18], rings: 2, seed: s * 1.3 });
+    sleeve(bu, ua, E.clone().add(V(0, 0.04, 0.01)), 0.07, 0.063, 'soft', { conv: [0.0, 0.18], rings: 2, seed: s * 1.3 });
     // the upper arm bearing, the elbow's convolutes, the forearm
-    band(b, ua, E, 0.42, 0.069, 0.024, 'metal', 24);
-    sleeve(b, E.clone().add(V(0, 0.045, 0.01)), E.clone().add(V(0, -0.05, -0.022)), 0.063, 0.06, 'joint', { conv: [0.0, 1.0], rings: 5, seed: s * 4.1 });
-    sleeve(b, E.clone().add(V(0, -0.045, -0.02)), W.clone().add(V(0, 0.015, 0.02)), 0.058, 0.052, 'soft', { seed: s * 5.3 });
-    cord(b, ua.clone().add(V(0, -0.03, 0)), W.clone().add(V(0, 0.04, 0.03)), 0.064, V(s, 0, 0.3));
-    if (top) limbPlate(b, E.clone().add(V(0, -0.06, -0.02)), W.clone().add(V(0, 0.04, 0.02)), 0.064, V(s * 0.6, 0.2, -0.7), 0.85, 1.4);
+    band(bu, ua, E, 0.42, 0.069, 0.024, 'metal', 24);
+    sleeve(bf, E.clone().add(V(0, 0.045, 0.01)), E.clone().add(V(0, -0.05, -0.022)), 0.063, 0.06, 'joint', { conv: [0.0, 1.0], rings: 5, seed: s * 4.1 });
+    sleeve(bf, E.clone().add(V(0, -0.045, -0.02)), W.clone().add(V(0, 0.015, 0.02)), 0.058, 0.052, 'soft', { seed: s * 5.3 });
+    cord(bu, ua.clone().add(V(0, -0.03, 0)), E.clone().add(V(0, 0.03, 0.01)), 0.066, V(s, 0, 0.3));
+    cord(bf, E.clone().add(V(0, -0.04, -0.02)), W.clone().add(V(0, 0.04, 0.03)), 0.061, V(s, 0, 0.3));
+    if (top) limbPlate(bf, E.clone().add(V(0, -0.06, -0.02)), W.clone().add(V(0, 0.04, 0.02)), 0.064, V(s * 0.6, 0.2, -0.7), 0.85, 1.4);
     // a wrist checklist on the left, a small display on the right
-    if (s < 0) b.add(new RoundedBoxGeometry(0.075, 0.014, 0.09, 1, 0.005), 'shell2', [W.x, W.y + 0.1, W.z + 0.04], [0.45, 0, 0.1]);
-    else { b.add(new RoundedBoxGeometry(0.06, 0.016, 0.07, 1, 0.005), 'shell2', [W.x, W.y + 0.1, W.z + 0.04], [0.45, 0, -0.1]); b.box(0.042, 0.004, 0.05, 'screen', [W.x, W.y + 0.108, W.z + 0.036], [0.45, 0, -0.1], 0.002, 1); }
-    if (s > 0) decal(b, 2, 0.075, 0.05, V(Sh.x + 0.06, Sh.y - 0.1, -0.035), V(1, 0.05, -0.35));
-    glove(b, W, W.clone().sub(E), s, top);
+    if (s < 0) bf.add(new RoundedBoxGeometry(0.075, 0.014, 0.09, 1, 0.005), 'shell2', [W.x, W.y + 0.1, W.z + 0.04], [0.45, 0, 0.1]);
+    else { bf.add(new RoundedBoxGeometry(0.06, 0.016, 0.07, 1, 0.005), 'shell2', [W.x, W.y + 0.1, W.z + 0.04], [0.45, 0, -0.1]); bf.box(0.042, 0.004, 0.05, 'screen', [W.x, W.y + 0.108, W.z + 0.036], [0.45, 0, -0.1], 0.002, 1); }
+    if (s > 0) decal(bu, 2, 0.075, 0.05, V(Sh.x + 0.06, Sh.y - 0.1, -0.035), V(1, 0.05, -0.35));
+    glove(bf, W, W.clone().sub(E), s, top);
   }
   // ---- neck ring and the helmet
   b.add(new THREE.CylinderGeometry(0.142, 0.15, 0.04, 40), 'metal', [0, 1.52, -0.01]);
@@ -595,6 +604,26 @@ export function buildSuit(spec, opts = {}) {
   const group = b.build(M, { castShadow: true });
   group.name = 'suitBody';
   root.add(group);
+  // ---- the limbs on their joints: hip -> knee, shoulder -> elbow (each piece built where it is
+  // standing, hung on a pivot at its joint)
+  const joints = {};
+  const hang = (name, at, parent, parentAt) => {
+    const pivot = new THREE.Group();
+    pivot.name = name;
+    pivot.position.copy(at).sub(parentAt || V(0, 0, 0));
+    const g = limbB[name.replace('Joint', '')].build(M, { castShadow: true });
+    g.position.copy(at).negate();
+    pivot.add(g);
+    parent.add(pivot);
+    joints[name] = pivot;
+    return pivot;
+  };
+  for (const k of ['L', 'R']) {
+    const hip = hang('thigh' + k, J['hip' + k], root, null);
+    hang('shin' + k, J['knee' + k], hip, J['hip' + k]);
+    const sh = hang('upper' + k, J['shoulder' + k], root, null);
+    hang('fore' + k, J['elbow' + k], sh, J['shoulder' + k]);
+  }
   // ---- the helmet visor (glass) and the sun visor on its pivot
   const helm = new THREE.Group();
   helm.position.copy(HC);
@@ -678,13 +707,28 @@ export function buildSuit(spec, opts = {}) {
   const plumes = boosterAt.map((B, i) => {
     const dir = V(0, -Math.cos(0.35), Math.sin(0.35));
     const pos = B.p.clone().add(P0);
-    return new EnginePlume(door, { exits: [pos], dir, r0: B.r, len: top ? 4.5 : 2.2, style: top ? 'plasma' : 'blue', spread: 0.3, dia: 0.5, seed: 3.3 + i });
+    return new EnginePlume(door, { exits: [pos], dir, r0: B.r, len: top ? 4.5 : 2.2, style: top ? 'plasma' : 'blue', spread: 0.3, dia: 0.5, seed: 3.3 + i, owner: 'suit' });
   });
   const lamps = [];
   root.traverse((o) => { if (o.isMesh) { o.castShadow = o.material !== M.visorTint && o.material !== M.visorRefl && o.material !== M.mark; o.receiveShadow = true; } });
   // ---- the API
   const api = {
-    root, M, spec, helm, sun, door, plumes, lamps,
+    root, M, spec, helm, sun, door, plumes, lamps, joints, J,
+    /**
+     * the limbs' angles from the pose they were built in (standing; rad): { thighL: [flex (+ the
+     * knee forward), out], shinL: bend (+ the foot back), upperL: [raise (+ the hand forward), out],
+     * foreL: bend (+ the hand up), ... } (see suitRig.js)
+     */
+    setPose(P) {
+      for (const k of ['L', 'R']) {
+        const s = k === 'L' ? -1 : 1;
+        const t = P['thigh' + k], sh = P['shin' + k], u = P['upper' + k], f = P['fore' + k];
+        if (t) joints['thigh' + k].rotation.set(t[0], 0, s * t[1]);
+        if (sh !== undefined) joints['shin' + k].rotation.set(-sh, 0, 0);
+        if (u) joints['upper' + k].rotation.set(u[0], 0, s * u[1]);
+        if (f !== undefined) joints['fore' + k].rotation.set(f, 0, 0);
+      }
+    },
     /** the gold sun visor: 0 raised .. 1 down over the glass */
     setSunVisor(k) { sun.rotation.x = -0.95 * (1 - k); },
     /** the rear-entry door: 0 shut .. 1 open */

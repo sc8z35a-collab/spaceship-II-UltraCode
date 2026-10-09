@@ -64,6 +64,7 @@ uniform float uGlitch;    // the whole display stutters (power dips after hits)
 uniform vec3 uCam[4];
 uniform float uCamH[4];     // camera health (1 fine .. 0 gone)
 uniform float uCamFail[4];  // seconds since that camera died (-1: alive)
+uniform float uCamHeat[4];  // how hot it is (an engine's flame on it): 0 .. 1 washing out; past 1 no signal
 uniform vec4 uImp[16];      // hits on the display: the direction from the cockpit's middle (xyz), how
                             // far round it the hurt reaches (w, rad; 0: none)
 uniform vec4 uImpK[16];     // each hit's severity (x, 0..1), its seed (y), seconds since it (z)
@@ -99,12 +100,34 @@ void overP(inout vec3 P, inout float A, vec3 Q, float B){ B = clamp(B, 0.0, 1.0)
 // pixels — blocks that smear into a wrong colour or drop out, torn lines, sensor noise, the sector
 // dropping out for a moment; dead, a white flash, a few frames of chaos, the picture folding into a
 // line like an old tube, the line to a dot, the dot glowing out — then black (dead = 1)
+// ---- a camera too hot (an engine's flame on it): its picture washes out toward a hot white, its
+// rows tear, hot pixels speckle; past its limit its sector's signal is lost (snow, a frame now and
+// then) until it cools. Laid over (fc, fa)
+void camHeat(float hk, vec2 px, vec3 ax, float tt, inout vec3 fc, inout float fa){
+  if (hk <= 0.0) return;
+  float hc = clamp(hk, 0.0, 1.0);
+  float row = floor(px.y / 3.0);
+  float tear = step(1.0 - 0.3 * hc, dhs(vec2(row, tt + 7.0)));
+  float sp = step(1.0 - 0.03 * hc, dhs(floor(px / 2.0) + vec2(tt * 0.9, tt * 1.7)));
+  vec3 c = vec3(1.0, 0.92, 0.78) * (0.8 + 0.4 * dhs(vec2(row, tt)));
+  float a = hc * hc * 0.8 + tear * 0.5 * hc + sp * hc;
+  float lost = smoothstep(1.0, 1.12, hk);
+  if (lost > 0.0){
+    float snow = dhs(floor(px / 2.0) + vec2(tt * 1.3, tt * 0.7));
+    float through = step(0.93, dhs(vec2(floor(uTime * 6.0), ax.x * 7.0 + ax.z * 3.0)));
+    c = mix(c, vec3(snow * 0.3), lost);
+    a = mix(a, 1.0 - 0.6 * through, lost);
+  }
+  a = clamp(a, 0.0, 1.0);
+  fc = mix(fc, c, a); fa = max(fa, a);
+}
+
 void camFx(vec3 d, out vec3 fc, out float fa, out float dead){
   fc = vec3(0.0); fa = 0.0; dead = 0.0;
   float tt = floor(uTime * 24.0);
-  float b1 = -2.0, h = 1.0, f = -1.0;
+  float b1 = -2.0, h = 1.0, f = -1.0, hk = 0.0;
   vec3 ax = vec3(0.0, 1.0, 0.0);
-  for (int i = 0; i < 4; i++){ float k = dot(d, uCam[i]); if (k > b1){ b1 = k; h = uCamH[i]; f = uCamFail[i]; ax = uCam[i]; } }
+  for (int i = 0; i < 4; i++){ float k = dot(d, uCam[i]); if (k > b1){ b1 = k; h = uCamH[i]; f = uCamFail[i]; ax = uCam[i]; hk = uCamHeat[i]; } }
   vec3 rgt = normalize(cross(ax, abs(ax.y) > 0.9 ? vec3(0.0, 0.0, -1.0) : vec3(0.0, 1.0, 0.0)));
   vec3 upv = cross(rgt, ax);
   vec2 sc = vec2(dot(d, rgt), dot(d, upv)) / 0.85;
@@ -153,7 +176,7 @@ void camFx(vec3 d, out vec3 fc, out float fa, out float dead){
     return;
   }
   float dmg = smoothstep(0.995, 0.3, h);
-  if (dmg < 0.01) return;
+  if (dmg < 0.01){ camHeat(hk, px, ax, tt, fc, fa); return; }
   vec2 mb = floor(px / vec2(56.0, 5.0));                   // the picture smears in long strips
   float tq = floor(uTime * (3.0 + 9.0 * dmg));             // the corruption changes a few times a second
   float n = dhs(floor(px / (1.0 + floor(dmg * 2.0))) + vec2(tt * 1.37, tt * 0.71));
@@ -173,6 +196,7 @@ void camFx(vec3 d, out vec3 fc, out float fa, out float dead){
   // the whole sector drops out now and then
   if (dmg > 0.5 && dhs(vec2(floor(uTime * 6.0), ax.x * 13.0 + ax.z * 7.0)) > 1.08 - dmg * 0.25){ c = vec3(0.0); a = 1.0; }
   fc = c; fa = a;
+  camHeat(hk, px, ax, tt, fc, fa);
 }
 
 // ---- a crack pattern round a hit (q: round it, in units of the hit's size; px: a screen pixel
@@ -509,7 +533,7 @@ export class H8Display {
   constructor() {
     const uniforms = {
       uPower: { value: 0 },
-      uCam: { value: CAMERAS.map((c) => c.dir.clone()) }, uCamH: { value: [1, 1, 1, 1] }, uCamFail: { value: [-1, -1, -1, -1] },
+      uCam: { value: CAMERAS.map((c) => c.dir.clone()) }, uCamH: { value: [1, 1, 1, 1] }, uCamFail: { value: [-1, -1, -1, -1] }, uCamHeat: { value: [0, 0, 0, 0] },
       uImp: { value: Array.from({ length: MAX_IMP }, () => new THREE.Vector4()) },
       uImpK: { value: Array.from({ length: MAX_IMP }, () => new THREE.Vector4()) },
       uFloorY: { value: H8.floorY },
@@ -587,6 +611,7 @@ export class H8Display {
     this.glitch = 0;
     this.zoom = 1;
     this.camH = [1, 1, 1, 1];
+    this.camHeat = [0, 0, 0, 0];  // each camera's heat (plumeHeat.js): past 1 its signal is lost
     this.failT = [null, null, null, null];
     // the damage: hits on the glass (each spreads over as many panels as it reaches), and from them
     // each panel's health (what can still be touched there, what the hull tab counts)
@@ -675,6 +700,8 @@ export class H8Display {
     let best = -2, h = 1, i0 = 0;
     for (let i = 0; i < 4; i++) { const k = dir.dot(CAMERAS[i].dir); if (k > best) { best = k; h = this.camH[i]; i0 = i; } }
     if (h < CAM_DEAD && this.failT[i0] !== null && this.t - this.failT[i0] > 0.95) return true;
+    // (too hot: no picture there for now)
+    if (this.camHeat[i0] > 1.1) return true;
     if (P) return this.panelAt(P) < 0.35;
     return false;
   }
@@ -700,6 +727,11 @@ export class H8Display {
   }
 
   setZoom(z) { this.zoom = z; this.uniforms.uZoom.value = z; }
+
+  /** each camera's heat (an engine's flame on it: plumeHeat.js) */
+  setCameraHeat(h) {
+    for (let i = 0; i < 4; i++) { this.camHeat[i] = h[i]; this.uniforms.uCamHeat.value[i] = h[i]; }
+  }
 
   /** a hard knock: the picture stutters for a moment */
   stutter(k) { this.glitch = Math.min(1, Math.max(this.glitch, k)); }

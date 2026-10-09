@@ -18,6 +18,7 @@ const _v = new THREE.Vector3(), _m = new THREE.Matrix4();
 const EV_JP = {
   scratch: '擦り傷', crack: 'ひび', breach: '破損・漏れ', systems: '機能低下', battery_swap: '予備バッテリーに交換中', battery_swapped: '予備バッテリーに切替完了',
   battery_dead: 'バッテリー切れ', shutdown: 'システム停止', o2_reserve: '非常用酸素に切替', radio_dead: '通信機が故障',
+  heat: '高温警告 — エンジン噴射の中', burn: '外層が焼けている',
 };
 
 function hms(s) {
@@ -97,7 +98,10 @@ export class VisorHud {
     let txt = EV_JP[kind] || kind;
     if (info && PARTS[info]) txt = `${PARTS[info].jp}：${txt}`;
     else if (kind === 'systems' && info) txt = `${info.split(',').map((s) => SYSTEMS_JP[s] || s).join('・')} ${txt}`;
-    this.events.push({ txt, t: 0, red: ['breach', 'battery_dead', 'shutdown', 'radio_dead', 'crack'].includes(kind) });
+    // (the same warning again while it is still up: kept fresh, not repeated)
+    const same = this.events.find((e) => e.txt === txt);
+    if (same) { same.t = Math.min(same.t, 0.5); return; }
+    this.events.push({ txt, t: 0, red: ['breach', 'battery_dead', 'shutdown', 'radio_dead', 'crack', 'heat', 'burn'].includes(kind) });
     if (this.events.length > 4) this.events.shift();
   }
 

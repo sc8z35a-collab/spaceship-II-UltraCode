@@ -23,6 +23,7 @@ import * as THREE from 'three';
 import { SUITS, SuitState, contactSpeeds, SYSTEMS_JP, PARTS } from './suitSystem.js';
 import { SuitCamera } from './suitCamera.js';
 import { buildSuit } from './suitModel.js';
+import { SuitRig } from './suitRig.js';
 import { VisorHud } from './visorHud.js';
 import { DOCK_AT } from '../world/stations.js';
 import { LOBBY, TUNNEL } from '../world/stationLobby.js';
@@ -38,6 +39,9 @@ const FINE = { h8: { acc: 2.6, v: 6 }, b29: { acc: 1.4, v: 4 } };   // the fine 
 const ZERO = V(0, 0, 0);
 const _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _e3 = new THREE.Vector3(), _qe = new THREE.Quaternion(), _qe2 = new THREE.Quaternion(), _eu = new THREE.Euler();
 const gravE = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
+// (the avatar's joints: its attitude, what moves it)
+const _qAv = new THREE.Quaternion(), _qW = new THREE.Quaternion(), _a1 = new THREE.Vector3(), _a2 = new THREE.Vector3();
+const AX_X = V(1, 0, 0), AX_Y = V(0, 1, 0);
 
 export class Suits {
   constructor(g) {
@@ -666,6 +670,26 @@ export class Suits {
     return E && pl.inertial ? E.v.distanceTo(this.frameOf().vel) : pl.vel.length();
   }
 
+  // ================================================================== heat
+  /** an engine's flame on him (q: its heat; toward: the way to its axis, ECI): the suit burns */
+  flameOn(q, dt, toward) {
+    const S = this.state, pl = this.g.player, g = this.g;
+    if (!S || this.seq) return;
+    // into the suit's own frame (x right, y up, z back)
+    const tl = toward.clone().applyQuaternion(_qe.copy(this.frameOf().quat).invert());
+    if (tl.lengthSq() < 1e-8) tl.set(0, 0, -1);
+    tl.normalize();
+    const f = _v.set(0, 0, -1).applyQuaternion(pl.lookQuat); f.y = 0;
+    if (f.lengthSq() < 1e-6) f.set(0, 0, -1);
+    f.normalize();
+    const r = _v2.crossVectors(f, V(0, 1, 0)).normalize();
+    S.heat(q, dt, { x: tl.dot(r), y: tl.y, z: -tl.dot(f) });
+    // the glare through the visor (its auto-shade takes the worst of it)
+    g.engine.grade.set('uFlash', Math.max(g.engine.grade.get('uFlash'), Math.min(0.5, q * 0.045) * (this.sunVisor > 0.5 ? 0.35 : 1)));
+    if (q > 0.25) this.hud.event('heat');
+    if (q > 0.8) { const h8 = this.worn === 'h8' && g.h8; if (h8) g.h8.say('hachi_suit_flame', {}, { minGap: 12, force: true }); else g.asphalt.say('suit_flame', {}, { minGap: 12, force: true }); }
+  }
+
   // ================================================================== knocks
   /** the player's collision: lost (the velocity the contact took away), real (what was left) */
   contact(pl, lost, real) {
@@ -801,9 +825,15 @@ export class Suits {
     }
     const A = this.avatar;
     A.root.visible = true;
-    A.root.position.copy(pl.pos).add(V(0, -0.95, 0));
-    _q.setFromAxisAngle(V(0, 1, 0), pl.yaw);
-    A.root.quaternion.copy(_q).multiply(_q2.setFromAxisAngle(V(1, 0, 0), Math.max(-0.6, Math.min(0.6, pl.pitch * 0.5))));
+    // his body's attitude: floating free the whole of him turns as he looks round (the helmet is
+    // part of the hard torso); on his feet, his heading and a little of the look's pitch
+    const free = !!pl.inertial;
+    if (free) pl.viewQuat(_qAv);
+    else _qAv.setFromAxisAngle(AX_Y, pl.yaw).multiply(_q2.setFromAxisAngle(AX_X, Math.max(-0.6, Math.min(0.6, pl.pitch * 0.5))));
+    A.root.quaternion.copy(_qAv);
+    // (turned about his middle, not his feet)
+    A.root.position.set(0, -0.95, 0).applyQuaternion(_qAv).add(pl.pos);
+    this.moveLimbs(dt, free, pl);
     const S = this.state;
     const b = this.throttle;
     A.setBoost(dt, b * (S ? S.boosterL : 1), b * (S ? S.boosterR : 1));
@@ -812,6 +842,53 @@ export class Suits {
     if (S) A.setDamage(S);
     A.tick(performance.now() / 1000);
     if (g.shipVis.envSpace) A.setEnv(g.shipVis.envSpace);
+  }
+
+  /**
+   * the avatar's arms and legs on their joints (suitRig.js): swung by what his body does — the
+   * push of his thrusters, a knock against the hull, his turning (in the suit's frame) — about the
+   * posture he holds (floating, flying on the boosters, a hand on a rail, standing)
+   */
+  moveLimbs(dt, free, pl) {
+    const g = this.g, A = this.avatar;
+    if (!this.rig || this.rig.A !== A) { this.rig = new SuitRig(A); this.rigM = null; }
+    const R = this.rig;
+    const h = Math.min(0.1, dt * (g.timeScale || 1));
+    if (!(h > 0)) return;
+    const F = this.frameOf(), E = this.eva;
+    // his attitude in space, and his velocity (free: in space; on his feet: in the ship's frame)
+    _qW.copy(F.quat).multiply(_qAv);
+    const vNow = free && E ? E.v : pl.vel;
+    const pose = !free ? 'stand' : this.throttle > 0.25 && this.boost ? 'boost' : pl._nearRail ? 'rail' : 'float';
+    let M = this.rigM;
+    const now = g.time;
+    // (first seen, or a jump: straight into his posture, nothing swung)
+    if (!M || M.free !== free || now - M.at > 400 || M.p.distanceTo(pl.pos) > 3) {
+      M = this.rigM = { free, at: now, p: pl.pos.clone(), v: vNow.clone(), q: _qW.clone(), w: V(0, 0, 0), wPrev: V(0, 0, 0), acc: V(0, 0, 0), al: V(0, 0, 0) };
+      R.reset(pose);
+      return;
+    }
+    M.at = now; M.p.copy(pl.pos);
+    // the push on him (proper acceleration: what changed his velocity besides gravity)
+    const a = _a1.copy(vNow).sub(M.v).divideScalar(h);
+    if (free && E) a.sub(gravE(E.p, _a2)).applyQuaternion(_q.copy(_qW).invert());
+    else a.sub(g.gLocal).applyQuaternion(_q.copy(_qAv).invert());
+    M.v.copy(vNow);
+    if (a.length() > 60) a.setLength(60);
+    M.acc.lerp(a, 1 - Math.exp(-h / 0.05));
+    // his turning (smoothed: the look turns at once, a body cannot), and how fast that changes
+    _q.copy(M.q).invert().multiply(_qW);
+    if (_q.w < 0) { _q.x = -_q.x; _q.y = -_q.y; _q.z = -_q.z; _q.w = -_q.w; }
+    const ang = 2 * Math.acos(Math.min(1, _q.w)), sn = Math.sqrt(Math.max(0, 1 - _q.w * _q.w));
+    const w = sn > 1e-6 ? _a2.set(_q.x / sn, _q.y / sn, _q.z / sn).multiplyScalar(ang / h) : _a2.set(0, 0, 0);
+    if (w.length() > 6) w.setLength(6);
+    M.q.copy(_qW);
+    M.wPrev.copy(M.w);
+    M.w.lerp(w, 1 - Math.exp(-h / 0.12));
+    const al = _a1.copy(M.w).sub(M.wPrev).divideScalar(h);
+    if (al.length() > 25) al.setLength(25);
+    M.al.lerp(al, 1 - Math.exp(-h / 0.05));
+    R.step(h, M.acc, M.w, M.al, pose);
   }
 
   // ================================================================== save

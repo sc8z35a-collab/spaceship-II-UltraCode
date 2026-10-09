@@ -262,6 +262,27 @@ export class SuitState {
     return out;
   }
 
+  /**
+   * An engine's flame on the suit (q: its heat, as plumeHeat.js reckons it; n: suit frame, toward
+   * it) for dt: the outer layers char, the pressure layer then gives (a leak, at last a hole), the
+   * systems in that part cook, and the wearer is burnt. A better suit takes longer
+   */
+  heat(q, dt, n, rand = Math.random) {
+    const S = this.spec;
+    const part = partFromDirection(n || { x: 0, y: 0, z: -1 }, rand);
+    const P = PARTS[part], A = S[P.armour], st = this.parts[part];
+    const tough = Math.max(0.5, A.breachJ / 6000);
+    const k = q * dt / tough;
+    st.dose = (st.dose || 0) + k;
+    st.hp = Math.max(0, st.hp - k * 0.035);
+    if (st.dose > 1.5 && !st.charred) { st.charred = true; st.marks.push({ kind: 'scratch', u: rand(), v: rand(), a: rand() * Math.PI, l: 0.6 }); this.event('burn', part); }
+    if (P.leak && st.hp < 0.45) st.leak = Math.max(st.leak, 3 + 40 * (0.45 - st.hp));
+    if (st.hp <= 0 && !st.burnt) { st.burnt = true; if (P.leak) st.leak = Math.max(st.leak, 80); this.event('breach', part); }
+    if (P.sys) for (const s of P.sys) this.sys[s] = Math.min(this.sys[s], 0.25 + st.hp);
+    this.injury = Math.min(1, this.injury + q * dt * 0.002 / tough);
+    if (!this.shutdown && (this.sys.computer < 0.08 || this.sys.battery < 0.05)) { this.shutdown = true; this.event('shutdown'); }
+  }
+
   event(kind, info = '') {
     this.log.push({ kind, info, t: performance.now() / 1000 });
     if (this.log.length > 20) this.log.shift();

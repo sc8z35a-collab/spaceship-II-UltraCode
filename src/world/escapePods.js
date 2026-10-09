@@ -812,7 +812,7 @@ export class EscapePods {
       M.tick(dt, t, p.panic, p.accL, p.battery <= 0, inside);
       // its engine: lit while it burns
       if (!p.plume && (burn > 0 || p.ignite)) {
-        p.plume = new EnginePlume(r, { exits: [M.exit], r0: p.G.R * 0.36, len: p.G.R * 11, style: p.grade === 'S' ? 'chem' : 'blue', spread: 0.3, dia: 0.6, gain: 1.6, seed: p.id * 1.7 });
+        p.plume = new EnginePlume(r, { exits: [M.exit], r0: p.G.R * 0.36, len: p.G.R * 11, style: p.grade === 'S' ? 'chem' : 'blue', spread: 0.3, dia: 0.6, gain: 1.6, seed: p.id * 1.7, owner: p });
       }
       if (p.plume) { p.plume.update(dt, p.ignite ? Math.max(burn, 0.6) : burn, 0, 0); p.plume.setDistance(d); }
       p.ignite = false;
@@ -967,6 +967,10 @@ export class EscapePods {
     if (p.battery <= 0) warnLine('電池切れ — 推力なし', red);
     else if (p.battery < 0.15 && (t % 1) < 0.6) warnLine('電池残量わずか', warn);
     if (p.evadeT > 6) warnLine('被弾', red);
+    // (its camera too hot: an engine's flame)
+    const hk = g.plumeHeat ? g.plumeHeat.cam : 0;
+    if (hk > 1.05) warnLine('信号喪失 — カメラ過熱', red);
+    else if (hk > 0.25) warnLine(`カメラ高温 ${Math.round(Math.min(1, hk) * 100)}%`, warn);
     // the buttons: let it go; its gun
     const btns = this.btns = [];
     const bw = 150, bh = 46, gap = 14;

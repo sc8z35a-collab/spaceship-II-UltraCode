@@ -50,6 +50,7 @@ import { StatusLine } from './ui/statusLine.js';
 import { ExtMarkers } from './ui/extMarkers.js';
 import { Photos } from './ui/photos.js';
 import { EscapePods } from './world/escapePods.js';
+import { PlumeHeat } from './fx/plumeHeat.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -163,6 +164,8 @@ export class Game {
     this.weapons = new Weapons(this, this.combat);
     // the stations' escape pods (their bays, the pods in flight, breaking into one)
     this.pods = new EscapePods(this);
+    // engine flames burn what is in them and dazzle the cameras near them
+    this.plumeHeat = new PlumeHeat(this);
     this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
     // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
     this.suits = new Suits(this);
@@ -281,6 +284,7 @@ export class Game {
       if (inp.pressed['b-exit']) { if (remote) this.pods.release(); else if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
+      if (inp.pressed['b-cam-prev']) this.extCam--;
       if (this.mode === 'camera' && !focused) {
         // drag in the middle / top of the screen: look round with the external camera
         // (more sensitive than it was: a short drag swings the view a long way round)
@@ -291,6 +295,9 @@ export class Game {
         // a tap on something out there: focus on it (twice: go there); a double tap anywhere
         // else puts the view back
         for (const tap of inp.taps) {
+          // (the viewfinder's strip of cameras along the bottom: a tap picks one)
+          const ci = this.extMarkers ? this.extMarkers.stripAt(tap) : -1;
+          if (ci >= 0) { this.extCam = ci; L.lastTap = 0; continue; }
           if (this.h8 && this.h8.hudTap(tap)) { L.lastTap = 0; continue; }
           const now = performance.now();
           if (now - L.lastTap < 380) { L.yaw = 0; L.pitch = 0; L.zoom = 1; L.lastTap = 0; } else L.lastTap = now;
@@ -324,6 +331,7 @@ export class Game {
     if (this.weapons) this.weapons.update(sdt, limp || remote ? null : inp);
     if (this.combat) this.combat.update(sdt);
     if (this.pods) this.pods.update(sdt);
+    if (this.plumeHeat) this.plumeHeat.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
     let env, gPl = this.gLocal;

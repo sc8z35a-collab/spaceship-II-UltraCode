@@ -120,8 +120,8 @@ export class H8Vessel {
     // re-entry fire round the sphere
     this.fire = new ReentryFire(this.root, { center: V(0, -0.4, 0), shell: V(4.9, 5.4, 4.9), r0: 5, r1: 17, len: 240 });
     // the drive's plasma plume out of the magnetic nozzle, the auxiliary engines' flames
-    this.plumeMain = new EnginePlume(this.root, { exits: [this.ext.parts.driveExit], r0: 0.9, len: 34, style: 'plasma', spread: 0.15, dia: 0.65, seed: 2.1 });
-    this.plumeAux = new EnginePlume(this.root, { exits: this.ext.parts.auxExits, r0: 0.3, len: 7.5, style: 'chem', spread: 0.42, dia: 0.25, gain: 0.9, seed: 4.7 });
+    this.plumeMain = new EnginePlume(this.root, { exits: [this.ext.parts.driveExit], r0: 0.9, len: 34, style: 'plasma', spread: 0.15, dia: 0.65, seed: 2.1, owner: 'h8' });
+    this.plumeAux = new EnginePlume(this.root, { exits: this.ext.parts.auxExits, r0: 0.3, len: 7.5, style: 'chem', spread: 0.42, dia: 0.25, gain: 0.9, seed: 4.7, owner: 'h8' });
     // the display draws its own things (the tabs, the ladder) as bright as the eye needs them, from
     // the picture's adaptation (the engine's auto exposure)
     {
@@ -1952,6 +1952,24 @@ export class H8Vessel {
 
   /** armour takes a blow: the outer plates first, then the inner pressure armour. dirLocal: from
    * H8's centre toward the point hit (H8-local) */
+  /**
+   * An engine's flame playing on H8's armour (dirLocal: H8-local, toward it) with heat q for dt: the
+   * plates there heat up and give way, stage after stage, as a spot struck again and again does
+   */
+  flameOn(dirLocal, q, dt) {
+    const d = dirLocal.clone().normalize(), now = this.g.time;
+    const S = (this.hotSpots || (this.hotSpots = [])).filter((s) => now - s.time < 60000);
+    this.hotSpots = S;
+    let h = S.find((s) => s.dir.angleTo(d) < 0.25);
+    if (!h) { h = { dir: d, dose: 0, n: 0, time: now }; S.push(h); if (S.length > 8) S.shift(); }
+    h.time = now;
+    h.dose += q * dt;
+    // (every few units of heat another stage of the plates there goes)
+    const step = 6;
+    while (h.dose >= (h.n + 1) * step && h.n < 12) { h.n++; this.armourHit(4.5e5, h.dir.clone(), { shot: true, heat: true }); }
+    if (q > 0.6) this.say('hachi_flame', {}, { minGap: 20, force: false });
+  }
+
   armourHit(E, dirLocal, opts = {}) {
     const A = this.armour, g = this.g;
     this.raiseAlarm(E > 2e6 || A.outer < 0.3 ? 1 : 0.7);

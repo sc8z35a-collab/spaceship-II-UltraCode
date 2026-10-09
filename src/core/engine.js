@@ -262,6 +262,8 @@ uniform float uDesat;
 uniform float uBlur;
 uniform float uPixel;
 uniform float uFog;
+uniform float uCamHeat;   // the camera the picture comes from, too hot (an engine's flame): 0 .. 1 washed
+                          // out and torn; past 1 its signal lost
 uniform vec3 uTint;
 
 vec3 agxDefault(vec3 color){
@@ -300,6 +302,15 @@ void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor
   if (uHeat > 0.0){
     suv += vec2(sin(uv.y * 60.0 + uTime * 9.0), cos(uv.x * 50.0 + uTime * 7.0)) * 0.0025 * uHeat;
   }
+  // a camera too hot: its rows torn sideways, the picture shimmering
+  float ch = clamp(uCamHeat, 0.0, 1.0);
+  if (uCamHeat > 0.0){
+    float tt = floor(uTime * 30.0);
+    float row = floor(uv0.y * 240.0);
+    float tear = step(1.0 - 0.28 * ch, gHash(vec2(row, tt)));
+    suv.x += tear * (gHash(vec2(row * 1.7, tt)) - 0.5) * 0.12 * ch;
+    suv += vec2(sin(uv.y * 80.0 + uTime * 13.0), cos(uv.x * 70.0 + uTime * 11.0)) * 0.003 * ch;
+  }
   // the eyes' own film boiling away in vacuum: the picture swims
   if (uFog > 0.0){
     suv += vec2(sin(uv.y * 23.0 + uTime * 5.3) + sin(uv.x * 41.0 - uTime * 3.1), cos(uv.x * 19.0 + uTime * 4.1) + cos(uv.y * 37.0 + uTime * 2.3)) * 0.0045 * uFog;
@@ -329,6 +340,26 @@ void mainImage(const in vec4 inputColor, const in vec2 uv0, out vec4 outputColor
   col = mix(col, col * vec3(0.94, 0.98, 1.06), (1.0 - smoothstep(0.0, 0.4, l)) * 0.6);
   col = mix(col, vec3(l), uDesat);
   col *= uTint;
+  // the hot camera's sensor: it saturates toward a hot white, its colours slip, hot pixels speckle
+  // and the brightest columns smear; past its limit the signal is lost — black, snow, a frame
+  // getting through now and then
+  if (uCamHeat > 0.0){
+    float tt = floor(uTime * 30.0);
+    float l2 = dot(col, vec3(0.333));
+    col = mix(col, vec3(1.0, 0.93, 0.82) * (0.75 + 0.35 * l2), ch * ch * 0.75);
+    col.r += 0.08 * ch * sin(uv0.y * 300.0 + uTime * 40.0);
+    col.b -= 0.06 * ch;
+    float sp = step(1.0 - 0.02 * ch, gHash(floor(uv0 * resolution / 2.0) + tt));
+    col += vec3(1.0, 0.85, 0.7) * sp * ch;
+    float colm = step(1.0 - 0.012 * ch, gHash(vec2(floor(uv0.x * resolution.x / 3.0), floor(uTime * 4.0))));
+    col += vec3(1.0, 0.9, 0.75) * colm * 0.5 * ch;
+    float lost = smoothstep(1.0, 1.12, uCamHeat);
+    if (lost > 0.0){
+      float snow = gHash(floor(uv0 * resolution / 2.0) + vec2(tt * 1.3, tt * 0.7));
+      float through = step(0.93, gHash(vec2(floor(uTime * 6.0), 2.0)));
+      col = mix(col, col * through * 0.5 + vec3(snow * 0.28), lost);
+    }
+  }
   // (and clouds over: a milky veil)
   if (uFog > 0.0) col = mix(col, vec3(0.5, 0.52, 0.56) * (0.45 + 0.55 * l), clamp(uFog, 0.0, 1.0) * 0.38);
   // alarm: pulsing red edges + red wash
@@ -384,6 +415,7 @@ export class GradeEffect extends Effect {
         ['uBlur', new THREE.Uniform(0)],
         ['uPixel', new THREE.Uniform(1)],
         ['uFog', new THREE.Uniform(0)],
+        ['uCamHeat', new THREE.Uniform(0)],
         ['uTint', new THREE.Uniform(new THREE.Vector3(1, 1, 1))],
       ]),
     });
