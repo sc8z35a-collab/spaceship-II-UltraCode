@@ -195,6 +195,12 @@ export function buildRingLift(M, R) {
     const y = -d.dot(U), x = d.dot(TG);
     return y > -0.5 && y < CAR.h + 0.3 && Math.hypot(x, d.z) < CAR.r - 0.05;
   };
+  const looseIn = (p) => {
+    if (!p || !st.C) return false;
+    const d = _v.copy(p).sub(st.C).addScaledVector(U, -st.rf);
+    const y = -d.dot(U), x = d.dot(TG);
+    return y > -0.8 && y < CAR.h + 0.6 && Math.hypot(x, d.z) < CAR.r + 0.3;
+  };
   const inTermCar = (p) => { if (!p) return false; const d = _v.copy(p).sub(TP); return d.y > -0.5 && d.y < CAR.h + 0.3 && Math.hypot(d.x, d.z) < CAR.r - 0.05; };
   const nearHall = (p) => { if (!p || !st.C) return false; const d = _v.copy(p).sub(st.C); const s = d.dot(U); return s > R_DECK - 3 && Math.hypot(d.x - U.x * s, d.y - U.y * s, d.z) < 3.5; };
   const nearTerm = (p) => !!p && p.distanceTo(_w.copy(TP).add(V(0, 1, -1.6))) < 2.2;
@@ -248,7 +254,7 @@ export function buildRingLift(M, R) {
         if (Math.abs(rem) <= Math.abs(d) || Math.abs(rem) < 0.002) {
           d = rem; st.v = 0; st.at = st.dest;
           if (g.audio && g.audio.beep) g.audio.beep(988, 0.1, 0.06, { pos: pl.eyeLocal });
-          if (st.at === 'top' && (inRingC || st.rider)) { st.phase = 'xfer'; st.xfer = 0; st.xferDir = 'out'; }
+          if (st.at === 'top' && (inRingC || looseIn(rp))) { st.phase = 'xfer'; st.xfer = 0; st.xferDir = 'out'; }
           else st.phase = 'opening';
           st.rider = false;
           if (st.at === 'deck' && inRingC && g.asphalt) g.asphalt.say('ring_arrive', { g: (pull() * Math.pow(D.station.ringK ?? 1, 2)).toFixed(2) }, { force: true });
@@ -279,6 +285,7 @@ export function buildRingLift(M, R) {
     const D = g.docking, pl = g.player;
     if (!D.inRing) return;
     const loc = _v.copy(D.ringState.pos).sub(st.C).addScaledVector(U, -st.rf).applyQuaternion(_q.copy(QR).invert());
+    if (loc.y < -0.8 || loc.y > CAR.h + 0.6 || Math.hypot(loc.x, loc.z) > CAR.r + 0.3) return;     // (not in the car after all: he stays where he is)
     const p = loc.applyQuaternion(QT).add(TP);
     D.leaveRingFrame();
     pl.teleport(p.clone());
@@ -363,7 +370,15 @@ export function buildRingLift(M, R) {
     /** the hub's panel ('top') or the hall's button ('deck') */
     call(where) { st.calls[where] = true; if (st.phase === 'open' && st.at !== where && !st.inside) { st.dest = st.at; st.phase = 'closing'; } },
     nearHall,
-    preStep(dt, g) { if (!st.cols) return; step(dt, g); applyCols(); st.stepped = true; },
+    preStep(dt, g) {
+      if (!st.cols) return;
+      const pl = g.player, D = g.docking;
+      // (in the ring frame here: pl.pos is in ring space)
+      const rider = D.inRing && pl && pl.state !== 'dead' && looseIn(pl.pos);
+      step(dt, g); applyCols(); st.stepped = true;
+      // the rider goes with the car, moved with it outright (no contest with its floor's contact)
+      if (rider && st.dr !== 0 && D.inRing) { _w.copy(pl.pos).addScaledVector(U, st.dr); pl.teleport(_w); }
+    },
     update(dt, g) {
       if (!st.cols) return;
       if (!st.crisp && g.engine && g.engine.crisp) { g.engine.crisp.add(rcar.panel.mesh); g.engine.crisp.add(tcar.panel.mesh); st.crisp = true; }
@@ -378,7 +393,7 @@ export function buildRingLift(M, R) {
       if (st.drawT <= 0) { st.drawT = 0.25; draw(rcar.panel); draw(tcar.panel); }
     },
     /** the car's carry for the player (ring space), or null: filled in by preStep before his step */
-    liftDelta(p) { return inRingCar(p) ? _d : null; },
+    liftDelta() { return null; },      // (the rider is carried outright, in preStep)
     state: st,
   };
 }
