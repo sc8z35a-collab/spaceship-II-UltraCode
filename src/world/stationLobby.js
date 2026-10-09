@@ -7,6 +7,7 @@
 import * as THREE from 'three';
 import { buildTerminal } from './akamoTerminal.js';
 import { ShirasagiLife } from './shirasagiLife.js';
+import { buildRingLift } from './ringLift.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Builder, rng } from '../ship/geom.js';
 import { OPENINGS } from '../ship/hullShape.js';
@@ -825,6 +826,12 @@ export function buildLobby(renderer, def) {
     ring = buildRingInterior(def, M);
     ring.group.traverse((o) => o.layers.set(LAYER_NEAR));
     ring.terminal = { button: V(CORE.x + 1.55, CORE.y - 0.12, TERMINAL.z1 - 0.12), out: V(CORE.x, CORE.y - 0.4, TERMINAL.z1 - 1.3) };
+    // Shirasagi's first spoke: a real car between the hub and the deck (ringLift.js); the terminal's
+    // car stands where the transit tube ends, so the old step-out point moves in front of it
+    ring.lift = buildRingLift(M, ring);
+    group.add(ring.lift.shipGroup);
+    b.colliders.push(...ring.lift.shipColliders);
+    ring.terminal.out = V(CORE.x, CORE.y - 0.3, TERMINAL.z1 - 2.5);
   }
   if (core) {
     terminal = buildTerminal(M, lamp);
@@ -835,7 +842,7 @@ export function buildLobby(renderer, def) {
   }
   // Shirasagi: its crew on their rounds, the escape pod hatches (shirasagiLife.js)
   const life = core ? new ShirasagiLife(M, group) : null;
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); } : undefined };
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); if (ring && ring.lift) ring.lift.update(dt, g); } : undefined };
 }
 
 /** paint the globe with the Earth colour map once it is available */

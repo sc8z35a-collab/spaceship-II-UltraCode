@@ -250,14 +250,19 @@ export function buildRingInterior(def, M) {
       // the spoke elevator: a glass column from the floor into the ceiling, the car inside, doors
       // facing along the deck, a call pillar beside them
       place(am, 0, 0, () => {
-        b.cyl(0.95, 0.95, RF - RC, 'glass', [0, (RF - RC) / 2, 0], null, 32, true);
+        // (Shirasagi's first hall: the column is open at its doors for the real car, ringLift.js)
+        const live = def.id === 'shirasagi' && k === 0;
+        if (live) b.add(new THREE.CylinderGeometry(0.95, 0.95, RF - RC, 32, 1, true, Math.PI / 2 + 0.56, Math.PI * 2 - 1.12), 'glass', [0, (RF - RC) / 2, 0]);
+        else b.cyl(0.95, 0.95, RF - RC, 'glass', [0, (RF - RC) / 2, 0], null, 32, true);
         for (const y of [0.04, RF - RC - 0.1]) b.torus(0.97, 0.06, 'gold', [0, y, 0], [Math.PI / 2, 0, 0], 32);
         for (let i = 0; i < 6; i++) { const q = i / 6 * Math.PI * 2 + Math.PI / 6; b.box(0.08, RF - RC, 0.08, 'steel', [Math.cos(q) * 0.97, (RF - RC) / 2, Math.sin(q) * 0.97], null, 0.01); }
-        b.cyl(0.85, 0.85, 2.3, 'cream', [0, 1.2, 0], null, 24);       // the car
-        b.cyl(0.9, 0.9, 0.12, 'brass', [0, 2.42, 0], null, 24);
-        b.box(1.0, 2.05, 0.06, 'steel', [0.9, 1.05, 0], [0, Math.PI / 2, 0], 0.01);   // doors facing +x (along the deck)
-        b.box(0.04, 2.0, 0.02, 'led', [0.94, 1.05, 0], [0, Math.PI / 2, 0], 0);
-        b.colCyl(1.0, RF - RC, [0, (RF - RC) / 2, 0]);
+        if (!live) {
+          b.cyl(0.85, 0.85, 2.3, 'cream', [0, 1.2, 0], null, 24);       // the car
+          b.cyl(0.9, 0.9, 0.12, 'brass', [0, 2.42, 0], null, 24);
+          b.box(1.0, 2.05, 0.06, 'steel', [0.9, 1.05, 0], [0, Math.PI / 2, 0], 0.01);   // doors facing +x (along the deck)
+          b.box(0.04, 2.0, 0.02, 'led', [0.94, 1.05, 0], [0, Math.PI / 2, 0], 0);
+          b.colCyl(1.0, RF - RC, [0, (RF - RC) / 2, 0]);
+        }
         // call pillar
         b.cyl(0.12, 0.16, 1.1, 'marbleDark', [1.5, 0.55, 0.85], null, 16);
         b.box(0.3, 0.18, 0.06, 'black', [1.5, 1.12, 0.85], [0, Math.PI / 2, -0.4], 0.02);

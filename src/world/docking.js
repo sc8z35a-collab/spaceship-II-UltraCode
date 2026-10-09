@@ -282,6 +282,7 @@ export class Docking {
       return Object.assign({}, c, { m: new THREE.Matrix4().makeTranslation(C.x, C.y, C.z).multiply(c.m) });
     });
     this.ringCols = g.phys.addColliders(cols);
+    if (R.lift) R.lift.attach(g, C);
     this.ringLamps = R.lamps;
     g.systems.lamps.push(...R.lamps);
     // the call panel at the hub terminal, the call buttons in the ring's elevator halls
@@ -301,6 +302,7 @@ export class Docking {
     g.shipVis.root.remove(R.group);
     if (this.ringCols) for (const c of this.ringCols) g.phys.world.removeCollider(c, true);
     this.ringCols = null;
+    if (R.lift) R.lift.detach(g);
     g.systems.lamps = g.systems.lamps.filter((l) => !R.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && R.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     for (const t of this.ringTaps || []) g.interact.remove(t);
@@ -345,6 +347,8 @@ export class Docking {
   /** ride the spoke elevator: down into the ring (true) or up to the hub terminal (false) */
   rideRing(down) {
     const g = this.g, R = this.lobby && this.lobby.ring;
+    // (Shirasagi's first spoke has a real car, ringLift.js: the hub's panel and its hall's button call it)
+    if (R && R.lift && this.state === 'docked' && (down || R.lift.nearHall(this.ringState.pos))) { R.lift.call(down ? 'top' : 'deck'); return; }
     if (!R || this.riding || this.state !== 'docked' || g.player.state === 'dead') return;
     if (down === this.inRing) return;
     const st = this.station.dmg ? this.station.dmg.status : 'ok';

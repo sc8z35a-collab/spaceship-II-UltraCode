@@ -168,6 +168,9 @@ export class ShirasagiLife {
     const D = g.docking, st = D && D.station, status = st && st.dmg ? st.dmg.status : 'ok';
     const trouble = status === 'critical' || status === 'failed' || status === 'destroyed' || !!(D && D.air && D.air.breaches && D.air.breaches.length);
     this.crew.alarm(trouble);
+    // (if no hatch has gone half a minute into the trouble, the pods go anyway)
+    this.troubleT = trouble ? (this.troubleT || 0) + dt : 0;
+    if (this.troubleT > 30 && !this.launched) this.launch(g);
     const pl = g.player, alive = pl && pl.state !== 'dead';
     this.crew.update(dt, alive ? pl.pos : null, alive ? pl.eyeLocal : null, (bay) => this.boarded(bay, g), g.gLocal ? g.gLocal.length() : 9.81);
     // the hatches: open while someone runs for them, shut once they are in, the pod away after
@@ -179,7 +182,7 @@ export class ShirasagiLife {
         // (the last ones in, no one coming any more, or too long: it shuts if anyone is aboard; nobody
         // aboard and the trouble over: it stands ready again)
         if (!runningTo.has(id) || h.t > 40) {
-          if (h.aboard > 0) { h.state = 'sealing'; h.t = 0; } else if (!trouble) h.state = 'ready';
+          if (h.aboard > 0) { h.state = 'sealing'; h.t = 0; } else if (!trouble || h.t > 40) h.state = 'ready';
         }
       }
       if (h.state === 'sealing') { h.t += dt; if (h.t > 2.5) this.away(h, g); }
@@ -203,11 +206,13 @@ export class ShirasagiLife {
     h.state = 'gone';
     g.shake = Math.max(g.shake || 0, 0.35);
     if (g.audio && g.audio.ready && g.audio._burst) g.audio._burst(null, { dur: 0.9, freq: 55, q: 0.7, gain: 0.3, type: 'brown', filter: 'lowpass', direct: true, attack: 0.01 });
+    this.launch(g);
+  }
+  launch(g) {
     const st = g.docking && g.docking.station, D = st && st.dmg;
-    if (!this.launched && st && g.pods && (!D || !D.podsOut)) {
-      this.launched = true;
-      if (D) D.podsOut = true;
-      g.pods.launch(st, false);
-    }
+    if (this.launched || !st || !g.pods || (D && D.podsOut)) return;
+    this.launched = true;
+    if (D) D.podsOut = true;
+    g.pods.launch(st, false);
   }
 }

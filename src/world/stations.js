@@ -438,7 +438,8 @@ function hubModel(def, M) {
   rb.torus(58, 3.6, 'hull', [0, 0, 0], [0, 0, 0], 128);
   rb.torus(58, 3.7, 'gold', [0, 0, 2.2], [0, 0, 0], 128);
   rb.torus(58, 3.7, 'gold', [0, 0, -2.2], [0, 0, 0], 128);
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; rb.cyl(1.0, 1.0, 50, 'hullDark', [Math.cos(a) * 29, Math.sin(a) * 29, 0], [0, 0, a - Math.PI / 2], 12); }
+  // (the spokes stand over the ring's spoke halls, 7.5 degrees on from its x axis)
+  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 24; rb.cyl(1.0, 1.0, 50, 'hullDark', [Math.cos(a) * 29, Math.sin(a) * 29, 0], [0, 0, a - Math.PI / 2], 12); }
   rb.cyl(5.2, 5.2, 8, 'hull', [0, 0, 0], [Math.PI / 2, 0, 0], 32);
   for (let k = 0; k < 180; k++) {
     const a = k / 180 * Math.PI * 2;

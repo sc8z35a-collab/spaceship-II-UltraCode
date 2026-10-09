@@ -391,7 +391,9 @@ export class WorldDamage {
     if (key && (near || st === 'destroyed' || st === 'failed')) g.asphalt.say(this.isElevator(t) ? key + '_el' : key, { name: this.name(t) }, { force: st === 'destroyed', minGap: 20 });
     // the crew gets out: its escape pods, from their bays (escapePods.js) — flown out in full
     // near Kaito; far off they are simply gone
-    if (!this.isElevator(t) && (st === 'critical' || st === 'failed' || st === 'destroyed') && !D.podsOut) {
+    // (Kaito docked at Shirasagi: its crew's run for the hatches launches the pods, shirasagiLife.js)
+    const lifeHere = !!(g.docking && g.docking.state === 'docked' && g.docking.station === t && g.docking.lobby && g.docking.lobby.life);
+    if (!this.isElevator(t) && (st === 'critical' || st === 'failed' || st === 'destroyed') && !D.podsOut && !lifeHere) {
       D.podsOut = true;
       const me = g.playerVessel ? g.playerVessel().pos : g.flight.pos;
       const dist = Math.min(this.distTo(t), t.pos.distanceTo(me));

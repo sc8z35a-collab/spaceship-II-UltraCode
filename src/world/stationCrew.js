@@ -212,7 +212,7 @@ export class StationCrew {
   place(P, dt) {
     if (P.turnTo !== undefined && !P.path) P.face += Math.atan2(Math.sin(P.turnTo - P.face), Math.cos(P.turnTo - P.face)) * Math.min(1, dt * 4);
     P.person.root.position.copy(P.pos);
-    if (this.zeroG) P.person.root.position.y += 0.25 + 0.05 * Math.sin(this.t * 0.9 + P.seed * 3);
+    if (this.zeroG) P.person.root.position.y += 0.09 + 0.035 * Math.sin(this.t * 0.9 + P.seed * 3);
     if (!P.path) P.tilt *= Math.max(0, 1 - dt * 3);
     P.person.root.rotation.set(P.tilt || 0, P.face, 0);
     P.person.pose(P.pose, this.t);
