@@ -272,6 +272,9 @@ function template(grade, armed, level) {
   const lineA = zCan - zDome, lineB = cabLen - lineA;
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineA, seg, 1, true, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner', [0, 0, zDome + lineA / 2]);
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineB, seg, 1, true)), 'liner', [0, 0, zCan + lineB / 2]);
+  // (and the nose's, ahead of the cabin: the hull's skin is only drawn from outside)
+  const noseIn = prof.filter((q) => q.y >= yDome - 1e-6).map((q) => new THREE.Vector2(q.x * 0.95, q.y));
+  if (noseIn.length > 2) b.add(rot(new THREE.LatheGeometry(noseIn, seg, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner');
   b.box(R * 1.4, 0.04, cabLen + R * 0.6, 'floor', [0, fy, zDome + cabLen / 2 - R * 0.3], null, 0, 1);
   b.box(R * 1.3, 0.35, 0.3, 'console', [0, fy + 0.55, zFront], [-0.6, 0, 0], lo2 ? 0 : 0.03, 1);
   for (const s of [-1, 1]) {
@@ -302,9 +305,9 @@ function template(grade, armed, level) {
   glass.renderOrder = 6;
   group.add(glass);
   const tpl = {
-    // (the cabin camera: just behind the pilots, between their heads and a little above them, under
-    // the ceiling: the two of them, the console and the canopy in its picture)
-    group, seats, zFront, fy, gunAt, cam: V(0, Math.min(fy + 1.35, R * 0.93 - 0.12), rowZ(0) + 0.6), exit: V(0, 0, L / 2 + 0.1), R, L,
+    // (the cockpit camera: on top of the console, between the pilots' hands, looking out through
+    // the canopy; turned round, it looks back at the crew)
+    group, seats, zFront, fy, gunAt, cam: V(0, fy + 0.92, zFront - 0.02), exit: V(0, 0, L / 2 + 0.1), R, L,
     marks: marksLayout(zDome, zCan, frontBand, zBand2, hz),
     rcs: [0, 1, 2, 3].map((i) => { const a = Math.PI / 4 + i * Math.PI / 2; return V(Math.cos(a) * R * 1.02, Math.sin(a) * R * 1.02, L / 2 - 0.65); }),
   };

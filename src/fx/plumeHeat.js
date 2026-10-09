@@ -115,7 +115,7 @@ export class PlumeHeat {
     return q;
   }
 
-  /** per step (game time) */
+  /** per drawn frame (dt: the game time it covers), once every vessel and plume is placed */
   update(dt) {
     const g = this.g;
     if (dt <= 0) return;

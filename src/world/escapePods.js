@@ -687,7 +687,7 @@ export class EscapePods {
     else { c.throttle = fi.throttle || 0; c.yaw = fi.yaw || 0; c.pitch = fi.pitch || 0; c.roll = fi.roll || 0; }
     if (inp) {
       const L = this.look;
-      L.yaw = Math.max(-2.4, Math.min(2.4, L.yaw - (inp.lookDX || 0) * 0.004));
+      L.yaw = Math.max(-2.9, Math.min(2.9, L.yaw - (inp.lookDX || 0) * 0.004));
       L.pitch = Math.max(-1.1, Math.min(1.1, L.pitch - (inp.lookDY || 0) * 0.004));
       // (flying it, the eye drifts back to the front)
       if (Math.abs(c.throttle) + Math.abs(c.yaw) + Math.abs(c.pitch) > 0.05) { L.yaw *= 0.97; L.pitch *= 0.97; }
@@ -702,7 +702,7 @@ export class EscapePods {
     out.pos = (out.pos || new THREE.Vector3()).copy(cam).applyQuaternion(p.q).add(p.pos);
     // (a little shake as it burns, more when it is hit)
     const t = performance.now() / 1000, k = Math.min(1, p.thrust.length() / p.G.accel) * 0.004 + (p.evadeT > 7 ? 0.01 : 0);
-    _q2.setFromEuler(_e.set(-0.12 + this.look.pitch + Math.sin(t * 41) * k, this.look.yaw + Math.sin(t * 37 + 1) * k, Math.sin(t * 29 + 2) * k, 'YXZ'));
+    _q2.setFromEuler(_e.set(-0.05 + this.look.pitch + Math.sin(t * 41) * k, this.look.yaw + Math.sin(t * 37 + 1) * k, Math.sin(t * 29 + 2) * k, 'YXZ'));
     out.quat = (out.quat || new THREE.Quaternion()).copy(p.q).multiply(_q2);
     return out;
   }

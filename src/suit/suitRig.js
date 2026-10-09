@@ -32,7 +32,7 @@ const CENTRE = new THREE.Vector3(0, 0.95, 0);   // where the body turns about (i
 const X = new THREE.Vector3(1, 0, 0), Z = new THREE.Vector3(0, 0, 1);
 const _v = new THREE.Vector3(), _v2 = new THREE.Vector3(), _v3 = new THREE.Vector3(), _ax = new THREE.Vector3();
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _qP = new THREE.Quaternion();
-const _gc = new THREE.Vector3(), _tq = new THREE.Vector3(), _wp = new THREE.Vector3(), _ap = new THREE.Vector3();
+const _gc = new THREE.Vector3(), _tq = new THREE.Vector3(), _wp = new THREE.Vector3(), _ap = new THREE.Vector3(), _rr = new THREE.Vector3();
 
 export class SuitRig {
   /** api: the suit model's (joints, J) */
@@ -131,12 +131,14 @@ export class SuitRig {
       // for a forearm or a shin, the swing of the piece it hangs from)
       const u = _v.copy(o.u0).applyQuaternion(o.q);
       const m = _v2.copy(o.p).addScaledVector(u, L.lever);
-      const r = m.sub(CENTRE);
+      const r = _rr.copy(m).sub(CENTRE);
       _gc.copy(acc).negate();
       _gc.sub(_v3.copy(al).cross(r));
       _gc.sub(_v3.copy(w).cross(_ax.copy(w).cross(r)));
       if (par) {
-        const rp = _v3.copy(o.p).sub(par.p);
+        // (the piece it hangs from carries its mass round with it: a thigh swung forward leaves
+        // the shin behind, the knee bending, then whips it on)
+        const rp = _v3.copy(m).sub(par.p);
         _gc.sub(_ax.copy(par.al).cross(rp));
         _gc.sub(_ap.copy(par.w).cross(_wp.copy(par.w).cross(rp)));
       }

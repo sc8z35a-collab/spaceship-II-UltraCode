@@ -331,7 +331,6 @@ export class Game {
     if (this.weapons) this.weapons.update(sdt, limp || remote ? null : inp);
     if (this.combat) this.combat.update(sdt);
     if (this.pods) this.pods.update(sdt);
-    if (this.plumeHeat) this.plumeHeat.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
     let env, gPl = this.gLocal;
@@ -704,6 +703,10 @@ export class Game {
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
+    // the engines' flames and what is in them: worked out here, with every vessel and every plume
+    // where it is drawn this frame (during the step the plumes are still where they were drawn the
+    // frame before — at orbital speed a hundred metres behind the ships carrying them)
+    if (this.plumeHeat && this.running) this.plumeHeat.update(dt * this.timeScale);
     if (this.extMarkers) this.extMarkers.update();
     {
       const sunLocal = this.space.sunDir.clone().applyQuaternion(f.quat.clone().invert());

@@ -765,6 +765,31 @@ export class Damage {
       for (const s of g.layout.pipes) if (s.mid.distanceTo(h.p) < 2.5) this.pipeLeak(s, 0.6);
       this.events.push({ type: 'burnthrough', zone, pos: h.p.clone() });
     }
+    // drawn by the strike engine, as the layers go: the paint burnt off over a wide patch (the bare
+    // aluminium heat-tinted), the skin opened on the blanket, then holed through with its edges
+    // torn back — glowing while the flame plays on it, the hole's rim cooling for half a minute after
+    const kind = h.p.y < -1.15 && n.y < -0.55 ? 1 : 0;
+    const want = h.stage;
+    for (let k = 0; k < 3 && (h.site ? h.site.stage : 0) < want; k++) {
+      const r = this.strikes.hit(h.p, n, n.clone().negate(), 2e4, { kind });
+      h.site = r.site;
+      // (molten spatter and flakes of burnt paint, not a round's blast)
+      strikeDebris(this.debrisCtx(kind ? 'b29Belly' : 'b29'), r, h.p.clone().addScaledVector(n, 0.01), n, n.clone().negate(), 6e3);
+      if (r.to >= this.strikes.stages && r.from < this.strikes.stages) {
+        this.strikePetals(r.site);
+        this.stripMounts(r.site.p, r.site.n, r.site.Rt * 0.75 + 0.18, n.clone().negate());
+      }
+      if (r.to === r.from) break;
+    }
+    if (h.site) {
+      const S = h.site;
+      // (a flame's patch is wider than a round's crater)
+      const R = Math.min(1.0, [0, 0.62, 0.72, 0.86][Math.min(3, S.stage)] * (0.85 + Math.min(0.3, q * 0.015)));
+      if ((S.Rt || 0) < R - 0.03) { S.Rt = R; if (S.stage >= this.strikes.stages) this.strikePetals(S); }
+      S.heat = Math.max(S.heat, Math.min(1, 0.35 + q / 12));
+      if (S.stage >= this.strikes.stages) S.ember = Math.max(S.ember, Math.min(1, 0.4 + q / 10));
+      this.strikes.dirty = true;
+    }
     // (felt aboard: the hull ticking and booming as it heats; the ship warns)
     const feel = !g.gameplay || !g.gameplay.hearsB29 || g.gameplay.hearsB29();
     if (feel && g.audio.ready && Math.random() < dt * (0.6 + q * 0.1)) g.audio.impact(h.p, Math.min(0.35, 0.05 + q * 0.01));
