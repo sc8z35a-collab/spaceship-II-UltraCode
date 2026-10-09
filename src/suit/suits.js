@@ -10,8 +10,12 @@
 //    carriage brings the suit out to the seat the same way. Taking it off runs the other way round;
 //  - flying: the fine thrusters by default (a few m/s, steady close to the hull), the boosters once
 //    armed (H8's two: 14 m/s^2 up to 500 m/s for an hour; B-29's one: 4 m/s^2 up to 100 m/s for
-//    half an hour); the flight computer holds still when nothing is asked; a lopsided pack (one
-//    booster out) pulls to the side;
+//    half an hour); a lopsided pack (one booster out) pulls to the side;
+//  - out in space Kaito is a body of his own: his position and velocity are kept in space (gravity
+//    and his thrusters move him) and the ship's frame is worked out round him — when the ship
+//    accelerates, turns or flies off it does so without him, unless he holds on to it or its hull
+//    is in his way. Only if asked (自動停止) does the suit's computer brake him to a stop against
+//    the ship, on its thrusters and its charge;
 //  - knocks: the speed lost against whatever the suit met is an impact on the part that met it;
 //  - out on a walk the suit is seen from outside too (another camera, H8's display): the wearer's
 //    face behind the visor, the boosters' plumes, the lamps.
@@ -22,6 +26,8 @@ import { buildSuit } from './suitModel.js';
 import { VisorHud } from './visorHud.js';
 import { DOCK_AT } from '../world/stations.js';
 import { LOBBY, TUNNEL } from '../world/stationLobby.js';
+import { MU_EARTH } from '../core/astro.js';
+import { H8 as H8S } from '../h8/h8Spec.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 const ease = (t) => (t <= 0 ? 0 : t >= 1 ? 1 : t * t * (3 - 2 * t));
@@ -29,6 +35,9 @@ const seg = (t, a, b) => ease((t - a) / (b - a));
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const EYE_IN = V(0, 1.62, -0.035);          // the eye inside the helmet (suit frame)
 const FINE = { h8: { acc: 2.6, v: 6 }, b29: { acc: 1.4, v: 4 } };   // the fine thrusters
+const ZERO = V(0, 0, 0);
+const _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _e3 = new THREE.Vector3(), _qe = new THREE.Quaternion(), _qe2 = new THREE.Quaternion(), _eu = new THREE.Euler();
+const gravE = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
 
 export class Suits {
   constructor(g) {
@@ -37,7 +46,8 @@ export class Suits {
     for (const k of Object.keys(this.st)) this.st[k].onEvent = (kind, info) => this.onEvent(k, kind, info);
     this.cam = new SuitCamera();
     this.boost = false;          // the boosters armed (else the fine thrusters)
-    this.hold = true;            // the flight computer nulls drift when nothing is asked
+    this.hold = false;           // asked to, the flight computer brakes him to a stop against the ship
+    this.eva = null;             // out in space: his own state { p, v (ECI), q (the frame's turn), solo }
     this.throttle = 0;           // what is being asked of the boosters now (0..1)
     this.lamp = false;
     this.sunVisor = 0;
@@ -388,9 +398,11 @@ export class Suits {
         if (vn < 0) {
           // what it came in with goes into the knock (and it bounces back a little)
           const inward = nPF.clone().multiplyScalar(vn);
-          pl.vel.addScaledVector(inward, -1.3);
+          const dv = inward.clone().multiplyScalar(-1.3);
+          pl.vel.add(dv);
+          this.syncEci(pl, dv);
           this.contact(pl, inward, rel.clone().sub(inward));
-        }
+        } else this.syncEci(pl);
         break;
       }
     }
@@ -492,6 +504,7 @@ export class Suits {
     const S = this.state;
     const k = this.worn;
     if (!S || !k) return false;
+    if (pl.inertial && this.eva) return this.flyFree(dt, pl, input, camF, camR, camU);
     const P = S.spec.propulsion, Fn = FINE[k];
     const tk = S.thrustK();
     const want = _v.set(0, 0, 0).addScaledVector(camF, input.moveY || 0).addScaledVector(camR, input.moveX || 0).addScaledVector(camU, input.up || 0);
@@ -522,6 +535,135 @@ export class Suits {
     }
     pl.vel.addScaledVector(gLocal, dt);
     return thrusting;
+  }
+
+  // ================================================================== out in space: his own inertia
+  /**
+   * The frame the player's coordinates are in (B-29's; H8's while it flies alone): its pose and
+   * velocity in space, and where its origin sits in those coordinates
+   */
+  frameOf() {
+    const g = this.g, solo = !!(g.h8 && g.h8.solo), f = solo ? g.h8.flight : g.flight;
+    return { pos: f.pos, vel: f.vel, quat: f.quat, off: solo ? H8S.dockAt : ZERO, solo };
+  }
+
+  toEci(F, local, out) { return out.copy(local).sub(F.off).applyQuaternion(F.quat).add(F.pos); }
+
+  toLocal(F, eci, out) { return out.copy(eci).sub(F.pos).applyQuaternion(_qe.copy(F.quat).invert()).add(F.off); }
+
+  /** free in space in the suit (not in a ring, not being towed, not climbing in or out of it) */
+  inertialNow(pl) {
+    const g = this.g;
+    return !!(pl.suit && pl.outside && !this.seq && pl.state !== 'seated' && pl.state !== 'dead' && !(g.docking && g.docking.inRing) && !(this.rescue && this.rescue.towing));
+  }
+
+  /**
+   * Before the player's step (sdt: the game's step): out in space his state is his own. The frame
+   * turned under him: his body and his look stay pointing where they did in space (unless he has
+   * a hand on a rail: then he turns with the hull)
+   */
+  preStep(pl, sdt) {
+    const on = this.inertialNow(pl);
+    pl.inertial = on;
+    if (!on) { this.eva = null; return; }
+    const F = this.frameOf();
+    let E = this.eva;
+    if (!E || E.solo !== F.solo) {
+      // (taken where he is now: the frame has already made this step's move, and so has he)
+      this.eva = { p: this.toEci(F, pl.pos, new THREE.Vector3()), v: pl.vel.clone().applyQuaternion(F.quat).add(F.vel), q: F.quat.clone(), solo: F.solo, dt: sdt, vCap: 0, fresh: true };
+      return;
+    }
+    E.dt = sdt;
+    // D = q_now^-1 q_before: what the frame's turn does to a direction fixed in space (however
+    // slowly it turns: the orbit's own frame goes round once an orbit)
+    _qe2.copy(F.quat).invert().multiply(E.q);
+    if (!pl._nearRail && Math.abs(_qe2.w) < 1 - 1e-15) {
+      const Lq = pl.viewQuat(new THREE.Quaternion()).premultiply(_qe2);
+      pl.up.applyQuaternion(_qe2).normalize();
+      _qe.copy(pl.frameQuat(new THREE.Quaternion())).invert().multiply(Lq);
+      _eu.setFromQuaternion(_qe, 'YXZ');
+      pl.pitch = Math.max(-1.5, Math.min(1.5, _eu.x)); pl.yaw = _eu.y; pl.roll = _eu.z;
+    }
+    E.q.copy(F.quat);
+  }
+
+  /** his thrusters in space: the push along his view, gravity, then the step it makes in the frame */
+  flyFree(dt, pl, input, camF, camR, camU) {
+    const S = this.state, k = this.worn, E = this.eva, F = this.frameOf();
+    const P = S.spec.propulsion, Fn = FINE[k], tk = S.thrustK();
+    // (the game's step: with time sped up he keeps up with the world)
+    const h = Math.max(dt, E.dt || dt);
+    const want = _e1.set(0, 0, 0).addScaledVector(camF, input.moveY || 0).addScaledVector(camR, input.moveX || 0).addScaledVector(camU, input.up || 0);
+    const asked = Math.min(1, want.length());
+    // (against the vessel: the speed of its frame where he is — its slow turn adds next to nothing)
+    const rel = _e2.copy(E.v).sub(F.vel);
+    const a = _e3.set(0, 0, 0);
+    let thrusting = false;
+    this.throttle = 0;
+    E.vCap = 0;
+    if (asked > 0.02 && tk > 0) {
+      want.normalize().applyQuaternion(F.quat);
+      const boosting = this.boost && (input.moveY || 0) > 0.2;
+      const acc = (boosting ? P.accel : Fn.acc) * tk * asked;
+      a.addScaledVector(want, acc);
+      // one booster out: the push pulls to one side
+      if (boosting && S.asymmetry()) a.addScaledVector(_e1.copy(camR).applyQuaternion(F.quat), S.asymmetry() * acc * 0.12);
+      this.throttle = boosting ? asked * tk : asked * 0.15;
+      thrusting = true;
+      // (the suit's computer takes him no faster than its top speed against his vessel)
+      E.vCap = boosting ? P.vMax : Math.max(Fn.v, Math.min(P.vMax, rel.length()));
+    } else if (pl._nearRail) {
+      // a hand on a rail: the hull carries him (his grip takes up what he had against it)
+      E.v.copy(F.vel).addScaledVector(rel, Math.exp(-h * 2.5));
+    } else if (this.hold && tk > 0) {
+      // asked to hold still against the vessel: the thrusters brake him, taking the time and the
+      // charge it costs
+      const v = rel.length();
+      if (v > 0.005) {
+        const acc = (this.boost && v > Fn.v ? P.accel : P.damp) * tk;
+        const dv = Math.min(v, acc * h);
+        a.addScaledVector(rel, -dv / (v * h));
+        this.throttle = Math.min(1, dv / Math.max(1e-4, P.accel * h)) * (this.boost ? 1 : 0.15);
+        thrusting = v > 0.2;
+      }
+    }
+    // gravity (he falls round the Earth as everything else does) and his push
+    E.v.addScaledVector(gravE(E.p, _e1).add(a), h);
+    if (E.vCap) {
+      const r2 = _e2.copy(E.v).sub(F.vel), sp = r2.length();
+      if (sp > E.vCap) E.v.copy(F.vel).addScaledVector(r2, E.vCap / sp);
+    }
+    // (the step he was taken up on was already made with the frame)
+    if (E.fresh) E.fresh = false;
+    else E.p.addScaledVector(E.v, h);
+    // where that is in the frame now: the step his body takes there (what is in the way stops it)
+    pl.vel.copy(this.toLocal(F, E.p, _e1)).sub(pl.pos).divideScalar(Math.max(1e-4, dt));
+    return thrusting;
+  }
+
+  /** after the player's step: where he actually got to (a hull in his way: its push is his now) */
+  afterMove(pl) {
+    const E = this.eva;
+    if (!E || !pl.inertial) return;
+    const F = this.frameOf();
+    const at = this.toEci(F, pl.pos, _e1);
+    const miss = _e2.copy(at).sub(E.p);
+    if (miss.lengthSq() > 1e-10) { E.v.addScaledVector(miss, 1 / Math.max(1e-3, E.dt || 0.016)); E.p.copy(at); }
+  }
+
+  /** the player was moved in the frame (pushed out of something, a bounce): his state follows */
+  syncEci(pl, dvLocal = null) {
+    const E = this.eva;
+    if (!E) return;
+    const F = this.frameOf();
+    this.toEci(F, pl.pos, E.p);
+    if (dvLocal) E.v.add(_e1.copy(dvLocal).applyQuaternion(F.quat));
+  }
+
+  /** his speed against the vessel he is measured against */
+  relSpeed() {
+    const pl = this.g.player, E = this.eva;
+    return E && pl.inertial ? E.v.distanceTo(this.frameOf().vel) : pl.vel.length();
   }
 
   // ================================================================== knocks
@@ -674,14 +816,15 @@ export class Suits {
 
   // ================================================================== save
   serialize() {
-    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, lamp: this.lamp };
+    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, holdV: 2, lamp: this.lamp };
   }
 
   restore(s) {
     if (!s) return;
     this.st.h8.restore(s.h8); this.st.b29.restore(s.b29);
     this.cam.restore(s.cam);
-    this.boost = !!s.boost; this.hold = s.hold !== false; this.lamp = !!s.lamp;
+    // (the automatic stop is off unless it was chosen: older saves had it on by default)
+    this.boost = !!s.boost; this.hold = s.holdV === 2 && s.hold === true; this.lamp = !!s.lamp;
     this.mirror();
   }
 

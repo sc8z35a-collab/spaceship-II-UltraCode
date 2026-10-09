@@ -98,6 +98,29 @@ function segSphere(p0, p1, c, R) {
   return t >= 0 && t <= 1 ? t : -1;
 }
 
+const _ca = new THREE.Vector3();
+/** first contact of segment p0->p1 with a capsule along z (za..zb, radius r): fraction, or -1 */
+function segCapsuleZ(p0, p1, za, zb, r) {
+  let best = -1;
+  const dx = p1.x - p0.x, dy = p1.y - p0.y, dz = p1.z - p0.z;
+  // the side: the infinite cylinder, kept to za..zb
+  const a = dx * dx + dy * dy, b = 2 * (p0.x * dx + p0.y * dy), c = p0.x * p0.x + p0.y * p0.y - r * r;
+  if (c <= 0 && p0.z >= za && p0.z <= zb) return 0;
+  if (a > 1e-12) {
+    const D = b * b - 4 * a * c;
+    if (D >= 0) {
+      const t = (-b - Math.sqrt(D)) / (2 * a);
+      if (t >= 0 && t <= 1) { const z = p0.z + dz * t; if (z >= za && z <= zb) best = t; }
+    }
+  }
+  // the round ends
+  for (const z of [za, zb]) {
+    const t = segSphere(p0, p1, _ca.set(0, 0, z), r);
+    if (t >= 0 && (best < 0 || t < best)) best = t;
+  }
+  return best;
+}
+
 export class Combat {
   constructor(game) {
     this.g = game;
@@ -249,6 +272,8 @@ export class Combat {
     if (g.drones) for (const d of g.drones.list) if (d.alive) add('drone', d, d.pos, d.vel, d.R);
     // H8's K3 robots out of their bay (a small cube; on H8's hull they are part of H8)
     if (g.h8 && g.h8.k3) for (const u of g.h8.k3.free()) add('k3', u, u.pos, u.vel, 0.32);
+    // the stations' escape pods in flight (a capsule along the pod: tested in its own frame)
+    if (g.pods) for (const p of g.pods.list) if (p.alive && p.state !== 'wait') add('pod', p, p.pos, p.vel, p.G.len / 2 + 0.3);
     for (const a of g.asteroids.list) if (!a.dead && !a.hit) add('rock', a, a.pos, a.vel, a.radius);
     // (a missile as the drones' guns see it: their shells carry proximity fuses against missiles —
     // one that goes off within six metres counts; six bring it down)
@@ -425,6 +450,17 @@ export class Combat {
       }
       return null;
     }
+    if (tg.kind === 'pod') {
+      // a capsule along its axis: the round's path in the pod's frame against it
+      const P = tg.ref, qi = _q.copy(P.q).invert();
+      const a = p0.clone().applyQuaternion(qi), b = p1.clone().applyQuaternion(qi);
+      const f = segCapsuleZ(a, b, -P.G.len / 2 + P.G.R, P.G.len / 2 - P.G.R * 0.5, P.G.R);
+      if (f < 0) return null;
+      const pl = a.lerp(b, f);
+      const zc = Math.max(-P.G.len / 2 + P.G.R, Math.min(P.G.len / 2 - P.G.R * 0.5, pl.z));
+      const nl = _v2.set(pl.x, pl.y, pl.z - zc).normalize();
+      return { f, point: pl.clone().applyQuaternion(P.q), n: nl.clone().applyQuaternion(P.q) };
+    }
     // spheres: H8, drones, rocks
     const R = tg.kind === 'h8' ? H8.R : tg.R;
     const f = segSphere(p0, p1, _v.set(0, 0, 0), R);
@@ -475,6 +511,8 @@ export class Combat {
       g.drones.damage(tg.ref, R.drone * Math.min(1.5, Ek), hit, r);
     } else if (tg.kind === 'k3') {
       if (g.h8 && g.h8.k3) g.h8.k3.hit(tg.ref, R.E * Ek, hit);
+    } else if (tg.kind === 'pod') {
+      if (g.pods) g.pods.damage(tg.ref, R.E * (r.kind === 'missile' ? 1 : Ek), hit, r);
     } else if (tg.kind === 'rock') {
       const a = tg.ref;
       a.hp = (a.hp ?? Math.pow(a.radius / 0.5, 3) * 0.6) - R.rock;

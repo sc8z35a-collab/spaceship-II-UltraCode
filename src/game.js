@@ -49,6 +49,7 @@ import { glassUniforms } from './ship/glass.js';
 import { StatusLine } from './ui/statusLine.js';
 import { ExtMarkers } from './ui/extMarkers.js';
 import { Photos } from './ui/photos.js';
+import { EscapePods } from './world/escapePods.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -160,6 +161,8 @@ export class Game {
     this.combat = new Combat(this);
     if (!this.params.has('noDrones')) this.drones = new Drones(this, this.combat);
     this.weapons = new Weapons(this, this.combat);
+    // the stations' escape pods (their bays, the pods in flight, breaking into one)
+    this.pods = new EscapePods(this);
     this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
     // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
     this.suits = new Suits(this);
@@ -271,8 +274,11 @@ export class Game {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
     this.lastFlightIn = flightIn;
+    // flying a stolen escape pod from H8's seat: the sticks are the pod's, H8 holds as it is
+    const remote = !!(this.pods && this.pods.remote);
+    if (remote) { this.pods.remoteInput(limp ? null : flightIn, limp ? null : inp); flightIn = null; }
     if (!limp) {
-      if (inp.pressed['b-exit']) { if (focused) this.exitFocus(); else this.systems.exitPressed(); }
+      if (inp.pressed['b-exit']) { if (remote) this.pods.release(); else if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (this.mode === 'camera' && !focused) {
@@ -315,8 +321,9 @@ export class Game {
     this.damage.update(sdt);
     this.asteroids.update(sdt, dt);
     if (this.drones) this.drones.update(sdt);
-    if (this.weapons) this.weapons.update(sdt, limp ? null : inp);
+    if (this.weapons) this.weapons.update(sdt, limp || remote ? null : inp);
     if (this.combat) this.combat.update(sdt);
+    if (this.pods) this.pods.update(sdt);
     // ---- player (inside the habitat ring he walks in the ring's own turning frame)
     const inRing = this.docking.inRing;
     let env, gPl = this.gLocal;
@@ -335,12 +342,16 @@ export class Game {
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
     if (limp && !dead) lookInp = Object.assign({}, lookInp, { lookDX: 0, lookDY: 0, moveX: 0, moveY: 0, up: 0, rx: 0, ry: 0 });
+    // (out in space in a suit he keeps his own motion: the frame is worked out round him)
+    if (this.suits) this.suits.preStep(pl, sdt);
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
+    if (this.suits) this.suits.afterMove(pl);
     if (inRing && this.docking.inRing) { this.docking.storeRingState(); this.docking.toRenderSpace(); }
     if (this.suits) this.suits.update(sdt, Math.min(dt, 0.1));
     // ---- taps
     if (this.h8 && !limp) this.h8.hudHolds(inp.holds);
     for (const tap of inp.taps) {
+      if (remote) { this.pods.remoteTap(tap); continue; }
       if (this.mode === 'camera' || limp || this.cine) continue;
       if (focused) { this.monitors.focusTap(F.m, tap, this.engine.camera); continue; }
       // H8's display: a tap in a lock's box (focus, aim point; twice: go there)
@@ -649,10 +660,13 @@ export class Game {
     }
     this.camWorld.copy(eyeLocal).applyQuaternion(frameQ).add(frameP);
     this.camQuat.copy(frameQ).multiply(viewQ).multiply(shakeQ);
+    // flying a stolen escape pod: the view is its cabin camera's (Kaito is still in H8's seat)
+    const podCam = this.pods && this.pods.remote ? this.pods.remoteCamera(this._podCam || (this._podCam = {})) : null;
+    if (podCam) { this.camWorld.copy(podCam.pos).sub(this.origin); this.camQuat.copy(podCam.quat); }
     // H8's zoom: the magnified picture is the outside cameras', on their stabilised gimbal — it
     // follows the head smoothly, the slower the further in it is zoomed (auto-follow holds it on
     // the target exactly), and no jolt shakes it; the cockpit is seen with the head as it is
-    const Zm = this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat && this.mode !== 'camera' && !this.debugCam ? this.h8.zoom : null;
+    const Zm = this.h8 && pl.state === 'seated' && pl.seat === this.h8.seat && this.mode !== 'camera' && !this.debugCam && !podCam ? this.h8.zoom : null;
     const zoomed = !!(Zm && Zm.z > 1.02);
     if (zoomed) {
       const head = _qHead.copy(frameQ).multiply(viewQ);
@@ -663,7 +677,7 @@ export class Game {
     this.updateCabinVisibility();
     if (this.b29Display) this.b29Display.update(dt);
     // the suit seen from outside (another camera looking at him out on a walk)
-    if (this.suits) this.suits.updateAvatar(dt, this.mode === 'camera' || !!this.debugCam);
+    if (this.suits) this.suits.updateAvatar(dt, this.mode === 'camera' || !!this.debugCam || !!podCam);
     const cam = this.engine.camera;
     cam.matrix.compose(this.camWorld, this.viewQuat, new THREE.Vector3(1, 1, 1));
     // world
@@ -677,9 +691,10 @@ export class Game {
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     if (this.combat) this.combat.updateVisual(dt, origin, this.camWorld);
     if (this.drones) this.drones.updateVisual(dt, origin, this.camWorld);
-    const eyePF = this.debugCam || wreck || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
+    const eyePF = this.debugCam || wreck || podCam || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
+    if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
     if (this.extMarkers) this.extMarkers.update();
     {

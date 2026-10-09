@@ -369,7 +369,7 @@ export class VisorHud {
   refVel() {
     const g = this.g, pl = g.player;
     const h8 = g.h8 && g.h8.solo;
-    return { v: pl.vel.length(), name: h8 ? 'H8' : 'B-29' };
+    return { v: this.s.relSpeed ? this.s.relSpeed() : pl.vel.length(), name: h8 ? 'H8' : 'B-29' };
   }
 
   rescueText() {

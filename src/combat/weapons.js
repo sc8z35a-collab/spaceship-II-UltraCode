@@ -494,9 +494,13 @@ export class Weapons {
         if (c.pos.distanceTo(P.pos) > reach) continue;
         const ref = c.ref || null;
         // (a station shows less than its whole bounding sphere: trusses, panels, gaps)
-        const R = c.kind === 'station' ? hud.radiusOf(c) * 0.55 : c.kind === 'b29' ? 7 : hud.radiusOf(c) * 0.7;
-        const acc = c.kind === 'b29' ? g.flight.thrustAcc : null;
-        add({ id: c.id, kind: c.kind, ref, pos: c.pos, vel: c.vel || P.vel, acc, R, agility: c.kind === 'b29' ? 3 : 0, name: c.short || c.name, locked: true });
+        // (an escape pod presents its flank or its end: about its radius and a half; dodging, it
+        // jinks at most of its acceleration)
+        const pod = c.kind === 'pod' && ref ? ref : null;
+        const R = c.kind === 'station' ? hud.radiusOf(c) * 0.55 : c.kind === 'b29' ? 7 : pod ? pod.G.R * 1.5 : hud.radiusOf(c) * 0.7;
+        const acc = c.kind === 'b29' ? g.flight.thrustAcc : pod ? pod.thrust : null;
+        const agility = c.kind === 'b29' ? 3 : pod ? (pod.evadeT > 0 ? pod.G.accel * 0.8 : 2) : 0;
+        add({ id: c.id, kind: c.kind, ref, pos: c.pos, vel: c.vel || P.vel, acc, R, agility, name: c.short || c.name, locked: true, threat: pod ? pod.hostile > 0 : undefined });
       }
     }
     const prim = hud ? hud.primaryId : null;

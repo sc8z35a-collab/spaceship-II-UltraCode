@@ -31,6 +31,7 @@ export class Player {
     this.onLift = null;
     this.holding = null;
     this.outside = false;
+    this.inertial = false;                         // out in space in a suit: his own inertia (suits.js)
     const w = phys.world;
     this.body = w.createRigidBody(R.RigidBodyDesc.kinematicPositionBased().setTranslation(this.pos.x, this.pos.y, this.pos.z));
     this.colStand = w.createCollider(R.ColliderDesc.capsule(STAND_HH, STAND_R), this.body);
@@ -153,9 +154,11 @@ export class Player {
     const gMag = gLocal.length();
     // hysteresis: thrust hovering around the threshold must not flip walk <-> float every few
     // seconds (the camera height, the controls and the up/down buttons all change with it)
-    const gravityMode = this.gravityMode = gMag > (this.gravityMode ? 1.4 : 2.2);
-    // body up vector: oppose gravity when there is any, else drift back to ship up
-    const targetUp = gravityMode ? _v.copy(gLocal).multiplyScalar(-1 / gMag) : _v.set(0, 1, 0);
+    // (free in space in a suit the ship's pull is none of his: he floats, whatever it does)
+    const gravityMode = this.gravityMode = !this.inertial && gMag > (this.gravityMode ? 1.4 : 2.2);
+    // body up vector: oppose gravity when there is any, else drift back to ship up (free in space
+    // it stays where it points)
+    const targetUp = gravityMode ? _v.copy(gLocal).multiplyScalar(-1 / gMag) : this.inertial ? _v.copy(this.up) : _v.set(0, 1, 0);
     const k = 1 - Math.exp(-dt * (gravityMode ? 4 : 0.8));
     // keep the look direction stable while the up vector changes
     this.up.lerp(targetUp, k).normalize();

@@ -2513,6 +2513,17 @@ export class H8Vessel {
       out.push({ id: 'k3:' + u.i, kind: 'k3', name: `${u.name} 修理ロボット`, short: u.name, pos: u.pos, vel: u.vel, ref: u, R: 0.35,
         extra: `${u.state === 'dead' ? '電池切れ・漂流' : u.state === 'home' ? '帰還中' : u.job ? u.job.name + 'へ' : '移動中'}  電池 ${Math.round(u.battery * 100)}%` });
     }
+    // the stations' escape pods in flight (an armed one that fires back is a threat)
+    if (g.pods) {
+      const P = g.pods, reach = 250e3 * this.circ('sensor', 0.15);
+      for (const p of P.list) {
+        if (!p.alive || p.state === 'wait' || p === P.remote) continue;
+        const dist = p.pos.distanceTo(f.pos);
+        if (dist > reach) continue;
+        const hostile = p.armed && p.hostile > 0;
+        out.push({ id: 'pod:' + p.id, kind: 'pod', name: p.name, short: p.label, pos: p.pos, vel: p.vel, ref: p, R: p.G.len / 2, threat: hostile, tca: hostile ? dist / 1000 : 1e9, extra: P.status(p) });
+      }
+    }
     // the hunter drones: hostile once they are after Kaito (they lock themselves then)
     if (g.drones) {
       for (const d of g.drones.list) {
