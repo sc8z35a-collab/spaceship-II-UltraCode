@@ -237,7 +237,7 @@ export class Player {
     // crouch automatically under low ceilings
     const wantCrouch = env.lowCeiling ? 1 : 0;
     this.crouch += (wantCrouch - this.crouch) * Math.min(1, dt * 6);
-    this.setColliderHeight(this.crouch > 0.5 ? CROUCH_HH : STAND_HH);
+    this.setColliderHeight(this.crouch > 0.5 || env.tuck ? CROUCH_HH : STAND_HH);
 
     // move with collision
     const delta = this.vel.clone().multiplyScalar(dt);

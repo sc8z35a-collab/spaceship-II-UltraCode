@@ -176,6 +176,9 @@ export class Gameplay {
     // AKAMO's lift at Shirasagi carries whoever stands in its car
     const AT = g.docking && g.docking.lobby && g.docking.lobby.terminal;
     if (AT && !env.liftDelta) { const d = AT.liftDelta(p); if (d) env.liftDelta = d; }
+    // (a rescue bringing him in through a hatch: tucked up)
+    const rs = g.suits && g.suits.rescuer;
+    if (rs && rs.tuck && rs.R && rs.R.phase === 'board') env.tuck = true;
     const gMag = g.gLocal ? g.gLocal.length() : 0;
     // crouch under the deck (not in the lift shaft / floor hatch) and through the airlock hatch
     const inShaft = p.x > LIFT.x0 && p.x < LIFT.x1 && p.z > LIFT.z0 && p.z < LIFT.z1;

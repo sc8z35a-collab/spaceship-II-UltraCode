@@ -451,6 +451,7 @@ export class Docking {
     const g = this.g;
     if (this.klaxon) { this.klaxon = false; g.audio.stopLoop('stKlaxon'); }
     if (!this.lobby) return;
+    if (this.lobby.life && this.station) this.lobby.life.onLeave(g, this.station);
     if (g.suits) g.suits.lobbyHatch(this.lobby, false);
     this.despawnRing();
     g.shipVis.root.remove(this.lobby.group);

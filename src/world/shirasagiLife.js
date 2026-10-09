@@ -215,4 +215,13 @@ export class ShirasagiLife {
     if (D) D.podsOut = true;
     g.pods.launch(st, false);
   }
+  /** B-29 leaving with the station in trouble and its pods not yet away: they go now */
+  onLeave(g, st) {
+    const D = st && st.dmg, s = D ? D.status : 'ok';
+    if (this.launched || !(s === 'critical' || s === 'failed' || s === 'destroyed')) return;
+    this.launched = true;
+    if (D.podsOut || !g.pods) return;
+    D.podsOut = true;
+    g.pods.launch(st, false);
+  }
 }

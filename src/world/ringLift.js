@@ -211,7 +211,7 @@ export function buildRingLift(M, R) {
     switch (st.phase) {
       case 'idle':
         if (here || nearStop(st.at) || st.calls[st.at]) { st.calls[st.at] = false; st.phase = 'opening'; }
-        else { const other = st.at === 'top' ? 'deck' : 'top'; if (st.calls[other] || nearStop(other)) { st.calls[other] = false; st.dest = other; st.phase = 'move'; } }
+        else { const other = st.at === 'top' ? 'deck' : 'top'; if (st.calls[other] || nearStop(other)) { st.calls[other] = false; st.dest = other; st.phase = 'move'; st.rider = false; } }
         break;
       case 'opening':
         st.k = Math.min(1, st.k + dt / 1.3);
@@ -229,7 +229,7 @@ export function buildRingLift(M, R) {
         if (st.k <= 0) {
           if (st.dest === st.at) st.phase = 'idle';
           else if (st.at === 'top' && inTermC) { st.phase = 'xfer'; st.xfer = 0; st.xferDir = 'in'; }
-          else st.phase = 'move';
+          else { st.phase = 'move'; st.rider = inRingC; }
         }
         break;
       case 'xfer': {        // a blink while the frame changes over (the doors shut)
@@ -240,6 +240,7 @@ export function buildRingLift(M, R) {
         break;
       }
       case 'move': {
+        if (inRingC) st.rider = true;
         const goal = st.dest === 'deck' ? R_DECK : R_TOP, rem = goal - st.rf, s = Math.sign(rem) || 1;
         const vWant = s * Math.min(RUN.v, Math.sqrt(2 * RUN.a * Math.abs(rem)) * 0.96 + 0.04);
         st.v += THREE.MathUtils.clamp((vWant - st.v) * Math.min(1, dt * 2.2), -RUN.a * dt, RUN.a * dt);
@@ -247,8 +248,9 @@ export function buildRingLift(M, R) {
         if (Math.abs(rem) <= Math.abs(d) || Math.abs(rem) < 0.002) {
           d = rem; st.v = 0; st.at = st.dest;
           if (g.audio && g.audio.beep) g.audio.beep(988, 0.1, 0.06, { pos: pl.eyeLocal });
-          if (st.at === 'top' && inRingC) { st.phase = 'xfer'; st.xfer = 0; st.xferDir = 'out'; }
+          if (st.at === 'top' && (inRingC || st.rider)) { st.phase = 'xfer'; st.xfer = 0; st.xferDir = 'out'; }
           else st.phase = 'opening';
+          st.rider = false;
           if (st.at === 'deck' && inRingC && g.asphalt) g.asphalt.say('ring_arrive', { g: (pull() * Math.pow(D.station.ringK ?? 1, 2)).toFixed(2) }, { force: true });
         }
         st.rf += d; st.dr = d;
@@ -270,6 +272,7 @@ export function buildRingLift(M, R) {
     pl.eyeLocal.copy(p).addScaledVector(pl.up, 0.7);
     D.storeRingState();
     D.toRenderSpace();
+    st.rider = true;
   }
   /** at the hub, doors shut: the rider goes over from the spoke's car into the terminal's */
   function outOfRing(g) {

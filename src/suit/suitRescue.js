@@ -473,15 +473,15 @@ export class SuitRescue {
   flyIn(R, open) {
     const pl = this.g.player, s = this.s;
     let w = R.wp[0];
-    // (the last legs in through B-29's hatch (0.88 m wide) want him on its axis to the centimetre,
-    // tucked up)
-    const tight = R.who === 'b29' && R.wp.length <= 3;
-    if (tight) pl.crouch = 1;
+    // (the last legs in through B-29's hatch (0.88 m wide) or up H8's neck want him on the axis to
+    // the centimetre, tucked up)
+    const tight = R.wp.length <= (R.who === 'b29' ? 3 : 2);
+    this.tuck = tight;
     while (w && pl.pos.distanceTo(w) < (tight ? 0.07 : 0.4) && (R.wp.length > 1 || open)) {
       R.wp.shift(); R.gate--;
       w = R.wp[0];
     }
-    if (!w) return true;
+    if (!w) { this.tuck = false; return true; }
     // (waiting at the gate for the hatch)
     if (R.gate <= 0 && !open && R.wp.length <= 2) w = R.wp[0];
     const err = _a.copy(w).sub(pl.pos);

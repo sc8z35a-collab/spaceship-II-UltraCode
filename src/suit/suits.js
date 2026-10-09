@@ -552,7 +552,7 @@ export class Suits {
     const asked = Math.min(1, want.length());
     let thrusting = false;
     this.throttle = 0;
-    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
+    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02 && !this.autoV)) {
       // the flight computer flies what the stick asks (against the ship's frame: his velocity here)
       if (asked > 0.02) want.normalize();
       const boosting = this.boost && (input.moveY || 0) > 0.2;
@@ -665,7 +665,7 @@ export class Suits {
     let thrusting = false;
     this.throttle = 0;
     E.vCap = 0;
-    if (((this.hold && !coming) || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
+    if (((this.hold && !coming) || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02 && !this.autoV)) {
       // the flight computer flies what the stick asks, against the vessel (its frame's motion here)
       if (asked > 0.02) want.normalize();
       want.applyQuaternion(F.quat);
