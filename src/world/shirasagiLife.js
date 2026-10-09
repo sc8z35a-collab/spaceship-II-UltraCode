@@ -24,7 +24,7 @@ function layout() {
     n('L_east', [13.4, F, -1.2]), n('L_br', [16.0, F, 1.3]), n('L_fwd_l', [8.3, F, -5.4]), n('L_fwd_r', [13.7, F, -5.4]), n('L_e2', [12.4, F, 2.6]),
     n('L_sofa', [11.0, F, -5.6], 'post', 0), n('L_fl', [8.25, F, -8.5]), n('L_fr', [13.75, F, -8.5]),
     n('L_window', [11.0, F, -11.45], 'post', 0), n('L_aft', [10.4, F, 4.4]), n('L_dl0', [5.5, F, 4.6]), n('L_dl1', [5.45, F, 7.72]),
-    n('L_desk1', [7.2, F, 7.6], 'post', 0), n('L_desk2', [7.95, F, 7.6], 'post', 0), n('L_bay', [7.55, F, 7.78], 'bay'),
+    n('L_desk1', [7.2, F, 7.6], 'post', 0), n('L_desk2', [7.95, F, 7.6], 'post', 0), n('L_bay', [7.55, F, 7.78]),
     n('L_prom', [12.5, F, 7.3]), n('L_bar', [15.15, F, 4.9], 'post', Math.PI / 2),
     // ---- the promenade (floor 0.25)
     n('P_door', [13.0, F, 9.2]), n('P_cafe', [12.15, F, 12.45], 'post', Math.PI / 2), n('P_shelf', [14.4, F, 12.6], 'post', -Math.PI / 2),
@@ -49,7 +49,8 @@ function layout() {
   // ---- AKAMO's platform (round the berth, floor 48.25): a ring of ways, the gates, the lift's
   // landing, the pod hatches on the wall
   const at = (r, deg, kind, face) => [BX + r * Math.cos(deg * Math.PI / 180), PF, BZ + r * Math.sin(deg * Math.PI / 180)];
-  for (let i = 0; i < 12; i++) { nodes.push(n('K' + i, at(9.6, i * 30))); links.push(['K' + i, 'K' + ((i + 1) % 12)]); }
+  // (the lift's tube stands between K4 and K5: the way goes round by its landing)
+  for (let i = 0; i < 12; i++) { nodes.push(n('K' + i, at(9.6, i * 30))); if (i !== 4) links.push(['K' + i, 'K' + ((i + 1) % 12)]); }
   nodes.push(n('K_gA', at(8.3, 0), 'post', Math.PI / 2), n('K_gB', at(8.3, 180), 'post', -Math.PI / 2), n('K_lift', at(9.9, 126.87)));
   links.push(['K0', 'K_gA'], ['K6', 'K_gB'], ['K4', 'K_lift'], ['K_lift', 'K5']);
   for (const deg of PLAT_HATCH) {
@@ -168,12 +169,19 @@ export class ShirasagiLife {
     const trouble = status === 'critical' || status === 'failed' || status === 'destroyed' || !!(D && D.air && D.air.breaches && D.air.breaches.length);
     this.crew.alarm(trouble);
     const pl = g.player, alive = pl && pl.state !== 'dead';
-    this.crew.update(dt, alive ? pl.pos : null, alive ? pl.eyeLocal : null, (bay) => this.boarded(bay, g));
+    this.crew.update(dt, alive ? pl.pos : null, alive ? pl.eyeLocal : null, (bay) => this.boarded(bay, g), g.gLocal ? g.gLocal.length() : 9.81);
     // the hatches: open while someone runs for them, shut once they are in, the pod away after
     const runningTo = new Set(this.crew.people.filter((P) => !P.gone && P.bay && P.path).map((P) => P.bay));
     for (const [id, h] of this.hatches) {
-      if (h.state === 'ready' && trouble) h.state = runningTo.has(id) ? 'boarding' : 'ready';
-      if (h.state === 'boarding' && !runningTo.has(id)) { h.state = 'sealing'; h.t = 0; }
+      if (h.state === 'ready' && trouble && runningTo.has(id)) { h.state = 'boarding'; h.t = 0; }
+      if (h.state === 'boarding') {
+        h.t += dt;
+        // (the last ones in, no one coming any more, or too long: it shuts if anyone is aboard; nobody
+        // aboard and the trouble over: it stands ready again)
+        if (!runningTo.has(id) || h.t > 40) {
+          if (h.aboard > 0) { h.state = 'sealing'; h.t = 0; } else if (!trouble) h.state = 'ready';
+        }
+      }
       if (h.state === 'sealing') { h.t += dt; if (h.t > 2.5) this.away(h, g); }
       const want = h.state === 'boarding' ? 1 : 0;
       h.k += Math.max(-dt / 0.9, Math.min(dt / 0.9, want - h.k));
@@ -186,7 +194,7 @@ export class ShirasagiLife {
 
   boarded(bay, g) {
     const h = this.hatches.get(bay);
-    if (h && h.state === 'ready') h.state = 'boarding';
+    if (h) { h.aboard = (h.aboard || 0) + 1; if (h.state === 'ready') { h.state = 'boarding'; h.t = 0; } }
     if (g.audio && g.audio.beep) g.audio.beep(660, 0.06, 0.05, { pos: h ? h.group.position : undefined });
   }
 

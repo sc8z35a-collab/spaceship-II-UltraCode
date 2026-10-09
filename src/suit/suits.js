@@ -656,17 +656,16 @@ export class Suits {
     const want = _e1.set(0, 0, 0).addScaledVector(camF, input.moveY || 0).addScaledVector(camR, input.moveX || 0).addScaledVector(camU, input.up || 0);
     const asked = Math.min(1, want.length());
     // (against the vessel: the speed of its frame where he is — its slow turn adds next to nothing)
-    // (B-29 on its way to him: the suit holds its own course, not the ship's, or the ship could
-    // never close on it; once B-29 is here it matches the ship again for the boarding)
+    // (B-29 on its way to him: the suit coasts on its own orbit, no hold, so the ship can close on
+    // it; holding to the ship would drag him along with it, and holding a fixed course would fight
+    // gravity. Once B-29 is here the hold to the ship comes back for the boarding)
     const coming = !!(this.rescuer && this.rescuer.approaching && this.rescuer.approaching());
-    if (coming && !this.holdRef) this.holdRef = E.v.clone();
-    else if (!coming) this.holdRef = null;
-    const rel = _e2.copy(E.v).sub(this.holdRef || F.vel);
+    const rel = _e2.copy(E.v).sub(F.vel);
     const a = _e3.set(0, 0, 0);
     let thrusting = false;
     this.throttle = 0;
     E.vCap = 0;
-    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
+    if (((this.hold && !coming) || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02)) {
       // the flight computer flies what the stick asks, against the vessel (its frame's motion here)
       if (asked > 0.02) want.normalize();
       want.applyQuaternion(F.quat);

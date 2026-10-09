@@ -476,14 +476,15 @@ export class Akamo {
           const sp = Math.min(L / dt, 1.25);
           P.x += d.x / L * sp * dt; P.z += d.z / L * sp * dt;
           P.face = Math.atan2(-d.x, -d.z);
-          p.mode = 'walk'; p.speed = 1; p.phase = (p.phase || 0) + sp * dt * 5.2;
+          p.mode = (this.felt ?? 1) < 0.15 ? 'float' : 'walk'; p.speed = 1; p.phase = (p.phase || 0) + sp * dt * 5.2;
         }
       } else if (P.out) {
         // off the cabin, standing about on the platform (let go once nobody is looking)
-        p.mode = 'stand'; p.brace = 0; p.lean = 0; p.lookPitch = 0;
+        p.mode = (this.felt ?? 1) < 0.15 ? 'float' : 'stand'; p.brace = 0; p.lean = 0; p.lookPitch = 0;
         p.lookYaw = Math.sin(t * 0.3 + P.seed) * 0.6;
       } else {
-        p.mode = P.spot.hold === 'loop' || (P.spot.hold === 'rail' && braced > 0.2) ? 'hold' : 'stand';
+        const floating = (this.felt ?? 1) < 0.15;
+        p.mode = P.spot.hold === 'loop' || (P.spot.hold === 'rail' && (braced > 0.2 || floating)) ? 'hold' : floating ? 'float' : 'stand';
         p.holdY = P.spot.hold === 'loop' ? 0.95 : 0.55;
         p.brace = braced;
         p.lean = 0;
@@ -491,7 +492,7 @@ export class Akamo {
         p.lookYaw = Math.sin(t * 0.13 + P.seed) * 0.5;
         p.lookPitch = this.state === 'run' ? -0.1 + Math.sin(t * 0.2 + P.seed) * 0.2 : 0;
       }
-      P.person.root.position.set(P.x, 0, P.z);
+      P.person.root.position.set(P.x, p.mode === 'float' ? 0.22 + 0.04 * Math.sin(t * 0.8 + P.seed) : 0, P.z);
       P.person.root.rotation.set(0, P.face, 0);
       P.person.pose(p, t);
     }

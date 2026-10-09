@@ -94,6 +94,11 @@ function drawCar(p, st) {
     ctx.lineWidth = 2; ctx.strokeStyle = on ? '#7fd0ff' : '#3a4a5e'; ctx.stroke();
     txt(ctx, (i ? '▲ ' : '▼ ') + where(i), W / 2, y + H * 0.09, H * 0.055, on ? '#ffffff' : '#c4cfdb', 'center', 700);
   }
+  // (someone came up in it and stays aboard: it waits for a tap)
+  if (st.phase === 'open' && st.inCar && !st.armed && Math.floor(Date.now() / 500) % 2 === 0) {
+    rr(ctx, W * 0.07, H * 0.935, W * 0.86, H * 0.055, 8); ctx.fillStyle = '#d9b867'; ctx.fill();
+    txt(ctx, 'タップで出発', W / 2, H * 0.962, H * 0.04, '#0b1220', 'center', 800);
+  }
   p.tex.needsUpdate = true;
 }
 function drawInd(p, i, st) {
@@ -469,6 +474,14 @@ export function buildTerminal(M, lamp) {
     if (st.interact) for (const t of st.taps) st.interact.remove(t);
     st.taps = [];
   }
+  /** before the player's step: the car moves (and its floor), the carry is set */
+  function preStep(dt, g) {
+    const pl = g.player, who = pl && pl.state !== 'dead' ? pl.pos : null;
+    step(dt, who);
+    _d.set(0, st.dy, 0);
+    applyCols();
+    st.stepped = true;
+  }
   function update(dt, g) {
     if (!st.crisp && g.engine && g.engine.crisp) { for (const m of texts) g.engine.crisp.add(m); st.crisp = true; }
     if (!st.taps.length && g.interact) {
@@ -477,7 +490,8 @@ export function buildTerminal(M, lamp) {
       for (let i = 0; i < 2; i++) st.taps.push(g.interact.addMesh(calls[i].mesh, () => { st.calls[i] = true; }, { maxDist: 2.6 }));
     }
     const pl = g.player, who = pl && pl.state !== 'dead' ? pl.pos : null;
-    step(dt, who);
+    if (!st.stepped) { step(dt, who); _d.set(0, st.dy, 0); }
+    st.stepped = false;
     // the screen doors go with the cabin's doors (open only while it is in at this end, doors open)
     const ak = g.akamo;
     st.sd = ak && ak.platformDoorK ? ak.platformDoorK() : 0;
@@ -494,8 +508,8 @@ export function buildTerminal(M, lamp) {
   }
   const _d = new THREE.Vector3();
   /** the lift's carry for the walking player (ship-local position), or null */
-  const liftDelta = (p) => (st.dy !== 0 && inCar(p) ? _d.set(0, st.dy, 0) : null);
+  const liftDelta = (p) => (inCar(p) ? _d : null);      // (filled in by preStep, just before the step)
   // (from the tower up, the station's lobby shell stays drawn: it is seen through the windows)
   const showsShell = (p) => p.y > 10.6 && contains(p);
-  return { group, colliders: b.colliders, contains, showsShell, breachSpots, attach, detach, update, liftDelta, lift: st };
+  return { group, colliders: b.colliders, contains, showsShell, breachSpots, attach, detach, preStep, update, liftDelta, lift: st };
 }

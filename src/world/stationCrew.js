@@ -89,10 +89,11 @@ export class StationCrew {
     this.layout.people.forEach((def, k) => {
       const seed = this.seed * 1000 + k * 53;
       const person = buildPerson(randomLook(seed, 'crew'));
+      person.root.rotation.order = 'YXZ';
       person.root.traverse((o) => { if (o.isMesh) o.layers.set(LAYER_NEAR); });
       this.parent.add(person.root);
       const start = this.graph.nodes.get(def.goals[0]);
-      const P = { person, def, node: start.id, pos: start.p.clone(), face: start.face ?? 0, path: null, seg: 0, stay: 3 + (k % 5) * 2.5, pose: { mode: 'stand' }, seed: (seed % 997) * 0.37, blocked: 0, look: 0, gone: false, bay: null };
+      const P = { person, def, node: start.id, pos: start.p.clone(), face: start.face ?? 0, path: null, seg: 0, stay: 3 + (k % 5) * 2.5, pose: { mode: 'stand' }, seed: (seed % 997) * 0.37, blocked: 0, look: 0, gone: false, bay: null, tilt: 0, stuckT: 0 };
       this.people.push(P);
       this.place(P, 0);
     });
@@ -106,7 +107,11 @@ export class StationCrew {
   alarm(on) {
     if (on === this.panic) return;
     this.panic = on;
-    if (!on) return;
+    if (!on) {
+      // (the trouble over before they were in: back to their rounds)
+      for (const P of this.people) if (!P.gone && P.bay) { P.bay = null; P.path = null; P.stay = 1 + Math.random() * 3; }
+      return;
+    }
     const bays = [...this.graph.nodes.values()].filter((n) => n.kind === 'bay');
     for (const P of this.people) {
       if (P.gone) continue;
@@ -117,15 +122,17 @@ export class StationCrew {
   }
 
   /** pos: Kaito's position (ship-local, or null), eye: his eye; onBoard(bayId): one went in */
-  update(dt, pos, eye, onBoard) {
+  update(dt, pos, eye, onBoard, gMag = 9.81) {
     this.t += dt;
+    // (in free fall, as a station that does not turn is, they float along the ways)
+    this.zeroG = gMag < 2.2;
     for (const P of this.people) {
       if (P.gone) continue;
       const p = P.pose;
       if (P.path) this.walk(P, dt, pos, onBoard);
       else {
         P.stay -= dt;
-        p.mode = 'stand'; p.lean = 0; p.brace = 0;
+        p.mode = this.zeroG ? 'float' : 'stand'; p.lean = 0; p.brace = 0;
         if (P.stay <= 0 && !this.panic) this.next(P);
       }
       if (P.gone) continue;
@@ -158,7 +165,7 @@ export class StationCrew {
     const fr = G.nodes.get(P.path[P.seg]), to = G.nodes.get(P.path[Math.min(P.seg + 1, P.path.length - 1)]);
     const d = this._v.set(to.p.x - P.pos.x, 0, to.p.z - P.pos.z);
     const flat = Math.hypot(d.x, d.z);
-    let speed = this.panic ? RUN : WALK;
+    let speed = (this.panic ? RUN : WALK) * (this.zeroG ? 0.7 : 1);
     // wait for Kaito when he is right in the way, then step round him
     if (pos && !this.panic && flat > 0.01) {
       const ax = pos.x - P.pos.x, az = pos.z - P.pos.z, ad = Math.hypot(ax, az);
@@ -185,6 +192,8 @@ export class StationCrew {
       return;
     }
     const step = Math.min(flat, speed * dt), len = Math.hypot(d.x, d.z);
+    // (one who cannot get on for long finds another way out)
+    if (this.panic) { P.stuckT = step > 0.002 ? 0 : P.stuckT + dt; if (P.stuckT > 8) { P.gone = true; P.person.root.visible = false; return; } }
     if (step > 0) {
       P.pos.x += d.x / len * step; P.pos.z += d.z / len * step;
       // the floor's height along the way (stairs)
@@ -194,7 +203,8 @@ export class StationCrew {
       const want = Math.atan2(-d.x, -d.z);
       P.face += Math.atan2(Math.sin(want - P.face), Math.cos(want - P.face)) * Math.min(1, dt * 8);
     }
-    p.mode = step > 0 ? 'walk' : 'stand';
+    p.mode = this.zeroG ? 'float' : step > 0 ? 'walk' : 'stand';
+    P.tilt += ((this.zeroG && step > 0 ? -0.38 : 0) - P.tilt) * Math.min(1, dt * 3);
     p.speed = this.panic ? 1.7 : 1;
     p.phase = (p.phase || 0) + step * (this.panic ? 3.6 : 5.2);
   }
@@ -202,7 +212,9 @@ export class StationCrew {
   place(P, dt) {
     if (P.turnTo !== undefined && !P.path) P.face += Math.atan2(Math.sin(P.turnTo - P.face), Math.cos(P.turnTo - P.face)) * Math.min(1, dt * 4);
     P.person.root.position.copy(P.pos);
-    P.person.root.rotation.set(0, P.face, 0);
+    if (this.zeroG) P.person.root.position.y += 0.25 + 0.05 * Math.sin(this.t * 0.9 + P.seed * 3);
+    if (!P.path) P.tilt *= Math.max(0, 1 - dt * 3);
+    P.person.root.rotation.set(P.tilt || 0, P.face, 0);
     P.person.pose(P.pose, this.t);
   }
 }

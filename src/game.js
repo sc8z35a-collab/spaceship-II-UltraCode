@@ -383,6 +383,9 @@ export class Game {
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
     if (limp && !dead) lookInp = Object.assign({}, lookInp, { lookDX: 0, lookDY: 0, moveX: 0, moveY: 0, up: 0, rx: 0, ry: 0 });
     // (out in space in a suit he keeps his own motion: the frame is worked out round him)
+    // (AKAMO's lift at Shirasagi moves before the player's step, so its car carries him exactly)
+    const akLift = this.docking && this.docking.state === 'docked' && this.docking.lobby && this.docking.lobby.terminal;
+    if (akLift) akLift.preStep(Math.min(sdt, 0.05), this);
     if (this.suits) this.suits.preStep(pl, sdt);
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (this.suits) this.suits.afterMove(pl);
