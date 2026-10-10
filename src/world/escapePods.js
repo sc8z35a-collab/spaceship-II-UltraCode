@@ -657,6 +657,8 @@ export class EscapePods {
     p.w.set(0, 0, 0);
     this.look.yaw = 0; this.look.pitch = 0;
     this.switchT = 0;
+    // (its cabin built now, so the very first piloted frame already looks out of it)
+    if (!p.model || p.level !== QUALITY.level) this.buildModel(p);
     if (A.ready) { A.beep(1320, 0.08, 0.06, { direct: true }); A.beep(1760, 0.12, 0.06, { direct: true, when: 0.1 }); A.beep(2640, 0.22, 0.05, { direct: true, when: 0.22 }); }
     if (g.h8) g.h8.say('hachi_hack_done', { n: p.label }, { force: true });
   }

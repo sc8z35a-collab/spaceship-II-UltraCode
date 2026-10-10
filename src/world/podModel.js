@@ -243,6 +243,8 @@ function template(grade, armed, level) {
   const lineA = zCan - zDome, lineB = cabLen - lineA;
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineA, seg, 1, true, canPhi0 + canPhi, Math.PI * 2 - canPhi)), 'liner', [0, 0, zDome + lineA / 2]);
   b.add(rot(new THREE.CylinderGeometry(R * 0.93, R * 0.93, lineB, seg, 1, true)), 'liner', [0, 0, zCan + lineB / 2]);
+  // (the aft bulkhead closing the cabin: no stars through the stern when looking back)
+  b.add(new THREE.CircleGeometry(R * 0.93, seg), 'liner', [0, 0, zDome + cabLen]);
   // (and the chin's, ahead of the cabin: the hull's skin is only drawn from outside)
   b.add(rot(new THREE.LatheGeometry(dome.map((q) => new THREE.Vector2(q.x * 0.95, q.y)), seg, chin, Math.PI * 2 - chin * 2)), 'liner');
   b.box(R * 1.4, 0.04, cabLen + R * 0.6, 'floor', [0, fy, zDome + cabLen / 2 - R * 0.3], null, 0, 1);
