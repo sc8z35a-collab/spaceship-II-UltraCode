@@ -8,10 +8,58 @@
 // the door's state. A locked door (the station's emergency protocol) slams shut, its lights turn
 // red and it refuses; its screen says why.
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import { R } from '../physics/localPhysics.js';
 import { roundPolygon } from '../ship/sweep.js';
 
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
+
+/**
+ * A door's fixed parts merged per material (the frame's on its group, each leaf's own on the leaf,
+ * so they still slide with it): the lamps, domes, beams, chasers and leaf LEDs whose materials are
+ * changed as it works stay their own meshes, as do the rollers and locking bars (they turn).
+ */
+function mergeStatics(door) {
+  const keep = new Set();
+  for (const f of door.faces || []) for (const k of ['lamp', 'bDome', 'beam', 'chaser']) if (f[k]) keep.add(f[k]);
+  for (const l of door.leaves || []) if (l.userData && l.userData.led) keep.add(l.userData.led);
+  const pass = (box) => {
+    const groups = new Map();
+    for (const m of box.children) {
+      if (!m.isMesh || m.isInstancedMesh || m.isSkinnedMesh || keep.has(m) || m.children.length || Array.isArray(m.material) || !m.visible) continue;
+      const key = m.material.uuid + '|' + m.renderOrder + '|' + m.layers.mask;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(m);
+    }
+    for (const list of groups.values()) {
+      if (list.length < 2) continue;
+      const geos = [];
+      for (const m of list) {
+        m.updateMatrix();
+        const g = m.geometry.index ? m.geometry.toNonIndexed() : m.geometry.clone();
+        for (const name of Object.keys(g.attributes)) if (name !== 'position' && name !== 'normal' && name !== 'uv') g.deleteAttribute(name);
+        if (!g.attributes.normal) g.computeVertexNormals();
+        if (!g.attributes.uv) g.setAttribute('uv', new THREE.Float32BufferAttribute(new Float32Array(g.attributes.position.count * 2), 2));
+        g.morphAttributes = {};
+        g.applyMatrix4(m.matrix);
+        geos.push(g);
+      }
+      let merged = null;
+      try { merged = mergeGeometries(geos, false); } catch (e) { merged = null; }
+      for (const g of geos) g.dispose();
+      if (!merged) continue;
+      const mm = new THREE.Mesh(merged, list[0].material);
+      mm.renderOrder = list[0].renderOrder;
+      mm.layers.mask = list[0].layers.mask;
+      mm.castShadow = list[0].castShadow;
+      mm.receiveShadow = list[0].receiveShadow;
+      box.add(mm);
+      for (const m of list) box.remove(m);
+    }
+  };
+  pass(door.group);
+  for (const l of door.leaves || []) pass(l);
+}
 const SECTION_JP = { lobby: 'ロビー', promenade: 'プロムナード', atrium: '中央アトリウム', ring: 'リング居住区' };
 
 function rrShape(w, h, r, cy = 0, floorCut = false) {
@@ -256,6 +304,7 @@ export class StationDoor {
 
   /** opens for anyone within reach (ship-local position), closes behind them */
   update(dt, who, audio, fx) {
+    if (!this._merged) { this._merged = true; try { mergeStatics(this); } catch (e) { console.warn('[doors] merge skipped', e); } }
     const c = this.def.c;
     const near = who && Math.abs(who.y - (c.y + 0.9)) < 2.2 && Math.hypot(who.x - c.x, who.z - c.z) < 2.1;
     if (this.locked) this.target = 0;
