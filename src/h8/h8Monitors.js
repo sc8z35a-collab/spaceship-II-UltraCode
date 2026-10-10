@@ -71,7 +71,7 @@ export const H8_PAGES = {
       const alarmTab = !t.h8 && t.id !== 'h8link' && blink;
       K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? (t.h8 ? 'rgba(255,170,60,0.24)' : 'rgba(95,208,255,0.22)') : alarmTab ? 'rgba(255,77,61,0.3)' : 'rgba(255,255,255,0.03)', stroke: on ? col : 'rgba(150,190,230,0.2)', r: 5 });
       K.text(t.label, i * w + w / 2, 17, { size: tabs.length > 6 ? 9 : 10.5, color: on ? '#fff' : col, align: 'center', weight: on ? 700 : 500 });
-      K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== t.id) { m.page = t.id; this.setFeed(m, false); } } });
+      K.buttons.push(Object.assign(K.textBox(t.label, i * w + w / 2, 13, tabs.length > 6 ? 9 : 10.5, on ? 700 : 500), { onTap: () => { if (m.page !== t.id) { m.page = t.id; this.setFeed(m, false); } } }));
     });
   },
 

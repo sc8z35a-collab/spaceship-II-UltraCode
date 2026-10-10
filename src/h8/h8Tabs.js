@@ -282,7 +282,7 @@ export class H8Tabs {
       if (t.pages) {
         // the row of pages; the page itself below it (its buttons moved down with it)
         const n = t.pages.length, bw = 492 / n;
-        t.pages.forEach(([, label], i) => K.button(10 + i * bw + 2, 7, bw - 4, ROW - 12, label, () => this.setPage(t, i), { style: i === t.pg ? 'on' : 'normal', size: 15 }));
+        t.pages.forEach(([, label], i) => K.button(10 + i * bw + 2, 7, bw - 4, ROW - 12, label, () => this.setPage(t, i), { style: i === t.pg ? 'on' : 'normal', size: 15, hitText: true }));
         K.rect(10, ROW - 1, 492, 1.2, { fill: 'rgba(130,215,255,0.25)', stroke: null, r: 0 });
         const fn = this['body_' + t.pages[t.pg][0]];
         const nb = K.buttons.length;
@@ -744,6 +744,7 @@ export class H8Tabs {
   /** a tap on a tab (from hit()) */
   tap(hit) {
     const t = hit.tab, A = this.v.g.audio;
+    if (hit.part === 'head' && !this.headText(hit)) return;     // (only its title or its arrow)
     this.toFront(t);
     if (hit.part === 'head') {
       if (t.fixedClosed) return;
@@ -774,6 +775,15 @@ export class H8Tabs {
   toFront(t) { if (t.order !== this.z) t.order = ++this.z; }
 
   /** start dragging a tab by its header (the point under the finger on the glass) */
+  /** a point on a tab's header on its text: the title, or the fold arrow at its right end */
+  headText(hit) {
+    const t = hit.tab, K = t.head && t.head.kit;
+    if (!K || !Number.isFinite(hit.u)) return true;
+    const title = t.pages ? t.title + ' · ' + t.pages[t.pg][1] : t.title;
+    const x = hit.u * 512;
+    return (x >= 10 && x <= 18 + measure(K, title, 19, 700) + 8) || (!t.fixedClosed && x >= 478);
+  }
+
   dragStart(hit) {
     const p = this.onSphere(hit.eye, hit.dir);
     if (!p) return;

@@ -2636,7 +2636,10 @@ export class H8Vessel {
       o.cap.pinched = true;
       return { tab: o.cap.tab, part: 'pinch' };
     }
-    return this.tabs.hit(this.tabRay(x, y));
+    // (a header is only taken by a touch on its text: anywhere else the touch looks round as usual)
+    const hh = this.tabs.hit(this.tabRay(x, y));
+    if (hh && hh.part === 'head' && this.tabs.headText && !this.tabs.headText(hh)) return null;
+    return hh;
   }
 
   tabMove(t) {

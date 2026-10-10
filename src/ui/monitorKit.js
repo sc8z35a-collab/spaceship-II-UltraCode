@@ -91,12 +91,15 @@ export class Kit {
   }
 
   /** button: registers a hit rect; style: 'normal' | 'on' | 'warn' | 'danger' | 'disabled' */
-  button(x, y, w, h, label, onTap, { style = 'normal', size = 13, icon = null } = {}) {
+  button(x, y, w, h, label, onTap, { style = 'normal', size = 13, icon = null, hitText = false } = {}) {
     const col = style === 'on' ? COL.cyan : style === 'warn' ? COL.amber : style === 'danger' ? COL.red : style === 'disabled' ? 'rgba(140,160,180,0.3)' : COL.dim;
     const fill = style === 'on' ? 'rgba(95,208,255,0.18)' : style === 'danger' ? 'rgba(255,77,61,0.18)' : style === 'warn' ? 'rgba(255,179,71,0.16)' : 'rgba(255,255,255,0.03)';
     this.rect(x, y, w, h, { fill, stroke: col, r: Math.min(10, h / 2), lw: 1.4 });
     this.text(label, x + w / 2, y + h / 2 + 1, { size, color: style === 'disabled' ? 'rgba(170,190,210,0.4)' : COL.text, align: 'center', base: 'middle', weight: 600 });
-    if (onTap && style !== 'disabled') this.buttons.push({ x, y, w, h, onTap });
+    if (onTap && style !== 'disabled') {
+      if (hitText) this.buttons.push(Object.assign(this.textBox(label, x + w / 2, y + h / 2 + 1, size, 600), { onTap }));
+      else this.buttons.push({ x, y, w, h, onTap });
+    }
   }
 
   bar(x, y, w, h, v, color = COL.cyan, bg = 'rgba(255,255,255,0.06)') {
@@ -106,6 +109,13 @@ export class Kit {
   }
 
   /** returns true if a button handled the tap (coords in canvas px) */
+  /** the box a label drawn centred at (cx, cy) covers, a little padded: tabs answer there only */
+  textBox(str, cx, cy, size, weight = 600) {
+    this.font(size, weight);
+    const tw = this.g.measureText(String(str)).width / this.s + 12, th = size * 1.55;
+    return { x: cx - tw / 2, y: cy - th / 2, w: tw, h: th };
+  }
+
   hit(px, py) {
     const x = px / this.s, y = py / this.s;
     for (let i = this.buttons.length - 1; i >= 0; i--) {

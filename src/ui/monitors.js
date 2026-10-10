@@ -416,7 +416,7 @@ export class Monitors {
       const on = m.page === id;
       K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? 'rgba(95,208,255,0.22)' : 'rgba(255,255,255,0.03)', stroke: on ? COL.cyan : 'rgba(150,190,230,0.2)', r: 5 });
       K.text(label, i * w + w / 2, 17, { size: 11, color: on ? '#fff' : COL.cyan, align: 'center', weight: on ? 700 : 500 });
-      if (P.length > 1) K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== id) { m.page = id; this.setFeed(m, false); } } });
+      if (P.length > 1) K.buttons.push(Object.assign(K.textBox(label, i * w + w / 2, 13, 11, on ? 700 : 500), { onTap: () => { if (m.page !== id) { m.page = id; this.setFeed(m, false); } } }));
     });
     const d = formatDate(g.time);
     K.text(al.active ? (al.silenced ? '警報（消音中）' : '警 報') : `${d.date}  ${d.time}`, 504, 18, { size: al.active ? 12 : 11, color: al.active ? '#fff' : COL.text, align: 'right', mono: !al.active, weight: al.active ? 700 : 400 });
@@ -743,7 +743,7 @@ export class Monitors {
     tabs.forEach((t, i) => {
       K.rect(i * tw + 2, 30, tw - 4, 24, { fill: m.tab === i ? 'rgba(95,208,255,0.2)' : 'rgba(255,255,255,0.03)', stroke: m.tab === i ? COL.cyan : COL.line, r: 6 });
       K.text(t, i * tw + tw / 2, 47, { size: 12, color: COL.text, align: 'center', weight: 600 });
-      K.buttons.push({ x: i * tw, y: 30, w: tw, h: 24, onTap: () => { m.tab = i; } });
+      K.buttons.push(Object.assign(K.textBox(t, i * tw + tw / 2, 43, 12, 600), { onTap: () => { m.tab = i; } }));
     });
     const tab = tabs[m.tab] || tabs[0];
     this.setFeed(m, tab === 'カメラ', [0.04, 0.06, 0.92, 0.72]);
