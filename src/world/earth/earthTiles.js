@@ -61,7 +61,7 @@ export class EarthTiles {
 
   /** lat/lon (radians) of the camera sub-point */
   update(lat, lon, dt, alt) {
-    if (alt > 3.0e7) return; // far away: global texture is enough
+    if (!(alt <= 3.0e7) || !Number.isFinite(lat) || !Number.isFinite(lon)) return; // far away (or no fix yet): global texture is enough
     const u = (lon / (2 * Math.PI) + 0.5) * 8;
     const v = (0.5 - lat / Math.PI) * 4;
     // 2x2 block whose centre is the tile corner nearest to the sub-point

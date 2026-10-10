@@ -33,11 +33,14 @@ export class ExtMarkers {
 
   /** the cameras of the ship the view is from (their names, in order) */
   camList() {
-    const g = this.g, src = g.h8 && g.h8.solo ? g.h8 : g.systems;
-    if (this._src === src && this._cams) return this._cams;
+    // (riding AKAMO with an escort's view open: that ship's cameras, after the one watching the cabin)
+    const g = this.g, ak = g.akamo && g.akamo.viewFrom && g.ride ? g.akamo.viewFrom : null;
+    const src = ak ? (ak === 'h8' ? g.h8 : g.systems) : g.h8 && g.h8.solo ? g.h8 : g.systems;
+    if (this._src === src && this._ak === ak && this._cams) return this._cams;
     const names = [];
     for (let i = 0; i < 16; i++) { const n = src.externalCamera(i).name; if (i > 0 && n === names[0]) break; names.push(n); }
-    this._src = src; this._cams = names;
+    if (ak) names.unshift('akamo');
+    this._src = src; this._ak = ak; this._cams = names;
     return names;
   }
 
@@ -76,13 +79,14 @@ export class ExtMarkers {
     ctx.fillText(lost ? 'NO SIGNAL' : 'REC', x0 + 15, y);
     ctx.fillText(`CAM ${idx + 1}/${n}`, x0 + 15 + (lost ? 82 : 40), y);
     y += 2.9 * vh;
-    const jp = CAM_JP[names[idx]] ? CAM_JP[names[idx]][0] : names[idx];
+    const jp = names[idx] === 'akamo' ? 'AKAMO 客室を見る' : CAM_JP[names[idx]] ? CAM_JP[names[idx]][0] : names[idx];
     ctx.font = `600 13px ${FONT}`; ctx.fillStyle = 'rgba(235,242,255,0.95)';
-    ctx.fillText(`${jp} — ${solo ? 'H8' : 'B-29'}`, x0, y);
+    const akv = g.akamo && g.akamo.viewFrom && g.ride ? g.akamo.viewFrom : null;
+    ctx.fillText(`${jp} — ${akv ? (akv === 'h8' ? 'H8' : 'B-29') : solo ? 'H8' : 'B-29'}`, x0, y);
     y += 2.6 * vh;
     const Lk = g.extLook || {};
     const z = Lk.sz || 1;
-    const cam = solo ? g.h8.externalCamera(idx) : g.systems.externalCamera(idx);
+    const cam = akv ? (idx === 0 ? { orbit: true } : (akv === 'h8' ? g.h8 : g.systems).externalCamera(idx - 1)) : solo ? g.h8.externalCamera(idx) : g.systems.externalCamera(idx);
     ctx.font = `500 11px ${MONO}`; ctx.fillStyle = 'rgba(210,225,245,0.85)';
     ctx.fillText(cam.orbit ? `距離 ×${z.toFixed(2)}  パン ${Math.round((Lk.sy || 0) * 57.3)}°` : `パン ${Math.round((Lk.sy || 0) * 57.3)}°  チルト ${Math.round(-(Lk.sp || 0) * 57.3)}°`, x0, y);
     y += 2.6 * vh;
