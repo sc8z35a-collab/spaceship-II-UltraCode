@@ -166,8 +166,10 @@ export function buildAkamoExterior(M, dock, P) {
     b.tube(pts, 0.16, 'gold', { closed: true, seg: 192 });
   }
   for (let k = 0; k < 8; k++) { const a = k / 8 * TAU; b.sphere(0.24, 'strobe', [s.bx + (S.a + 0.6) * Math.cos(a), D1 + 0.25, s.bz + (S.b + 0.6) * Math.sin(a)], 8); }
-  for (let k = 0; k < 12; k++) { const a = (k + 0.5) / 12 * TAU; b.box(0.15, 5.5, 3.2, 'radiatorPanel', [s.bx + (R + 0.32) * Math.cos(a), D0 + 2.9, s.bz + (R + 0.32) * Math.sin(a)], [0, -a, 0], 0.02);
-      for (const yy of [0.8, 2.9, 5.0]) b.box(0.32, 0.12, 0.5, 'radiatorPanel', [s.bx + (R + 0.16) * Math.cos(a), D0 + yy, s.bz + (R + 0.16) * Math.sin(a)], [0, -a, 0], 0.01); }
+  for (let k = 0; k < 12; k++) { const a = (k + 0.5) / 12 * TAU; if (!AK_POD_DEG.some((dg) => Math.abs(Math.atan2(Math.sin(a - dg * Math.PI / 180), Math.cos(a - dg * Math.PI / 180))) < 0.22)) {      // (none over an escape pod)
+        b.box(0.15, 5.5, 3.2, 'radiatorPanel', [s.bx + (R + 0.32) * Math.cos(a), D0 + 2.9, s.bz + (R + 0.32) * Math.sin(a)], [0, -a, 0], 0.02);
+        for (const yy of [0.6, 2.9, 5.2]) b.box(0.34, 0.28, 1.4, 'radiatorPanel', [s.bx + (R + 0.17) * Math.cos(a), D0 + yy, s.bz + (R + 0.17) * Math.sin(a)], [0, -a, 0], 0.02);
+      } }
   // the station's antenna, moved up here off the core's top
   { const x = s.bx - 10.4, z = s.bz + 3.2; b.cyl(0.18, 0.32, 7, 'hull', [x, D1 + 3.5, z], O, 12); b.box(4.5, 1.6, 0.12, 'solarPanel', [x, D1 + 5.4, z], O, 0); P.cap([x, D1, z], [x, D1 + 7.5, z], 2.4); }
   // struts from the core's shoulder to the drum's underside

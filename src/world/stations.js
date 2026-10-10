@@ -362,7 +362,7 @@ function hubModel(def, M) {
   // ---- garden dome at the bow
   const GD = [0, 0, -78];
   b.sphere(14, 'dome', GD, 48);
-  b.sphere(12.6, 'garden', [GD[0], GD[1] - 6.5, GD[2]], 40, [1, 0.42, 1]);
+  b.sphere(12.6, 'garden', [GD[0], GD[1] - 6.5, GD[2]], 40, [1, 0.14, 1]);
   for (let k = 0; k < 7; k++) b.torus(14.02, 0.12, 'metal', GD, [0, k / 7 * Math.PI, 0], 64);
   b.torus(14.05, 0.3, 'gold', GD, [Math.PI / 2, 0, 0], 64);
   for (let k = 0; k < 24; k++) { const a = R() * Math.PI * 2, r = R() * 9; b.sphere(0.35 + R() * 0.3, 'gardenLamp', [GD[0] + Math.cos(a) * r, GD[1] - 1.5 + R() * 2, GD[2] + Math.sin(a) * r], 8); }

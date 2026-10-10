@@ -244,7 +244,10 @@ export class EscapePods {
     const lamps = new THREE.InstancedMesh(lg, this.portMats.lamp, ports.length * 2);
     ports.forEach((pt, i) => {
       const r = POD_GRADES[pt.grade].R * 1.12;
-      const q = new THREE.Quaternion().setFromUnitVectors(UP, pt.n);
+      // (a defined roll: the cover's lettering upright, its top toward the station's up)
+      const up0 = Math.abs(pt.n.y) < 0.9 ? V(0, 1, 0) : V(0, 0, -1);
+      const zc = up0.clone().addScaledVector(pt.n, -up0.dot(pt.n)).normalize().negate(), xc = new THREE.Vector3().crossVectors(pt.n, zc);
+      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xc, pt.n, zc));
       covers.setMatrixAt(i, _m.compose(pt.p.clone().addScaledVector(pt.n, 0.085), q, V(r, 1, r)));
       // (the lamps beside the ring, across from each other)
       const side = V(1, 0, 0).applyQuaternion(q);
