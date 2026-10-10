@@ -193,7 +193,8 @@ export class Akamo {
       const P = T.a.copy(F.pos).sub(origin).applyQuaternion(qi).add(ride.off);       // the ship, in the cabin's frame
       const tgt = ride.off.clone().add(T.b.set(0, 1.2, 0));                             // the cabin's middle
       const away = P.clone().sub(tgt).normalize();
-      const pos = P.clone().addScaledVector(away, h8 ? 9 : 22).add(T.b.set(0, h8 ? 3 : 7, 0));
+      // (between the ship and the cabin, a little up: the ship's own hull out of the way)
+      const pos = P.clone().addScaledVector(away, -(h8 ? 14 : 30)).add(T.b.set(0, h8 ? 5 : 10, 0));
       const quat = new THREE.Quaternion().setFromRotationMatrix(T.m.lookAt(pos, tgt, T.Y));
       return g.lookExternal({ pos, quat, orbit: tgt }, dt);
     }
@@ -221,8 +222,12 @@ export class Akamo {
       this.escortPoint(who, T.p, T.v);
       T.d.copy(T.p).sub(F.pos);
       const gap = T.d.length(), close = Math.min(gap / 1.5, 8000);
-      F.vel.copy(T.v);
-      if (gap > 1e-3) F.vel.addScaledVector(T.d, close / gap);
+      // (the speed it wants, reached at no more than 600 m/s² so a late join never jumps)
+      const want = T.p.copy(T.v);
+      if (gap > 1e-3) want.addScaledVector(T.d, close / gap);
+      T.d.copy(want).sub(F.vel);
+      const dv = T.d.length(), lim = 600 * Math.max(dt, 1e-3);
+      if (dv > lim) F.vel.addScaledVector(T.d, lim / dv); else F.vel.copy(want);
     };
     hold('b29', g.docking && g.docking.state === 'free' ? g.flight : null);
     hold('h8', g.h8 && g.h8.flight && g.h8.mode === 'free' ? g.h8.flight : null);
