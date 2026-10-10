@@ -229,7 +229,9 @@ export function buildRingLift(M, R) {
         st.timer += dt;
         if (!here) st.armed = true;
         st.ride = here && st.armed ? st.ride + dt : 0;
-        if (st.go || st.ride > 3.0) { st.go = false; st.dest = st.at === 'top' ? 'deck' : 'top'; st.phase = 'closing'; }
+        const noPower = !!(D.station && D.station.dmg && D.station.dmg.status === 'failed');
+        if (noPower && st.go) { st.go = false; if (g.statusLine) g.statusLine.note('ステーションの電源が落ちています — エレベーターは動きません', 4); }
+        if (!noPower && (st.go || st.ride > 3.0)) { st.go = false; st.dest = st.at === 'top' ? 'deck' : 'top'; st.phase = 'closing'; }
         else if (!here && !nearStop(st.at) && st.timer > 6) { st.dest = st.at; st.phase = 'closing'; }
         break;
       case 'closing':
