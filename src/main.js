@@ -69,7 +69,9 @@ async function boot() {
   }
   setProgress(1);
   const hasSave = game.save.hasSave();
-  $('btn-continue').classList.toggle('hidden', !hasSave);
+  // (kept in the layout either way, so はじめから never moves under a finger)
+  $('btn-continue').classList.remove('hidden');
+  $('btn-continue').style.visibility = hasSave ? '' : 'hidden';
   $('boot-btns').classList.remove('hidden');
   // graphics quality: high (full look) or low (about half the processing)
   const gfxLabel = () => {
@@ -97,6 +99,15 @@ async function boot() {
     $('boot-gfx').classList.add('hidden');
     setTimeout(() => $('boot').classList.add('hidden'), 1300);
     $('hud').classList.remove('hidden');
+    // (the first minute: where the move stick lives, faintly)
+    if (!document.getElementById('zone-hint')) {
+      const z = document.createElement('div');
+      z.id = 'zone-hint';
+      z.innerHTML = '<span>← この範囲をドラッグで移動 ・ 右側で見回す →</span>';
+      z.style.cssText = 'position:absolute;left:0;top:0;bottom:0;width:42%;border-right:2px dashed rgba(180,210,255,0.28);background:linear-gradient(90deg,rgba(120,170,255,0.07),rgba(120,170,255,0));pointer-events:none;transition:opacity 1.5s;display:flex;align-items:flex-end;justify-content:center;padding-bottom:24vh;color:rgba(220,235,255,0.75);font-size:14px;text-shadow:0 0 6px #000;';
+      $('hud').appendChild(z);
+      setTimeout(() => { z.style.opacity = '0'; setTimeout(() => z.remove(), 1600); }, 45000);
+    }
     game.begin(cont);
   };
   $('btn-continue').addEventListener('click', () => start(true), { once: true });

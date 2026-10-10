@@ -102,6 +102,8 @@ export class H8Vessel {
     this.ext = buildH8Exterior(M);
     this.int = buildH8Interior(M);
     this.display = new H8Display();
+    // the tabs on its glass drawn again at the screen's own resolution (sharp at any quality)
+    if (game.engine.crisp) { game.engine.crisp.add(this.display.sphere); game.engine.crisp.add(this.display.floor); }
     this.tabs = new H8Tabs(this);
     this.zoom = new H8Zoom(this);
     this.hud = new H8Hud(this);
@@ -1023,7 +1025,7 @@ export class H8Vessel {
   /** B-29's walls are there for Kaito unless he is away (in H8 or its shelter) */
   syncAway() {
     const g = this.g, away = this.solo;
-    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); for (const d of Object.values(g.doors || {})) if (d.col) d.col.col.setEnabled(!away); if (this.hatch && this.hatch.col) this.hatch.col.col.setEnabled(!away); }
     const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
     if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
   }
@@ -1412,7 +1414,7 @@ export class H8Vessel {
     const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
     if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
     const away = this.solo;
-    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); for (const d of Object.values(g.doors || {})) if (d.col) d.col.col.setEnabled(!away); if (this.hatch && this.hatch.col) this.hatch.col.col.setEnabled(!away); }
     // Kaito outside while away from B-29: HACHI keeps H8 still beside him
     if (this.solo && g.player.outside && this.pilot.goal) { this.goal('hold'); this.say('hachi_eva_hold', {}, { minGap: 30 }); }
     // ---- H8's own airlock (the shaft), the circuits' sparks, first aid from outside
@@ -2356,7 +2358,7 @@ export class H8Vessel {
     // ---- sparks, spall, venting air (H8's own particles, in H8's frame)
     const live = this.fx.add.p.length || this.fx.alpha.p.length || this.fx.emitters.length;
     if (live || !this.fxIdle) {
-      const sc = g.engine.renderer.domElement.height / (2 * Math.tan(g.engine.camera.fov * Math.PI / 360));
+      const sc = g.engine.pxPerRad();
       this.fx.add.pts.material.uniforms.uScale.value = sc;
       this.fx.alpha.pts.material.uniforms.uScale.value = sc;
       this.fx.update(Math.min(dt, 0.1));
@@ -2634,7 +2636,10 @@ export class H8Vessel {
       o.cap.pinched = true;
       return { tab: o.cap.tab, part: 'pinch' };
     }
-    return this.tabs.hit(this.tabRay(x, y));
+    // (a header is only taken by a touch on its text: anywhere else the touch looks round as usual)
+    const hh = this.tabs.hit(this.tabRay(x, y));
+    if (hh && hh.part === 'head' && this.tabs.headText && !this.tabs.headText(hh)) return null;
+    return hh;
   }
 
   tabMove(t) {
@@ -2692,6 +2697,7 @@ export class H8Vessel {
     if (!c) return;
     if (c.kind === 'body') { this.say('hachi_goto_far', { name: c.name }, { minGap: 3 }); return; }
     if (c.kind === 'kaito') { this.callToKaito(); return; }
+    if (c.kind === 'akamo') { this.followAkamo(true); return; }
     if (this.mode === 'docked') {
       const ok = c.kind === 'station' && c.ref ? g.autopilot.engage(c.ref.id) : g.autopilot.engageObj(this.targetObj(c));
       this.say(ok ? 'hachi_goto' : 'hachi_goto_no', { name: c.name }, { minGap: 2 });
@@ -2711,17 +2717,47 @@ export class H8Vessel {
     this.say('hachi_goto', { name: c.name }, { minGap: 2 });
   }
 
-  /** Kaito out in his suit calls H8 over: it casts off if it must and comes to hold by him */
-  callToKaito() {
+  /** Kaito out in his suit calls H8 over: it casts off if it must and comes to hold by him
+   * (standoff m; onArrive: told when it holds there) */
+  callToKaito(standoff, onArrive = null) {
     const g = this.g;
     if (!g.suits) return;
+    // (called again once it has cast off: the first call's wishes stand)
+    if (standoff !== undefined || onArrive || !this._kaitoCall) this._kaitoCall = { standoff: standoff ?? 16, onArrive };
     const c = { kind: 'kaito', name: 'カイト' };
     if (this.mode === 'docked') { this.release({ goto: c }); return; }
     if (this.berthAt) { this.unberth({ goto: c }); return; }
     this.wake();
-    this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.playerEci(pos); if (vel) vel.copy(g.flight.vel); return pos; }, standoff: 25, onArrive: () => this.say('hachi_kaito_here', {}, { force: true }) });
+    const K = this._kaitoCall || {};
+    this.pilot.setGoal({ kind: 'target', name: 'カイト', posOf: (t, pos, vel) => { g.suits.kaitoEci(pos, vel || null); return pos; }, standoff: K.standoff || 16, onArrive: () => { if (K.onArrive) K.onArrive(); else this.say('hachi_kaito_here', {}, { force: true }); } });
     this.goalKind = 'kaito';
   }
+
+  /**
+   * AKAMO's cabin (Kaito riding it) calls H8 along: it casts off if it must and HACHI keeps it
+   * flying beside the ribbon at the cabin's side as well as it can (the cabin is far faster: at
+   * full speed H8 falls behind and catches up at the end); off: it holds where it is
+   */
+  followAkamo(on) {
+    const g = this.g, A = g.akamo;
+    if (!A) return;
+    if (!on) { if (this.goalKind === 'akamo') this.goal('hold'); return; }
+    const c = { kind: 'akamo', name: 'AKAMO' };
+    if (this.mode === 'docked') { this.release({ goto: c }); return; }
+    if (this.berthAt) { this.unberth({ goto: c }); return; }
+    this.wake();
+    this.pilot.setGoal({ kind: 'target', name: 'AKAMO', posOf: (t, pos, vel) => A.escortPoint('h8', pos, vel), standoff: 10, onArrive: null });
+    this.goalKind = 'akamo';
+    this.say('hachi_goto', { name: 'AKAMO' }, { minGap: 2 });
+  }
+
+  /** the way in from space while H8 flies alone: its neck hatch (physics frame) */
+  neckPF(out = new THREE.Vector3()) { return out.copy(NECK_HATCH).add(DOCK); }
+
+  /** H8's middle in the physics frame (alone: its own frame, shifted by the docking offset) */
+  centerPF(out = new THREE.Vector3()) { return out.copy(DOCK); }
+
+  hullR() { return H8.R; }
 
   /** a lock as a target B-29's autopilot can fly to (it moves: followed as it goes) */
   targetObj(c) {

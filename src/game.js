@@ -21,6 +21,7 @@ import { LifeSupport } from './ship/lifeSupport.js';
 import { Damage } from './ship/damage.js';
 import { Stations } from './world/stations.js';
 import { SpaceElevator } from './world/elevator.js';
+import { Akamo } from './world/akamo.js';
 import { LightShafts } from './ship/lightShafts.js';
 import { Autopilot } from './ship/autopilot.js';
 import { Docking } from './world/docking.js';
@@ -51,6 +52,7 @@ import { ExtMarkers } from './ui/extMarkers.js';
 import { Photos } from './ui/photos.js';
 import { EscapePods } from './world/escapePods.js';
 import { PlumeHeat } from './fx/plumeHeat.js';
+import { AimPilot } from './ship/aimPilot.js';
 
 export const START_TIME = Date.UTC(2041, 5, 1, 0, 30, 0); // 2041-06-01 09:30 JST
 
@@ -132,6 +134,7 @@ export class Game {
     this.elevator = new SpaceElevator(this.engine, this.stations.M, this.stations, this);
     this.shafts = new LightShafts(this.shipVis.root);
     this.autopilot = new Autopilot(this);
+    this.aim = new AimPilot(this);
     this.docking = new Docking(this);
     this.asteroids = new Asteroids(this);
     this.asteroids.setHull(this.shipVis.exterior.children.filter((m) => m.isMesh && !m.material.transparent));
@@ -166,7 +169,12 @@ export class Game {
     this.pods = new EscapePods(this);
     // engine flames burn what is in them and dazzle the cameras near them
     this.plumeHeat = new PlumeHeat(this);
-    this.playerVessel = () => (this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // (riding AKAMO's cabin in its own frame: the cabin is the vessel he is in)
+    this.ride = null;
+    this.playerVessel = () => (this.ride ? this.ride : this.h8 && this.h8.solo ? this.h8.flight : this.flight);
+    // Shirasagi's space elevator
+    this.akamo = new Akamo(this);
+    this.akamo.init();
     // the spacesuits: B-29's on its rack in the airlock, H8's in the shelter's niche
     this.suits = new Suits(this);
     if (this.machines.suitApi) this.suits.setRack('b29', this.machines.suitApi, this.machines.suitPivot, this.machines.suitIdle);
@@ -273,16 +281,36 @@ export class Game {
     // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
     const focused = !!(F && !F.out) || !!this.cine;
-    if (!limp && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
+    if (!limp && !focused && (this.mode === 'pilot' || (this.mode === 'camera' && !(this.akamo && this.akamo.viewFrom)))) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
-    this.lastFlightIn = flightIn;
     // flying a stolen escape pod from H8's seat: the sticks are the pod's, H8 holds as it is
     const remote = !!(this.pods && this.pods.remote);
+    // flying where he looks (aimPilot.js): at the controls, the drag aims the vessel he is in
+    const seatNow = pl.state === 'seated' ? pl.seat : null;
+    const h8Solo = !!(this.h8 && this.h8.mode === 'free' && this.h8.crew && this.h8.isH8Seat(seatNow));
+    const ctlFlight = h8Solo ? this.h8.flight : this.flight;
+    const h8Busy = h8Solo && (this.h8.pilot.goal || this.h8.pilot.state === 'dock' || this.h8.pilot.state === 'undock' || this.h8.berthAt);
+    const canAim = !limp && !focused && !remote && this.mode === 'pilot' && this.aim.on && !h8Busy && !(this.h8 && this.h8.mode === 'pod') &&
+      !(seatNow && seatNow.lockAim) && !(!h8Solo && this.docking.state === 'docked');
+    let aiming = false;
+    if (canAim) {
+      const fi = this.aim.input(sdt, inp, ctlFlight, seatNow, this.h8 && seatNow === this.h8.seat ? this.h8.zoom.z : 1);
+      if (fi) { flightIn = fi; aiming = true; }
+    } else this.aim.active = false;
+    // (B-29 swings round quicker after the look than on the sticks: it is told where to point)
+    this.flight.followTurn = aiming && ctlFlight === this.flight && (this.flight.turnK || 1) < 2.2 ? 2.2 / (this.flight.turnK || 1) : 1;
+    if (this.h8) this.h8.flight.followTurn = 1;
+    this.lastFlightIn = flightIn;
     if (remote) { this.pods.remoteInput(limp ? null : flightIn, limp ? null : inp); flightIn = null; }
     if (!limp) {
       if (inp.pressed['b-exit']) { if (remote) this.pods.release(); else if (focused) this.exitFocus(); else this.systems.exitPressed(); }
       if (inp.pressed['b-cam'] && !focused) this.systems.cameraPressed();
+      if (inp.pressed['b-follow']) {
+        this.aim.setOn(!this.aim.on);
+        if (this.statusLine) this.statusLine.note(this.aim.on ? '視点追従 ON：見た方向へ機体が向く・左スティックで前進と横移動' : '視点追従 OFF：右スティックで操縦', 4);
+        if (this.audio.ready) this.audio.beep(this.aim.on ? 1320 : 880, 0.06, 0.05, { direct: true });
+      }
       if (inp.pressed['b-cam-next']) this.extCam++;
       if (inp.pressed['b-cam-prev']) this.extCam--;
       if (this.mode === 'camera' && !focused) {
@@ -312,6 +340,8 @@ export class Game {
     if (!this.docking.preStep(sdt)) this.flight.step(sdt, flightIn, (pos) => this.terrainAt(pos));
     this.docking.postStep(sdt);
     if (this.h8) this.h8.update(sdt, dt);
+    // (the head looks along the aim, the cockpit having turned under it)
+    if (aiming) this.aim.head(pl, ctlFlight, seatNow, sdt);
     // apparent gravity in the ship frame
     const qInv = this.flight.quat.clone().invert();
     this.gLocal.copy(this.flight.properAcc).negate().applyQuaternion(qInv);
@@ -320,6 +350,9 @@ export class Game {
     if (this.flight.damp > 0.001) this.gLocal.multiplyScalar(1 - 0.985 * this.flight.damp);
     // riding H8 alone: its own manoeuvres are what Kaito feels
     if (this.h8 && this.h8.solo) this.gLocal.copy(this.h8.gLocal);
+    // AKAMO: the cabin's run (and, riding in its frame, what is felt in it)
+    if (this.akamo) this.akamo.update(sdt);
+    if (this.ride) this.gLocal.copy(this.ride.gLocal);
     this.phys.setGravity(this.gLocal);
     this.fx.gravity.copy(this.gLocal);
     this.phys.step(sdt);
@@ -337,19 +370,25 @@ export class Game {
     if (inRing) {
       this.docking.restoreRingState();
       gPl = this.docking.ringGravity(pl.pos, pl.vel, this._gRing || (this._gRing = new THREE.Vector3()));
-      env = { nearRail: false, lowCeiling: false, liftDelta: null };
+      const rlEnv = this.docking.lobby && this.docking.lobby.ring && this.docking.lobby.ring.lift;
+      env = { nearRail: false, lowCeiling: false, liftDelta: rlEnv ? rlEnv.liftDelta(pl.pos) : null };
     } else {
       env = this.systems.playerEnv();
       this.docking.envFor(env, pl);
     }
     // out in a suit: its own thrusters and boosters fly him
     env.suit = this.suits && pl.suit ? this.suits : null;
-    let lookInp = this.mode === 'camera' || focused ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    let lookInp = this.mode === 'camera' || focused || aiming || remote ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });
     if (limp && !dead) lookInp = Object.assign({}, lookInp, { lookDX: 0, lookDY: 0, moveX: 0, moveY: 0, up: 0, rx: 0, ry: 0 });
     // (out in space in a suit he keeps his own motion: the frame is worked out round him)
+    // (AKAMO's lift at Shirasagi moves before the player's step, so its car carries him exactly)
+    const akLift = this.docking && this.docking.state === 'docked' && this.docking.lobby && this.docking.lobby.terminal;
+    if (akLift) akLift.preStep(Math.min(sdt, 0.05), this);
+    const rlPre = this.docking && this.docking.state === 'docked' && this.docking.lobby && this.docking.lobby.ring && this.docking.lobby.ring.lift;
+    if (rlPre) rlPre.preStep(Math.min(sdt, 0.05), this);
     if (this.suits) this.suits.preStep(pl, sdt);
     pl.update(Math.min(sdt, 0.05), this.mode === 'walk' && !focused ? lookInp : Object.assign({}, lookInp, { moveX: 0, moveY: 0, up: 0 }), gPl, env);
     if (this.suits) this.suits.afterMove(pl);
@@ -599,12 +638,15 @@ export class Game {
     const root = this.shipVis.root;
     // render origin: B-29, or H8 while Kaito flies it away from B-29
     const solo = !!(this.h8 && this.h8.solo);
-    this.origin.copy(solo ? this.h8.flight.pos : f.pos);
+    const ride = this.ride;
+    this.origin.copy(ride ? ride.pos : solo ? this.h8.flight.pos : f.pos);
     const one = new THREE.Vector3(1, 1, 1);
     root.matrix.compose(f.pos.clone().sub(this.origin), f.quat, one);
     root.matrixWorld.copy(root.matrix);
     const fr = this.frameRoot;
-    if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
+    // (riding AKAMO: the cabin's pose, the physics frame shifted so its room's origin sits at it)
+    if (ride) fr.matrix.compose(ride.off.clone().applyQuaternion(ride.quat).negate(), ride.quat, one);
+    else if (solo) this.h8.frameMatrix(fr.matrix); else fr.matrix.copy(root.matrix);
     fr.matrixWorld.copy(fr.matrix);
     fr.updateMatrixWorld(true);
     // re-entry: the hull itself shudders under the eye (the frame the eye rides holds still)
@@ -631,8 +673,10 @@ export class Game {
       eyeLocal = c.pos;
       viewQ = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().lookAt(c.pos, c.look, new THREE.Vector3(0, 1, 0)));
     } else if (this.mode === 'camera' && this.systems) {
-      const c = solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
-      const v = this.lookExternal(c, dt);
+      // (riding AKAMO: the view from H8 or B-29 escorting the cabin, given in the cabin's frame)
+      const rv = ride && this.akamo && this.akamo.viewFrom ? this.akamo.remoteView(this.extCam, dt, this.origin, ride) : null;
+      const c = rv ? null : solo ? this.h8.externalCamera(this.extCam) : this.systems.externalCamera(this.extCam);
+      const v = rv || this.lookExternal(c, dt);
       eyeLocal = v.pos; viewQ = v.quat;
     } else if (!this.running && !this.params.has('view')) {
       // title: slow cinematic around the ship
@@ -691,15 +735,26 @@ export class Game {
     const origin = this.origin;
     this.space.update(origin, this.camWorld, this.time, dt, new THREE.Vector3(0, 0, 0));
     // inside the docked station's lobby its outer shell is hidden so the windows look out
-    this.stations.shellHiddenFor = this.docking && this.docking.lobby && this.docking.lobby.contains(eyeLocal) ? this.docking.station.id : null;
+    // the docked station's shells are hidden from within where they would stand in front of its
+    // windows: the lobby's from the lobby and the promenade (at Shirasagi; from anywhere inside at the
+    // others), the skybridge's from the lobby, the bridge and the core. From AKAMO's tower and
+    // platform both are seen from outside, through the windows.
+    const lob = this.docking && this.docking.lobby, sid = lob && this.docking.station ? this.docking.station.id : null;
+    const inside = !!(lob && lob.contains(eyeLocal));
+    let sec = inside && lob.sectionAt ? lob.sectionAt(eyeLocal) : null;
+    if (sec === 'akamo' && !lob.terminal.showsShell(eyeLocal)) sec = 'atrium';
+    this.stations.shellHiddenFor = inside && (!lob.terminal || sec === 'lobby' || sec === 'promenade') ? sid : null;
+    this.stations.bridgeHiddenFor = inside && sec !== 'akamo' ? sid : null;
     this.stations.update(this.time, origin, this.camWorld, dt);
-    this.stations.setPixelScale(this.engine.renderer.getPixelRatio());
+    this.stations.setPixelScale(this.engine.pr);
     this.elevator.update(this.time, origin, this.camWorld, this.space.sunDir, dt, this.space);
     if (this.asteroids) this.asteroids.updateVisual(origin, this.camWorld);
     if (this.combat) this.combat.updateVisual(dt, origin, this.camWorld);
     if (this.drones) this.drones.updateVisual(dt, origin, this.camWorld);
     const eyePF = this.debugCam || wreck || podCam || this.mode === 'camera' || (!this.running && !this.params.has('view')) ? null : eyeLocal;
     if (this.h8) this.h8.updateVisual(dt, origin, this.camWorld, eyePF);
+    if (this.suits && this.suits.rescuer) this.suits.rescuer.updateVisual(dt, origin, this.camWorld);
+    if (this.akamo) this.akamo.updateVisual(dt, origin, this.camWorld);
     if (this.weapons) this.weapons.updateVisual(dt, origin, this.camWorld);
     if (this.pods) this.pods.updateVisual(dt, origin, this.camWorld);
     if (this.worldDamage) this.worldDamage.updateVisual(dt, this.camWorld);
@@ -717,7 +772,7 @@ export class Game {
     }
     this.shipVis.update(dt, this.time / 1000);
     // particles: point size scale from the projection
-    const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const sc = this.engine.pxPerRad(cam);
     this.fx.add.pts.material.uniforms.uScale.value = sc;
     this.fx.alpha.pts.material.uniforms.uScale.value = sc;
     this.fx.update(Math.min(dt * this.timeScale, 0.1));

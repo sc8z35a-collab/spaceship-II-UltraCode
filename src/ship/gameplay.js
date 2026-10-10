@@ -173,6 +173,12 @@ export class Gameplay {
       const lp = L.plat.position;
       if (Math.abs(p.x - lp.x) < 0.55 && Math.abs(p.z - lp.z) < 0.55 && p.y - lp.y < 1.3 && p.y - lp.y > -0.2) env.liftDelta = V(0, L.delta, 0);
     }
+    // AKAMO's lift at Shirasagi carries whoever stands in its car
+    const AT = g.docking && g.docking.lobby && g.docking.lobby.terminal;
+    if (AT && !env.liftDelta) { const d = AT.liftDelta(p); if (d) env.liftDelta = d; }
+    // (a rescue bringing him in through a hatch: tucked up)
+    const rs = g.suits && g.suits.rescuer;
+    if (rs && rs.tuck && rs.R && rs.R.phase === 'board') env.tuck = true;
     const gMag = g.gLocal ? g.gLocal.length() : 0;
     // crouch under the deck (not in the lift shaft / floor hatch) and through the airlock hatch
     const inShaft = p.x > LIFT.x0 && p.x < LIFT.x1 && p.z > LIFT.z0 && p.z < LIFT.z1;
@@ -304,8 +310,8 @@ export class Gameplay {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
     if (h.target > 0.5) { h.target = 0; g.audio.mech(h.o.center, 'hatch', { open: false }); return; }
     const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
-    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
-    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); if (g.statusLine) g.statusLine.note('ハッチの外は真空です — 宇宙服を着てから', 4); return; }
+    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); if (g.statusLine) g.statusLine.note('気圧が合っていません — エアロックを' + (p > beyond ? '減圧' : '加圧') + 'してから', 4); return; }
     h.target = 1;
     g.audio.mech(h.o.center, 'hatch', { open: true });
   }
@@ -361,7 +367,8 @@ export class Gameplay {
     // (away with H8, B-29 is not where its hull would be in this frame)
     const awayInH8 = !!(h8 && h8.solo);
     const insideHull = (!awayInH8 && p.z > HULL.zTip && p.z < 9.6 && Math.abs(p.x) < hw && p.y > bot && p.y < top) || (!awayInH8 && g.docking.contains(p)) ||
-      !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p)));
+      !!(h8 && (h8.docked || h8.crew) && (h8.containsPF(p) || h8.inVestibule(p))) ||
+      !!(g.ride && g.ride.contains(p)) || !!(g.akamo && g.akamo.inCabinShip(p));
     const wasOut = pl.outside;
     pl.outside = !insideHull;
     if (pl.outside && !wasOut) {
@@ -414,7 +421,7 @@ export class Gameplay {
   startRepair(it) {
     const g = this.g;
     if (it.h8) { this.startH8Repair(it); return; }
-    if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); return; }
+    if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); if (g.statusLine) g.statusLine.note('ここは修理が必要です — 修理キット（廊下の工具棚）を持ってきてタップ', 4.5); return; }
     if (it.state !== 'active') { g.asphalt.say('repair_patch', {}, { minGap: 15 }); return; }
     if (!it.repairable) { g.asphalt.say('repair_cannot', {}, { minGap: 20 }); return; }
     const need = it.kind === 'pipe' ? 'clamps' : it.kind === 'breach' ? 'patches' : it.kind === 'crack' || it.kind === 'fracture' ? 'sealant' : 'parts';
@@ -686,7 +693,7 @@ export class Gameplay {
   updateCrew(dt) {
     const g = this.g, pl = g.player, ls = g.lifeSupport;
     ls.zoneOfPlayer = ls.zoneAt(pl.pos);
-    ls.inStation = !!(g.docking && g.docking.contains(pl.pos));
+    ls.inStation = !!(g.docking && g.docking.contains(pl.pos)) || !!(g.akamo && g.akamo.airAt(pl.pos));
     this.herePressure = ls.pressureAt(pl.pos, pl.outside);
     const br = ls.breathing();
     let hurt = 0, blur = 0;

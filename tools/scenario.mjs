@@ -1,5 +1,6 @@
 // Scenario runner: loads the game once, then runs steps from a JS module (array of
 // { wait, eval, shot }) and saves screenshots. usage: node tools/scenario.mjs steps.mjs outDir [W] [H] [query]
+// (DSF=2 in the environment: a screen of twice the pixel density, as on a phone)
 import { chromium } from 'playwright-core';
 import path from 'node:path';
 import fs from 'node:fs';
@@ -17,7 +18,7 @@ const browser = await chromium.launch({
   executablePath: '/opt/pw-browsers/chromium-1194/chrome-linux/chrome',
   args: [...spki, '--use-angle=swiftshader', '--enable-unsafe-swiftshader', '--ignore-gpu-blocklist', '--enable-webgl', '--autoplay-policy=no-user-gesture-required'],
 });
-const page = await browser.newPage({ viewport: { width: +W, height: +H }, deviceScaleFactor: 1 });
+const page = await browser.newPage({ viewport: { width: +W, height: +H }, deviceScaleFactor: +(process.env.DSF || 1) });
 const logs = [];
 page.on('console', (m) => { const t = m.text().replace(/\u0000/g, ''); if (!/vite|DevTools|requestFullscreen/.test(t)) logs.push(`[${m.type()}] ${t}`); });
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}\n${(e.stack || '').split('\n').slice(0, 6).join('\n')}`));

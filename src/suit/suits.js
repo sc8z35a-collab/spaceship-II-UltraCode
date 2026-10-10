@@ -20,6 +20,7 @@
 //  - out on a walk the suit is seen from outside too (another camera, H8's display): the wearer's
 //    face behind the visor, the boosters' plumes, the lamps.
 import * as THREE from 'three';
+import { SuitRescue } from './suitRescue.js';
 import { SUITS, SuitState, contactSpeeds, SYSTEMS_JP, PARTS } from './suitSystem.js';
 import { SuitCamera } from './suitCamera.js';
 import { buildSuit } from './suitModel.js';
@@ -36,7 +37,41 @@ const seg = (t, a, b) => ease((t - a) / (b - a));
 const _q = new THREE.Quaternion(), _q2 = new THREE.Quaternion(), _m = new THREE.Matrix4(), _v = new THREE.Vector3(), _v2 = new THREE.Vector3();
 const EYE_IN = V(0, 1.62, -0.035);          // the eye inside the helmet (suit frame)
 const FINE = { h8: { acc: 2.6, v: 6 }, b29: { acc: 1.4, v: 4 } };   // the fine thrusters
+// the flight computer's assist: how much harder than the bare thrusters it may push to fly what the
+// stick asks (both nozzles of a pair together), how quickly it closes on it (s)
+const ASSIST = { k: 2.0, tau: 0.22 };
+const _ac = new THREE.Vector3(), _av = new THREE.Vector3();
+
+/**
+ * The suit's flight computer: the stick asks for a velocity against the vessel — forward and back
+ * along the view, sideways, up and down — and the thrusters fly it, quick and firm; let go and it
+ * brings him to rest against the vessel (the boosters braking the last of a fast run). With the
+ * boosters armed, a push forward asks for their speed. want: the direction asked (unit, the
+ * frame's axes), asked 0..1, rel: his velocity against the vessel (same axes), out: the
+ * acceleration to make. Returns the throttle (0..1) it takes.
+ */
+function assistAcc(want, asked, boosting, fwd, rel, S, Fn, tk, autoV, out) {
+  const P = S.spec.propulsion;
+  const vFine = Fn.v;
+  // what is asked: the fine speed along the stick; the boosters' along the view while armed
+  const vCmd = _av.set(0, 0, 0);
+  if (autoV) vCmd.copy(autoV);
+  else if (asked > 0.02) {
+    vCmd.copy(want).multiplyScalar(vFine * asked);
+    if (boosting) vCmd.addScaledVector(fwd, Math.max(0, P.vMax * asked - vFine * asked));
+  }
+  const dv = _ac.copy(vCmd).sub(rel);
+  const err = dv.length();
+  if (err < 0.004) { out.set(0, 0, 0); return 0; }
+  // the bare thrusters' push (more for the boosters when the gap is large: fast runs, braking)
+  const big = boosting || err > vFine * 1.2;
+  const aMax = (big ? Math.max(P.accel, Fn.acc * ASSIST.k) : Fn.acc * ASSIST.k) * tk;
+  out.copy(dv).multiplyScalar(1 / ASSIST.tau);
+  if (out.length() > aMax) out.setLength(aMax);
+  return Math.min(1, out.length() / Math.max(1e-4, aMax)) * (big ? 1 : 0.18);
+}
 const ZERO = V(0, 0, 0);
+const _eg = new THREE.Vector3();
 const _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _e3 = new THREE.Vector3(), _qe = new THREE.Quaternion(), _qe2 = new THREE.Quaternion(), _eu = new THREE.Euler();
 const gravE = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
 // (the avatar's joints: its attitude, what moves it)
@@ -50,14 +85,17 @@ export class Suits {
     for (const k of Object.keys(this.st)) this.st[k].onEvent = (kind, info) => this.onEvent(k, kind, info);
     this.cam = new SuitCamera();
     this.boost = false;          // the boosters armed (else the fine thrusters)
-    this.hold = false;           // asked to, the flight computer brakes him to a stop against the ship
+    this.hold = true;            // the flight computer's assist (on: the stick asks for a velocity,
+                                 // let go and it stops him against the ship; off: bare thrusters)
+    this.autoV = null;           // a velocity the computer flies on its own (the rescue bringing him in)
     this.eva = null;             // out in space: his own state { p, v (ECI), q (the frame's turn), solo }
     this.throttle = 0;           // what is being asked of the boosters now (0..1)
     this.lamp = false;
     this.sunVisor = 0;
     this.racks = {};             // { b29: { api, pivot, feet, idle }, h8: {...} } set by the ships
     this.seq = null;             // a suit going on or coming off
-    this.rescue = null;
+    this.rescue = null;          // a call for help under way (suitRescue.js keeps it)
+    this.rescuer = new SuitRescue(this);
     this.ref = 'b29';            // what speeds are measured against on the visor
     this.hud = new VisorHud(g, this);
     // the helmet's lamps: a pair of LED floods (a narrow-ish beam, soft edge, falling off with the
@@ -289,7 +327,8 @@ export class Suits {
 
   /** the camera override for the render (game.js): the sequence's eye */
   pose() {
-    if (!this.seq) return null;
+    // (its first frame, before the sequence has its timings: the ordinary view)
+    if (!this.seq || !this.seq.L) return null;
     this._last = this.seq;
     return this.seqPose(this.seq.t);
   }
@@ -515,7 +554,17 @@ export class Suits {
     const asked = Math.min(1, want.length());
     let thrusting = false;
     this.throttle = 0;
-    if (asked > 0.02 && tk > 0) {
+    if ((this.hold || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02 && !this.autoV)) {
+      // the flight computer flies what the stick asks (against the ship's frame: his velocity here)
+      if (asked > 0.02) want.normalize();
+      const boosting = this.boost && (input.moveY || 0) > 0.2;
+      const a = _v2.set(0, 0, 0);
+      const th = assistAcc(want, asked, boosting, camF, pl.vel, S, Fn, tk, this.autoV, a);
+      pl.vel.addScaledVector(a, dt);
+      if (boosting && S.asymmetry()) pl.vel.addScaledVector(camR, S.asymmetry() * a.length() * 0.12 * dt);
+      this.throttle = th;
+      thrusting = th > 0.02;
+    } else if (asked > 0.02 && tk > 0) {
       want.normalize();
       const boosting = this.boost && (input.moveY || 0) > 0.2;
       const acc = (boosting ? P.accel : Fn.acc) * tk * asked;
@@ -558,7 +607,7 @@ export class Suits {
   /** free in space in the suit (not in a ring, not being towed, not climbing in or out of it) */
   inertialNow(pl) {
     const g = this.g;
-    return !!(pl.suit && pl.outside && !this.seq && pl.state !== 'seated' && pl.state !== 'dead' && !(g.docking && g.docking.inRing) && !(this.rescue && this.rescue.towing));
+    return !!(pl.suit && pl.outside && !this.seq && pl.state !== 'seated' && pl.state !== 'dead' && !(g.docking && g.docking.inRing));
   }
 
   /**
@@ -597,15 +646,43 @@ export class Suits {
     const P = S.spec.propulsion, Fn = FINE[k], tk = S.thrustK();
     // (the game's step: with time sped up he keeps up with the world)
     const h = Math.max(dt, E.dt || dt);
+    // held in the arms of a station's rescue craft: he goes where it goes
+    if (this.rescuer.heldAt(E.p, E.v)) {
+      E.fresh = false;
+      this.throttle = 0;
+      // (the tug moves on later in the frame, after him: hold him where its arm will be)
+      E.p.addScaledVector(E.v, dt);
+      pl.vel.copy(this.toLocal(F, E.p, _e1)).sub(pl.pos).divideScalar(Math.max(1e-4, dt));
+      return false;
+    }
     const want = _e1.set(0, 0, 0).addScaledVector(camF, input.moveY || 0).addScaledVector(camR, input.moveX || 0).addScaledVector(camU, input.up || 0);
     const asked = Math.min(1, want.length());
     // (against the vessel: the speed of its frame where he is — its slow turn adds next to nothing)
+    // (B-29 on its way to him: the suit coasts on its own orbit, no hold, so the ship can close on
+    // it; holding to the ship would drag him along with it, and holding a fixed course would fight
+    // gravity. Once B-29 is here the hold to the ship comes back for the boarding)
+    const coming = !!(this.rescuer && this.rescuer.approaching && this.rescuer.approaching());
+    // (this step's fall first, as the vessel has already had its own: the speed against it is then
+    // the one the step ends with, and the assist flies what it is asked, not g·dt off it)
+    E.v.addScaledVector(gravE(E.p, _eg), h);
     const rel = _e2.copy(E.v).sub(F.vel);
     const a = _e3.set(0, 0, 0);
     let thrusting = false;
     this.throttle = 0;
     E.vCap = 0;
-    if (asked > 0.02 && tk > 0) {
+    if (((this.hold && !coming) || this.autoV) && tk > 0 && !(pl._nearRail && asked < 0.02 && !this.autoV)) {
+      // the flight computer flies what the stick asks, against the vessel (its frame's motion here)
+      if (asked > 0.02) want.normalize();
+      want.applyQuaternion(F.quat);
+      const boosting = this.boost && (input.moveY || 0) > 0.2;
+      const fwdE = _v2.copy(camF).applyQuaternion(F.quat);
+      const autoE = this.autoV ? _v.copy(this.autoV).applyQuaternion(F.quat) : null;
+      const th = assistAcc(want, asked, boosting, fwdE, rel, S, Fn, tk, autoE, a);
+      if (boosting && S.asymmetry()) a.addScaledVector(_e1.copy(camR).applyQuaternion(F.quat), S.asymmetry() * a.length() * 0.12);
+      this.throttle = th;
+      thrusting = th > 0.02;
+      E.vCap = boosting || rel.length() > Fn.v * 1.2 ? P.vMax : 0;
+    } else if (asked > 0.02 && tk > 0) {
       want.normalize().applyQuaternion(F.quat);
       const boosting = this.boost && (input.moveY || 0) > 0.2;
       const acc = (boosting ? P.accel : Fn.acc) * tk * asked;
@@ -619,7 +696,7 @@ export class Suits {
     } else if (pl._nearRail) {
       // a hand on a rail: the hull carries him (his grip takes up what he had against it)
       E.v.copy(F.vel).addScaledVector(rel, Math.exp(-h * 2.5));
-    } else if (this.hold && tk > 0) {
+    } else if (this.hold && !coming && tk > 0) {
       // asked to hold still against the vessel: the thrusters brake him, taking the time and the
       // charge it costs
       const v = rel.length();
@@ -632,14 +709,16 @@ export class Suits {
       }
     }
     // gravity (he falls round the Earth as everything else does) and his push
-    E.v.addScaledVector(gravE(E.p, _e1).add(a), h);
+    E.v.addScaledVector(a, h);
     if (E.vCap) {
       const r2 = _e2.copy(E.v).sub(F.vel), sp = r2.length();
       if (sp > E.vCap) E.v.copy(F.vel).addScaledVector(r2, E.vCap / sp);
     }
     // (the step he was taken up on was already made with the frame)
+    // (the step as the vessel takes its own, gravity's half-step included: at rest beside it he
+    // stays where he is instead of sinking toward the Earth by half g h^2 each step)
     if (E.fresh) E.fresh = false;
-    else E.p.addScaledVector(E.v, h);
+    else E.p.addScaledVector(E.v, h).addScaledVector(_eg, -0.5 * h * h);
     // where that is in the frame now: the step his body takes there (what is in the way stops it)
     pl.vel.copy(this.toLocal(F, E.p, _e1)).sub(pl.pos).divideScalar(Math.max(1e-4, dt));
     return thrusting;
@@ -736,34 +815,12 @@ export class Suits {
   }
 
   // ================================================================== calling for help
-  /** who: 'b29' | 'h8' | 'station' */
-  call(who) {
-    const g = this.g, pl = g.player, S = this.state;
-    if (!S) return;
-    if (S.sys.radio < 0.15 || S.shutdown) { this.hud.event('radio_dead'); return; }
-    this.rescue = { who, t: 0 };
-    if (who === 'b29') {
-      const d = pl.pos.length();
-      if (g.docking && g.docking.state !== 'free') { g.asphalt.say('suit_call_docked', {}, { force: true }); this.rescue = null; return; }
-      if (d < 60) { g.asphalt.say('suit_call_near', {}, { force: true }); this.rescue = null; return; }
-      g.asphalt.say('suit_call_b29', { m: Math.round(d) }, { force: true });
-    } else if (who === 'h8') {
-      const h = g.h8;
-      if (!h || h.mode === 'lost' || h.mode === 'pod') { g.asphalt.say('suit_call_noh8', {}, { force: true }); this.rescue = null; return; }
-      if (h.callToKaito) h.callToKaito();
-      h.say('hachi_suit_call', {}, { force: true });
-    } else if (who === 'station') {
-      const s = this.nearestStation();
-      if (!s) { g.asphalt.say('suit_call_nost', {}, { force: true }); this.rescue = null; return; }
-      this.rescue.station = s;
-      this.rescue.eta = Math.max(40, Math.min(900, s.dist / 120));
-      g.asphalt.say('suit_call_station', { name: s.st.name, min: Math.max(1, Math.round(this.rescue.eta / 60)) }, { force: true });
-    }
-  }
+  /** who: 'b29' | 'h8' | 'station' (suitRescue.js: whoever is called really comes) */
+  call(who) { this.rescuer.call(who); }
 
   nearestStation() {
     const g = this.g;
-    const me = this.playerEci();
+    const me = this.kaitoEci(new THREE.Vector3());
     let best = null;
     for (const s of g.stations.list) {
       if (s.dmg && (s.dmg.status === 'destroyed' || s.dmg.status === 'failed')) continue;
@@ -773,43 +830,45 @@ export class Suits {
     return best;
   }
 
-  /** the player's ECI position (the physics frame rides with B-29) */
-  playerEci(out = new THREE.Vector3()) {
-    const g = this.g, f = g.flight;
-    return out.copy(g.player.pos).applyQuaternion(f.quat).add(f.pos);
+  /** the player's ECI position (in whichever frame he is: B-29's, or H8's while it flies alone) */
+  playerEci(out = new THREE.Vector3()) { return this.kaitoEci(out); }
+
+  /** where he is in space and how he moves (ECI): his own state out in space, else his frame's */
+  kaitoEci(pos, vel = null) {
+    const pl = this.g.player, F = this.frameOf(), E = this.eva;
+    if (E && pl.inertial) { pos.copy(E.p); if (vel) vel.copy(E.v); return pos; }
+    this.toEci(F, pl.pos, pos);
+    if (vel) vel.copy(pl.vel).applyQuaternion(F.quat).add(F.vel);
+    return pos;
   }
 
-  /** a call under way: B-29 comes over on its autopilot; a station's tug flies out and tows */
-  updateRescue(dt) {
-    const R = this.rescue, g = this.g, pl = g.player;
-    if (!R) return;
-    R.t += dt;
-    if (!pl.suit || !pl.outside) { this.rescue = null; return; }
-    if (R.who === 'b29') {
-      // B-29 brings itself to him: the ship frame moves under him, he stays where he is in space
-      const d = pl.pos.length();
-      if (d < 40) { g.asphalt.say('suit_call_here', {}, { force: true }); this.rescue = null; return; }
-      const sp = Math.min(60, 0.35 * d + 2) * Math.min(1, R.t / 8);
-      const step = Math.min(d - 30, sp * dt);
-      const dir = pl.pos.clone().normalize();
-      g.flight.pos.add(dir.clone().applyQuaternion(g.flight.quat).multiplyScalar(step));
-      pl.pos.addScaledVector(dir, -step);
-      pl.body.setNextKinematicTranslation({ x: pl.pos.x, y: pl.pos.y, z: pl.pos.z });
-    } else if (R.who === 'station') {
-      // the tug's arrival, then a tow back to B-29's hatch (or into the station's own lobby)
-      if (R.t > R.eta && !R.towing) { R.towing = true; R.tow = 0; g.asphalt.say('suit_tug_here', { name: R.station.st.name }, { force: true }); }
-      if (R.towing) {
-        R.tow += dt;
-        const hatch = g.hatch.o.center.clone().addScaledVector(g.hatch.o.normal, 1.6);
-        const d = pl.pos.distanceTo(hatch);
-        const sp = Math.min(25, 0.4 * d + 0.5);
-        if (d < 1.2) { pl.vel.set(0, 0, 0); g.asphalt.say('suit_tug_done', {}, { force: true }); this.rescue = null; return; }
-        pl.vel.copy(hatch.sub(pl.pos).normalize().multiplyScalar(sp));
-      }
-    } else if (R.who === 'h8') {
-      if (R.t > 600) this.rescue = null;
-    }
+  /**
+   * H8 came for him: from now on he flies in H8's coordinates (as one gone out of it alone) — the
+   * same place in space, the same motion, the same look
+   */
+  transferToH8() {
+    const g = this.g, pl = g.player, h = g.h8;
+    if (!h || h.solo) return;
+    const F0 = this.frameOf();
+    const p = this.kaitoEci(new THREE.Vector3(), _e3);
+    const v = _e3.clone();
+    const Lq = pl.viewQuat(new THREE.Quaternion());
+    h.crew = true;
+    const F1 = this.frameOf();
+    if (!F1.solo) { h.crew = false; return; }
+    const D = new THREE.Quaternion().copy(F1.quat).invert().multiply(F0.quat);
+    pl.teleport(this.toLocal(F1, p, new THREE.Vector3()));
+    pl.vel.copy(v).sub(F1.vel).applyQuaternion(_qe.copy(F1.quat).invert());
+    Lq.premultiply(D);
+    pl.up.applyQuaternion(D).normalize();
+    _qe.copy(pl.frameQuat(new THREE.Quaternion())).invert().multiply(Lq);
+    _eu.setFromQuaternion(_qe, 'YXZ');
+    pl.pitch = Math.max(-1.5, Math.min(1.5, _eu.x)); pl.yaw = _eu.y; pl.roll = _eu.z;
+    this.eva = null;
   }
+
+  /** a call under way (suitRescue.js) */
+  updateRescue(dt) { this.rescuer.update(dt); }
 
   // ================================================================== the suit seen from outside
   /** out on a walk: the worn suit drawn where Kaito is (seen by another camera) */
@@ -893,7 +952,7 @@ export class Suits {
 
   // ================================================================== save
   serialize() {
-    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, holdV: 2, lamp: this.lamp };
+    return { h8: this.st.h8.serialize(), b29: this.st.b29.serialize(), cam: this.cam.serialize(), boost: this.boost, hold: this.hold, holdV: 3, lamp: this.lamp };
   }
 
   restore(s) {
@@ -901,7 +960,7 @@ export class Suits {
     this.st.h8.restore(s.h8); this.st.b29.restore(s.b29);
     this.cam.restore(s.cam);
     // (the automatic stop is off unless it was chosen: older saves had it on by default)
-    this.boost = !!s.boost; this.hold = s.holdV === 2 && s.hold === true; this.lamp = !!s.lamp;
+    this.boost = !!s.boost; this.hold = s.holdV === 3 ? s.hold !== false : true; this.lamp = !!s.lamp;
     this.mirror();
   }
 

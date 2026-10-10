@@ -606,13 +606,13 @@ export class Drones {
     }
     const pg = this.points.geometry;
     pg.attributes.position.needsUpdate = pg.attributes.k.needsUpdate = true;
-    this.ptMat.uniforms.uScale.value = g.engine.renderer.getPixelRatio();
+    this.ptMat.uniforms.uScale.value = g.engine.pr;
     // the smoke frame rides with the vessel Kaito is in
     const ref = T.pos.clone().sub(origin);
     this.trailGrp.matrix.makeTranslation(ref.x, ref.y, ref.z);
     this.trailGrp.matrixWorld.copy(this.trailGrp.matrix);
     this.trailGrp.updateMatrixWorld(true);
-    const sc = g.engine.renderer.domElement.height / (2 * Math.tan(g.engine.camera.fov * Math.PI / 360));
+    const sc = g.engine.pxPerRad();
     this.trail.add.pts.material.uniforms.uScale.value = sc;
     this.trail.alpha.pts.material.uniforms.uScale.value = sc;
     this.trail.update(Math.min(dt, 0.1));

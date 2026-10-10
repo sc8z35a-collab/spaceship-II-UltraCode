@@ -20,6 +20,7 @@ export class StationAir {
       this.sec = { lobby: sec('ロビー', 2500), promenade: sec('プロムナード', 900) };
       if (lobby.hasAtrium) this.sec.atrium = sec('中央アトリウム', 2300);
       if (lobby.ring) this.sec.ring = sec('リング居住区', 12000);
+      if (lobby.terminal) this.sec.akamo = sec('AKAMOターミナル', 3400);
     }
     this.ringContains = null;
     // links between sections through the station doors

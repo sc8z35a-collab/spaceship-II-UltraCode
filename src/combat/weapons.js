@@ -465,6 +465,29 @@ export class Weapons {
     return { pos: g.flight.pos, vel: g.flight.vel, quat: g.flight.quat };
   }
 
+  /** the velocity of a point riding on the vessel (ECI): its middle's, plus how its turning swings
+   * the point round (a muzzle far out on the hull moves with the ship's roll and yaw) */
+  pointVel(which, p, out) {
+    const F = which === 'h8' ? this.g.h8.flight : this.g.flight;
+    out.copy(F.vel);
+    if (F.wRel && F.wRel.lengthSq() > 1e-12) {
+      const w = new THREE.Vector3().copy(F.wRel).applyQuaternion(F.quat);
+      out.add(w.cross(new THREE.Vector3().copy(p).sub(F.pos)));
+    }
+    return out;
+  }
+
+  /** how much faster a lock's aim point moves than the locked thing's middle (it turns, and the
+   * point goes round with it): from how the point's offset changed over the game's own time */
+  aimDvOf(l, aim) {
+    if (!aim || !l.c || !l.c.pos) return null;
+    const S = l._dv || (l._dv = { off: new THREE.Vector3(), w: new THREE.Vector3(), t: -1 });
+    const off = new THREE.Vector3().copy(aim).sub(l.c.pos), t = this.g.time, dt = (t - S.t) / 1000;
+    if (S.t < 0 || !(dt >= 0) || dt > 2) { S.w.set(0, 0, 0); S.off.copy(off); S.t = t; }
+    else if (dt > 1e-4) { S.w.lerp(off.clone().sub(S.off).divideScalar(dt), Math.min(1, dt * 6)); S.off.copy(off); S.t = t; }
+    return S.w;
+  }
+
   /**
    * What a vessel can shoot at: drones, rocks and (H8) everything its display has locked. Each:
    * { id, kind, ref, pos, vel, acc, aim (the point to hit, ECI; null: its middle), R (the size it
@@ -477,7 +500,7 @@ export class Weapons {
     const lockOf = (id) => (hud ? hud.locks.find((l) => l.id === id) : null);
     const add = (o) => {
       const l = lockOf(o.id);
-      if (l) { o.locked = true; if (l.aim) o.aim = hud.aimPoint(l); }
+      if (l) { o.locked = true; if (l.aim) { o.aim = hud.aimPoint(l); o.aimDv = this.aimDvOf(l, o.aim); } }
       o.dist = (o.aim || o.pos).distanceTo(P.pos);
       out.push(o);
     };
@@ -751,7 +774,9 @@ export class Weapons {
     if (!T) { m.aim = null; m.sol = null; m.want = null; slew(m.rest); return; }
     const F = m.fc;
     F.observe(T.id, T.pos, T.vel, T.acc, dt);
-    const sol = F.solve(T.id, W.pos, W.P.vel, T.aim || null);
+    // (reckoned from the mount as it moves: the vessel's turn swings it; at the point in focus as
+    // that point moves)
+    const sol = F.solve(T.id, W.pos, this.pointVel(which, W.pos, new THREE.Vector3()), T.aim || null, T.aimDv || null);
     if (!sol) { m.aim = null; m.sol = null; m.want = null; slew(m.rest); return; }
     const dir = sol.aimDir;
     // where the guns want to point (vessel-local): a ring carriage runs that way
@@ -786,8 +811,13 @@ export class Weapons {
     m.recoil = 1;
     // the round leaves its own barrel's muzzle
     const muzzle = this.muzzleWorld(m, which, bi);
-    const round = F.fire(muzzle, W.P.vel, dir, 1 + 5 * (1 - fcc));
-    this.combat.fire({ kind, round, pos: muzzle, vel: W.P.vel, dir, owner: which === 'h8' ? g.h8 : g.flight, byPlayer: true });
+    // (aimed once more from this barrel's own muzzle, moving as the vessel carries it: the last
+    // fraction of a milliradian the servo trims)
+    const mv = this.pointVel(which, muzzle, new THREE.Vector3());
+    const s2 = F.solve(T.id, muzzle, mv, T.aim || null, T.aimDv || null);
+    const fd = s2 && s2.aimDir.angleTo(dir) < 3e-3 ? s2.aimDir : dir;
+    const round = F.fire(muzzle, mv, fd, 1 + 5 * (1 - fcc));
+    this.combat.fire({ kind, round, pos: muzzle, vel: mv, dir: fd, owner: which === 'h8' ? g.h8 : g.flight, byPlayer: true });
     this.shotFx(m, which, bi, kind);
     this.gunSound(which, kind);
   }
@@ -893,7 +923,7 @@ export class Weapons {
     const dist = (T.aim || T.pos).distanceTo(W.pos);
     if (dist > MAX_RANGE) { say('hachi_out_of_range', { d: (dist / 1000).toFixed(1) + ' km' }); return; }
     m.fc.observe(T.id, T.pos, T.vel, T.acc, 0);
-    const sol = m.fc.solve(T.id, W.pos, W.P.vel, T.aim || null);
+    const sol = m.fc.solve(T.id, W.pos, this.pointVel('h8', W.pos, new THREE.Vector3()), T.aim || null, T.aimDv || null);
     const dir = sol && sol.aimDir;
     if (!dir || dir.dot(W.n) < m.depress || this.blocked('h8', W.pos, dir, dist, T, m.fc.am.v0 * m.fc.am.life)) { say('hachi_rail_blocked'); return; }
     m.aim = dir.clone().applyQuaternion(_q.copy(W.P.quat).invert());
@@ -905,7 +935,10 @@ export class Weapons {
     h8.power.smes = Math.max(0, h8.power.smes - 900);
     const muzzle = this.muzzleWorld(m, 'h8', 0);
     const fcc = h8.circuits ? h8.circuits.fire : 1;
-    this.combat.fire({ kind: 'rail', round: m.fc.fire(muzzle, W.P.vel, dir, 1 + 5 * (1 - fcc)), pos: muzzle, vel: W.P.vel, dir, owner: h8, byPlayer: true });
+    const mv = this.pointVel('h8', muzzle, new THREE.Vector3());
+    const s2 = dir ? m.fc.solve(T.id, muzzle, mv, T.aim || null, T.aimDv || null) : null;
+    const fd = s2 && s2.aimDir.angleTo(dir) < 3e-3 ? s2.aimDir : dir;
+    this.combat.fire({ kind: 'rail', round: m.fc.fire(muzzle, mv, fd, 1 + 5 * (1 - fcc)), pos: muzzle, vel: mv, dir: fd, owner: h8, byPlayer: true });
     this.shotFx(m, 'h8', 0, 'rail');
     this.gunSound('h8', 'rail');
     // the kick goes through H8 (and B-29 when they are joined)
@@ -920,7 +953,10 @@ export class Weapons {
     if (!F || !F.c || !F.c.pos) return null;
     const c = F.c, P = this.pose('h8');
     const R = c.kind === 'drone' ? 1 : hud.radiusOf ? hud.radiusOf(c) * 0.6 : 5;
-    return { id: c.id, kind: c.kind, ref: c.ref || null, pos: c.pos, vel: c.vel || P.vel, R, name: c.short || c.name, dist: c.pos.distanceTo(P.pos) };
+    // (the point in focus on it, as an offset from its middle that turns with it: the missile goes
+    // for that point, not the middle)
+    const aimOff = F.aim && hud.aimPoint ? (out) => hud.aimPoint(F, out).sub(F.c.pos) : null;
+    return { id: c.id, kind: c.kind, ref: c.ref || null, pos: c.pos, vel: c.vel || P.vel, R, name: c.short || c.name, dist: c.pos.distanceTo(P.pos), aimOff };
   }
 
   /** launchers ready to fire */
@@ -1058,7 +1094,7 @@ export class Weapons {
     const pos = mouth.clone().applyQuaternion(P.quat).add(P.pos);
     const tgt = T.ref && T.ref.pos ? T.ref : { pos: T.pos.clone(), vel: (T.vel || P.vel).clone(), R: T.R, kind: T.kind };
     if (!tgt.kind) tgt.kind = T.kind;
-    this.combat.fire({ kind: 'missile', pos, vel: P.vel.clone().addScaledVector(out, 30), dir: out, owner: h8, target: tgt, byPlayer: true, coast: 0.3 });
+    this.combat.fire({ kind: 'missile', pos, vel: P.vel.clone().addScaledVector(out, 30), dir: out, owner: h8, target: tgt, aimOff: T.aimOff || null, byPlayer: true, coast: 0.3 });
     // the gas that throws it out, the launcher kicking down on its mounts, the hull shuddering
     if (h8.fx) {
       h8.fx.burst('gunsmoke', L.at.clone().addScaledVector(f.y, 0.4), f.y.clone(), 10, { speed: 9, spread: 0.55, size: 2.2 });

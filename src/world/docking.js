@@ -205,7 +205,7 @@ export class Docking {
    */
   undock(after = null) {
     const g = this.g;
-    if (this.lobby && this.lobby.contains(g.player.pos)) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
+    if ((this.lobby && this.lobby.contains(g.player.pos)) || this.inRing || (!g.ride && g.akamo && g.akamo.berthOn && g.akamo.inCabinShip && g.akamo.inCabinShip(g.player.pos))) { g.asphalt.say('st_dock_crew', {}, { force: true }); return false; }
     if (g.hatch.target > 0.5 || g.hatch.open > 0 || !g.hatch.sealed) {
       if (g.hatch.target > 0.5) { g.hatch.target = 0; g.audio.mech(g.hatch.o.center, 'hatch', { open: false }); }
       this.pendingUndock = { after, t: 0 };
@@ -248,6 +248,7 @@ export class Docking {
     lobby.group.updateMatrixWorld(true);
     this.cols = g.phys.addColliders(lobby.colliders);
     for (const d of lobby.doors || []) d.attach(g.phys);
+    if (lobby.terminal) lobby.terminal.attach(g);
     this.lamps = lobby.lamps;
     g.systems.lamps.push(...this.lamps);
     g.stations.dockedId = s.id;
@@ -281,6 +282,8 @@ export class Docking {
       return Object.assign({}, c, { m: new THREE.Matrix4().makeTranslation(C.x, C.y, C.z).multiply(c.m) });
     });
     this.ringCols = g.phys.addColliders(cols);
+    if (R.lift) R.lift.attach(g, C);
+    if (R.rooms) R.rooms.attach(g, C);
     this.ringLamps = R.lamps;
     g.systems.lamps.push(...R.lamps);
     // the call panel at the hub terminal, the call buttons in the ring's elevator halls
@@ -300,6 +303,8 @@ export class Docking {
     g.shipVis.root.remove(R.group);
     if (this.ringCols) for (const c of this.ringCols) g.phys.world.removeCollider(c, true);
     this.ringCols = null;
+    if (R.lift) R.lift.detach(g);
+    if (R.rooms) R.rooms.detach(g);
     g.systems.lamps = g.systems.lamps.filter((l) => !R.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && R.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     for (const t of this.ringTaps || []) g.interact.remove(t);
@@ -344,6 +349,9 @@ export class Docking {
   /** ride the spoke elevator: down into the ring (true) or up to the hub terminal (false) */
   rideRing(down) {
     const g = this.g, R = this.lobby && this.lobby.ring;
+    // (Shirasagi's first spoke has a real car, ringLift.js: the hub's panel and its hall's button call it)
+    if (R && R.lift && this.state === 'docked' && (down || R.lift.nearHall(this.ringState.pos))) { if (this.station && this.station.dmg && this.station.dmg.status === 'failed') { if (this.g.statusLine) this.g.statusLine.note('ステーションの電源が落ちています — エレベーターは動きません', 4); return; } R.lift.call(down ? 'top' : 'deck'); if (this.g.statusLine) this.g.statusLine.note(down ? 'エレベーターを呼びました — 扉が開いたら乗ってください（乗ると3秒で出発 ・ パネルをタップですぐ出発）' : 'エレベーターを呼びました — 扉が開いたら乗ってください', 6); return; }
+    if (R && R.lift && this.state === 'docked' && !down) { if (this.g.statusLine) this.g.statusLine.note('この昇降口は点検中です — 第1エレベーター（ハブ行き）をご利用ください', 4); if (this.g.audio && this.g.audio.beep) this.g.audio.beep(520, 0.12, 0.05, { direct: true }); return; }
     if (!R || this.riding || this.state !== 'docked' || g.player.state === 'dead') return;
     if (down === this.inRing) return;
     const st = this.station.dmg ? this.station.dmg.status : 'ok';
@@ -361,7 +369,7 @@ export class Docking {
     }
     setTimeout(() => {
       const pl = g.player;
-      if (this.state !== 'docked' || !this.lobby || this.lobby.ring !== R) { this.riding = false; g.hud.setFade(0); return; }
+      if (g.player && g.player.state === 'dead') { this.riding = false; return; } if (this.state !== 'docked' || !this.lobby || this.lobby.ring !== R) { this.riding = false; g.hud.setFade(0); return; }
       if (down) {
         // step out of the car in the first hall, facing along the deck
         const h = R.halls[0];
@@ -438,19 +446,22 @@ export class Docking {
     if (!ring || this._ringDetail === on) return;
     this._ringDetail = on;
     const M = this.g.stations.M;
-    ring.traverse((o) => { if (o.isMesh && (o.material === M.gold || o.material === M.windowLit || o.material === M.strobe)) o.visible = on; });
+    const lm = this.station.lm || {};     // (each station's lit materials are its own clones)
+    ring.traverse((o) => { if (o.isMesh && (o.material === M.gold || o.material === M.windowLit || o.material === M.strobe || o.material === lm.windowLit || o.material === lm.strobe)) o.visible = on; });
   }
 
   despawn() {
     const g = this.g;
     if (this.klaxon) { this.klaxon = false; g.audio.stopLoop('stKlaxon'); }
     if (!this.lobby) return;
+    if (this.lobby.life && this.station) this.lobby.life.onLeave(g, this.station);
     if (g.suits) g.suits.lobbyHatch(this.lobby, false);
     this.despawnRing();
     g.shipVis.root.remove(this.lobby.group);
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
     this.cols = null;
     for (const d of this.lobby.doors || []) d.detach(g.phys);
+    if (this.lobby.terminal) this.lobby.terminal.detach(g);
     g.systems.lamps = g.systems.lamps.filter((l) => !this.lamps.includes(l));
     for (const slot of g.systems.pool) if (slot.lamp && this.lamps.includes(slot.lamp)) { slot.lamp = null; slot.out = false; slot.light.intensity = 0; }
     this.lamps = [];
@@ -512,7 +523,7 @@ export class Docking {
       const h = this.g.hatch;
       P.t += dt;
       if (this.state !== 'docked' || h.target > 0.5) this.pendingUndock = null;      // opened again
-      else if (h.sealed) this.undock(P.after);
+      else if (h.sealed) { if (this.undock(P.after) === false) { this.pendingUndock = null; const A = this.g.akamo, ap = this.g.autopilot; if (A && A.follow) { A.follow.b29 = false; if (A.viewFrom === 'b29') A.closeView(); if (ap && A.b29Target && ap.target === A.b29Target) ap.disengage(true); } } }
       else if (P.t > 25) { this.pendingUndock = null; this.g.asphalt.say('st_dock_hatch', {}, { force: true }); }
     }
   }
@@ -666,7 +677,7 @@ export class Docking {
     for (const l of L) if (l.base0 === undefined) { l.base0 = l.intensity; l.color0 = new THREE.Color(l.color); }
     this.emT = (this.emT || 0) + dt;
     const t = this.emT;
-    const red = new THREE.Color(1, 0.12, 0.06);
+    const red = this._red || (this._red = new THREE.Color(1, 0.12, 0.06));
     L.forEach((l, i) => {
       let k = 1, col = l.color0;
       // (smooth changes only, and a rare dip: no strobing)

@@ -40,16 +40,18 @@ const TABS_B29 = [{ id: 'nav', label: 'B29 航法' }, { id: 'sys', label: 'B29 �
 
 export const H8_PAGES = {
   // ------------------------------------------------------------------ tabs
-  h8TabList() {
+  h8TabList(m) {
     const h = this.g.h8;
+    // (the shelter's screen: its own home page first, the way back from any other)
+    const home = m && m.slot && m.slot.shelter ? [{ id: 'h8sh', label: '◀ ホーム', h8: true }] : [];
     // adrift in the shelter: its own state and the radio, nothing else is left
-    if (h && h.mode === 'pod') return [{ id: 'h8shl', label: 'シェルター', h8: true }, { id: 'h8link', label: 'B-29 リンク' }];
-    return h && h.mode === 'docked' ? TABS_H8.concat(TABS_B29) : TABS_H8.concat([{ id: 'h8link', label: 'B-29 リンク' }]);
+    if (h && h.mode === 'pod') return home.concat([{ id: 'h8shl', label: 'シェルター', h8: true }, { id: 'h8link', label: 'B-29 リンク' }]);
+    return home.concat(h && h.mode === 'docked' ? TABS_H8.concat(TABS_B29) : TABS_H8.concat([{ id: 'h8link', label: 'B-29 リンク' }]));
   },
 
   /** the page an H8 screen shows (its own until a tab is picked; B-29's pages only while docked) */
   h8PageOf(m) {
-    const tabs = this.h8TabList();
+    const tabs = this.h8TabList(m);
     if (!m.page || !tabs.some((t) => t.id === m.page)) {
       if (m.page && m.page !== m.id) this.setFeed(m, false);
       m.page = m.id;
@@ -58,7 +60,7 @@ export const H8_PAGES = {
   },
 
   h8Tabs(K, m) {
-    const tabs = this.h8TabList();
+    const tabs = this.h8TabList(m);
     const w = 512 / tabs.length;
     const al = this.g.systems.alarm;
     const blink = al.active && !al.silenced && Math.floor(performance.now() / 450) % 2;
@@ -69,7 +71,7 @@ export const H8_PAGES = {
       const alarmTab = !t.h8 && t.id !== 'h8link' && blink;
       K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? (t.h8 ? 'rgba(255,170,60,0.24)' : 'rgba(95,208,255,0.22)') : alarmTab ? 'rgba(255,77,61,0.3)' : 'rgba(255,255,255,0.03)', stroke: on ? col : 'rgba(150,190,230,0.2)', r: 5 });
       K.text(t.label, i * w + w / 2, 17, { size: tabs.length > 6 ? 9 : 10.5, color: on ? '#fff' : col, align: 'center', weight: on ? 700 : 500 });
-      K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== t.id) { m.page = t.id; this.setFeed(m, false); } } });
+      K.buttons.push(Object.assign(K.textBox(t.label, i * w + w / 2, 13, tabs.length > 6 ? 9 : 10.5, on ? 700 : 500), { onTap: () => { if (m.page !== t.id) { m.page = t.id; this.setFeed(m, false); } } }));
     });
   },
 
@@ -313,6 +315,107 @@ export const H8_PAGES = {
       const pl = g.player, suitOn = pl.suit && pl.suitH8;
       K.button(220, H - 34, 160, 28, suitOn ? '宇宙服を脱ぐ' : S.locker.target > 0.5 ? '宇宙服を着る' : '宇宙服を出す', () => h.lockerTapped(), { style: 'normal', size: 11 });
     }
+  },
+
+  /**
+   * The shelter's screen, laminated on the door in front of him: its home page. The view out on the
+   * left (H8's cameras in turn; adrift, the shelter's own little camera), on the right what keeps
+   * him alive — oxygen in hours, the scrubber, the battery, the air — and who is coming; along the
+   * bottom the few things to do from here. Every page of H8's (and B-29's over the link) is one
+   * press away (H8 操作), the home page one press back.
+   */
+  draw_h8sh(K, m, H) {
+    const g = this.g, h = g.h8;
+    if (!h) return;
+    const S = h.shelter, pod = h.mode === 'pod', x = K.g, s = K.s;
+    const t = performance.now() / 1000;
+    // the page: near-black, warm, a faint glow along the top edge
+    x.fillStyle = '#05070a'; x.fillRect(0, 0, m.W, m.H);
+    const gl = x.createLinearGradient(0, 0, 0, 60 * s);
+    gl.addColorStop(0, 'rgba(255,170,70,0.10)'); gl.addColorStop(1, 'rgba(255,170,70,0)');
+    x.fillStyle = gl; x.fillRect(0, 0, m.W, 60 * s);
+    // ---- the top line: what state the shelter is in, the time
+    const st = pod ? 'H8 喪失 — 単独で漂流中' : S.busy ? '座席 移動中' : S.sealed ? '密閉 ・ 独立酸素で運用中' : '扉 開';
+    K.circle(16, 18, 4, { fill: pod ? (Math.floor(t * 2) % 2 ? COL.red : 'rgba(255,77,61,0.3)') : S.sealed ? COL.green : AMBER, stroke: null });
+    K.text('SHELTER', 27, 23, { size: 13, color: AMBER, weight: 800 });
+    K.text(st, 104, 23, { size: 12.5, color: pod ? '#ffb3a6' : '#eef4fa', weight: 600 });
+    const d = new Date(g.time);
+    K.text(`${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`, 500, 23, { size: 12, color: 'rgba(220,232,245,0.7)', align: 'right', mono: true });
+    K.line(10, 33, 502, 33, 'rgba(255,190,110,0.18)');
+    // ---- the view out (left): a window through the page to the live picture
+    m.camI = m.camI || 0;
+    const ci = ((m.camI % 4) + 4) % 4;
+    m.feedSrc = () => {
+      // (adrift: the little camera on the shelter's shell, looking back the way it came)
+      const dir = pod ? new THREE.Vector3(0.2, 0.1, 1).normalize() : CAMERAS[((m.camI % 4) + 4) % 4].dir;
+      const p = pod ? new THREE.Vector3(0.5, 1.0, 1.95) : dir.clone().multiplyScalar(H8.R + 0.8);
+      const up = Math.abs(dir.y) > 0.9 ? new THREE.Vector3(0, 0, -1) : new THREE.Vector3(0, 1, 0);
+      const local = new THREE.Matrix4().lookAt(p, p.clone().add(dir), up).setPosition(p);
+      return h.root.matrixWorld.clone().multiply(local);
+    };
+    this.feedHealth = pod ? 1 : h.hull.cams[ci];
+    const fx = 10, fy = 42, fw = 296, fh = 222;
+    this.setFeed(m, true, [fx / 512, 1 - (fy + fh) / H, fw / 512, fh / H]);
+    x.save();
+    x.globalCompositeOperation = 'destination-out';
+    x.beginPath(); x.roundRect ? x.roundRect(fx * s, fy * s, fw * s, fh * s, 10 * s) : x.rect(fx * s, fy * s, fw * s, fh * s); x.fill();
+    x.restore();
+    K.rect(fx, fy, fw, fh, { fill: null, stroke: 'rgba(255,200,130,0.22)', r: 10, lw: 1 });
+    const dead = !pod && h.hull.cams[ci] < 0.3;
+    K.rect(fx + 8, fy + fh - 28, 150, 20, { fill: 'rgba(3,5,8,0.62)', stroke: null, r: 10 });
+    K.text(pod ? '外部カメラ（後方）' : CAMERAS[ci].name + (dead ? '  映像なし' : ''), fx + 18, fy + fh - 14, { size: 10.5, color: dead ? COL.red : '#f3e6d4', weight: 600 });
+    if (Math.floor(t * 1.6) % 2) K.circle(fx + fw - 14, fy + 14, 3.5, { fill: COL.red, stroke: null });
+    if (!pod) K.buttons.push({ x: fx, y: fy, w: fw, h: fh, onTap: () => { m.camI++; } });
+    // ---- what keeps him alive (right): big numbers, thin bars
+    const X = 320, RW = 182;
+    let y = 46;
+    const gauge = (label, big, unit, v, col, warn, sub) => {
+      K.text(label, X, y + 9, { size: 10.5, color: 'rgba(210,222,236,0.72)', weight: 600 });
+      if (sub) K.text(sub, X + RW, y + 9, { size: 9.5, color: 'rgba(210,222,236,0.5)', align: 'right' });
+      K.text(big, X, y + 36, { size: 25, color: warn ? COL.red : '#f6f9fc', weight: 300, mono: true });
+      x.font = `300 ${Math.round(25 * s)}px "SF Mono","Menlo","Consolas",monospace`;
+      const bw = x.measureText(big).width / s;
+      K.text(unit, X + bw + 5, y + 36, { size: 11, color: 'rgba(210,222,236,0.6)' });
+      K.bar(X, y + 43, RW, 3, v, warn ? COL.red : col, 'rgba(255,255,255,0.07)');
+      y += 58;
+    };
+    const o2h = S.o2Hours();
+    gauge('酸素', o2h >= 10 ? '10+' : o2h.toFixed(1), '時間', o2h / 10, COL.green, o2h < 1, '独立ボンベ');
+    gauge('CO₂ 吸収剤', String(Math.round(S.lioh * 100)), '%', S.lioh, COL.cyan, S.lioh < 0.1);
+    gauge('電池', String(Math.round(S.battery * 100)), '%', S.battery, AMBER, S.battery < 0.15, pod ? '照明・画面・カメラ' : 'H8 から充電');
+    const z = g.lifeSupport.z.h8shelter;
+    if (z) {
+      const p = z.n2 + z.o2 + z.co2;
+      K.text(`内部 ${p.toFixed(0)} kPa ・ O₂ ${z.o2.toFixed(1)} ・ CO₂ ${z.co2.toFixed(2)}`, X, y + 4, { size: 9.5, color: p > 90 && z.o2 > 17 ? 'rgba(210,222,236,0.6)' : COL.red, mono: true });
+    }
+    // ---- who is coming (adrift), or the link to B-29
+    let line, col = 'rgba(210,222,236,0.75)';
+    const L = h.linkState ? h.linkState() : { ok: false, d: 0 };
+    if (pod) {
+      const ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      const R = h.rescue;
+      if (R) { const nm = R.s.name.replace('（修理基地）', ''); line = R.state === 'latched' ? `${nm}の救助艇が確保 — 曳航中` : `${nm}の救助艇 ${fmtDist(R.dist)}${R.eta > 1 ? ' ・ 約' + Math.max(1, Math.round(R.eta / 60)) + '分' : ''}`; col = COL.green; }
+      else if (coming) { line = `B-29 が回収に向かっています ・ ${fmtDist(g.flight.pos.distanceTo(h.flight.pos))}`; col = COL.green; }
+      else line = `B-29 まで ${fmtDist(g.flight.pos.distanceTo(h.flight.pos))} ・ ビーコン発信中`;
+    } else line = h.mode === 'docked' ? 'B-29 と結合中' : `B-29 ${fmtDist(L.d)} ・ ${L.ok ? 'リンク良好' : '通信圏外'}`;
+    K.text(line, fx, fy + fh + 20, { size: 11, color: col, weight: 600 });
+    // ---- what can be done from here
+    const by = H - 40, bh = 32;
+    const pl = g.player, suitOn = pl.suit && pl.suitH8;
+    const btns = [];
+    if (pod) {
+      const R = h.rescue, ap = g.autopilot, coming = ap.state !== 'off' && ap.target && ap.target.id === 'h8';
+      const busy = !!R || coming;
+      btns.push([busy ? '救助 向かっています' : '救助を要請', () => { if (!busy) h.requestRescue(); }, busy ? 'on' : 'warn']);
+      btns.push(['B-29 リンク', () => { m.page = 'h8link'; this.setFeed(m, false); }, 'normal']);
+      btns.push([suitOn ? '宇宙服を脱ぐ' : S.locker.target > 0.5 ? '宇宙服を着る' : '宇宙服を出す', () => h.lockerTapped(), 'normal']);
+    } else {
+      btns.push([S.busy ? '移動中…' : 'コックピットへ戻る', () => S.goBack(), S.busy ? 'on' : 'warn']);
+      btns.push([suitOn ? '宇宙服を脱ぐ' : S.locker.target > 0.5 ? '宇宙服を着る' : '宇宙服を出す', () => h.lockerTapped(), 'normal']);
+      btns.push(['H8 操作', () => { m.page = 'h8sys'; this.setFeed(m, false); }, 'normal']);
+    }
+    const gap = 8, bw = (492 - gap * (btns.length - 1)) / btns.length;
+    btns.forEach(([label, fn, style], i) => K.button(10 + i * (bw + gap), by, bw, bh, label, fn, { style, size: 12 }));
   },
 
   /** the shelter's small screen: one view out (H8's cameras in turn; adrift, its own camera) */

@@ -19,6 +19,7 @@ const EV_JP = {
   scratch: '擦り傷', crack: 'ひび', breach: '破損・漏れ', systems: '機能低下', battery_swap: '予備バッテリーに交換中', battery_swapped: '予備バッテリーに切替完了',
   battery_dead: 'バッテリー切れ', shutdown: 'システム停止', o2_reserve: '非常用酸素に切替', radio_dead: '通信機が故障',
   heat: '高温警告 — エンジン噴射の中', burn: '外層が焼けている',
+  assist_on: 'アシスト ON — 離すと止まる', assist_off: 'アシスト OFF — 慣性で流れる',
 };
 
 function hms(s) {
@@ -44,9 +45,10 @@ export class VisorHud {
     el.innerHTML = `<canvas></canvas>
       <div class="vz-bar">
         <button data-k="lamp">ライト</button><button data-k="visor">サンバイザー</button><button data-k="cam">カメラ</button>
-        <button data-k="call" class="red">救助要請</button><button data-k="boost">ブースター</button><button data-k="hold">自動停止</button>
+        <button data-k="call" class="red">救助要請</button><button data-k="boost">ブースター</button><button data-k="hold">アシスト</button>
       </div>
       <button class="vz-hatch">ハッチに入る</button>
+      <button class="vz-board">乗り込む</button>
       <div class="vz-call">
         <div class="vz-t">救助を呼ぶ</div>
         <button data-c="b29">B-29 を呼ぶ</button><button data-c="h8">H8 を呼ぶ</button><button data-c="station">最寄りのステーション</button><button data-c="x" class="dim">閉じる</button>
@@ -62,6 +64,7 @@ export class VisorHud {
     for (const b of el.querySelectorAll('button')) { b.addEventListener('pointerdown', stop); b.addEventListener('touchstart', stop, { passive: true }); }
     el.querySelector('.vz-bar').addEventListener('click', (e) => { const k = e.target && e.target.dataset && e.target.dataset.k; if (k) this.press(k); });
     el.querySelector('.vz-hatch').addEventListener('click', () => { if (this.s.hatchNear) this.s.evaEnter(this.s.hatchNear); });
+    el.querySelector('.vz-board').addEventListener('click', () => this.s.rescuer.board());
     el.querySelector('.vz-call').addEventListener('click', (e) => { const c = e.target && e.target.dataset && e.target.dataset.c; if (!c) return; this.callOpen(false); if (c !== 'x') this.s.call(c); });
     const camEl = el.querySelector('.vz-cam');
     camEl.addEventListener('click', (e) => {
@@ -114,7 +117,7 @@ export class VisorHud {
     else if (k === 'cam') this.camera(!this.camMode);
     else if (k === 'call') this.callOpen(!this.el.classList.contains('calling'));
     else if (k === 'boost') { s.boost = !s.boost; if (s.boost) A.mech(null, 'servo', { open: true, direct: true, gain: 0.6, pitch: 0.8 }); }
-    else if (k === 'hold') s.hold = !s.hold;
+    else if (k === 'hold') { s.hold = !s.hold; this.event(s.hold ? 'assist_on' : 'assist_off'); }
   }
 
   callOpen(on) { this.el.classList.toggle('calling', on); }
@@ -166,6 +169,14 @@ export class VisorHud {
     this.el.classList.toggle('on', show);
     this.el.classList.toggle('busy', !!s.seq);
     this.el.classList.toggle('hatch', !!s.hatchNear);
+    // the rescuer is here: the computer can take him in
+    const R = s.rescue, canBoard = !!(R && R.canBoard && R.phase === 'here');
+    this.el.classList.toggle('board', canBoard);
+    if (canBoard) { const b = this.boardBtn || (this.boardBtn = this.el.querySelector('.vz-board')); const t = `${R.canBoard} に乗り込む`; if (b.textContent !== t) b.textContent = t; }
+    // (the switches lit while they are on)
+    if (!this.btns) this.btns = Object.fromEntries([...this.el.querySelectorAll('.vz-bar button')].map((b) => [b.dataset.k, b]));
+    const on = { lamp: s.lamp, visor: s.sunVisor > 0.5, boost: s.boost, hold: s.hold, cam: this.camMode };
+    for (const [k, v] of Object.entries(on)) if (this.btns[k]) this.btns[k].classList.toggle('act', !!v);
     for (const e of this.events) e.t += dt;
     this.events = this.events.filter((e) => e.t < 8);
     // the camera's view: the lens narrows the field, the crop coarsens the picture
@@ -269,13 +280,15 @@ export class VisorHud {
     const flick = hudK < 0.6 && Math.random() > hudK + 0.25;
     const base = this.on * (flick ? 0.25 : 1) * (S.shutdown ? 0.85 : 1);
     x.globalAlpha = base;
+    // sizes in units of the view (the CSS size, not the canvas's pixels): small, steady type
+    const dpr = this.dpr || 1;
     const f = Math.min(W, H * 1.9);
-    const u = f / 900;
+    const u = dpr * Math.min(1.2, Math.max(0.78, Math.min(W / dpr, H / dpr * 1.9) / 900));
     const font = (px, w = 600) => `${w} ${Math.round(px * u)}px -apple-system, "Hiragino Sans", "Noto Sans JP", sans-serif`;
     x.textBaseline = 'middle';
     // (what has been drawn where: the markers' labels keep out of it)
     const boxes = this._boxes = [];
-    const T = (str, X, Y, align = 'left', px = 13) => {
+    const T = (str, X, Y, align = 'left', px = 11) => {
       x.textAlign = align;
       x.fillText(str, X, Y);
       const w = x.measureText(str).width;
@@ -283,85 +296,92 @@ export class VisorHud {
       boxes.push([x0 - 4, Y - px * u * 0.7, x0 + w + 4, Y + px * u * 0.7]);
     };
     // the light of the display on the glass: a soft glow round its lines
-    x.shadowColor = col(0.45); x.shadowBlur = 5 * u;
+    x.shadowColor = col(0.4); x.shadowBlur = 3 * u;
     if (S.shutdown) {
-      x.font = font(26, 700); x.fillStyle = red(0.5 + 0.5 * Math.sin(this.t * 5));
-      T('システム停止 — 受動生命維持のみ', W / 2, H * 0.3, 'center', 26);
+      x.font = font(16, 700); x.fillStyle = red(0.5 + 0.5 * Math.sin(this.t * 5));
+      T('システム停止 — 受動生命維持のみ', W / 2, H * 0.3, 'center', 16);
       this.cracks(x, S, W, H);
       x.shadowBlur = 0; x.globalAlpha = 1;
       return;
     }
-    // ---- the boot sequence's lines
+    // ---- the boot sequence's lines (in the top left corner)
     if (this.on < 1) {
-      x.font = font(16, 600); x.fillStyle = col(0.9);
-      const L = ['POWER ON', 'LIFE SUPPORT  ……  OK', `O₂ ${Math.round(S.o2 * 100)}%  …  OK`, 'SUIT PRESSURE 29.6 kPa  …  OK', 'BOOSTERS  …  ' + (S.thrustK() > 0 ? 'READY' : 'FAULT'), 'HUD READY'];
+      x.font = font(10.5, 600); x.fillStyle = col(0.85);
+      const L = ['POWER ON', 'LIFE SUPPORT … OK', `O₂ ${Math.round(S.o2 * 100)}% … OK`, 'SUIT 29.6 kPa … OK', 'BOOSTERS … ' + (S.thrustK() > 0 ? 'READY' : 'FAULT'), 'HUD READY'];
       const n = Math.floor(this.on * L.length * 1.2);
-      L.slice(0, n).forEach((l, i) => T(l, W * 0.36, H * 0.3 + i * 24 * u, 'left', 16));
+      L.slice(0, n).forEach((l, i) => T(l, W * 0.3, H * 0.3 + i * 15 * u, 'left', 10.5));
     }
-    // the side blocks lean a little, as the glass curves away round the face
-    const side = (X, Y, lean, fn) => { x.save(); x.translate(X, Y); x.transform(0.96, lean, 0, 1, 0, 0); fn(); x.restore(); };
-    // ---- left: oxygen
+    // everything in the four corners of the glass (the middle of the view stays clear); the blocks
+    // lean a little, as the glass curves away round the face
+    const side = (X, Y, lean, fn) => { x.save(); x.translate(X, Y); x.transform(0.97, lean, 0, 1, 0, 0); fn(); x.restore(); };
+    const XL = W * 0.075, XR = W * 0.925, YT = H * 0.115, YB = H * 0.8;
+    const BW = 104 * u;
+    // ---- top left: oxygen
     const o2Left = S.o2Left(pl.state === 'evaWalk' ? 0.4 : 0.15);
-    const lx = W * 0.085, ly = H * 0.3;
-    side(lx, ly, 0.045, () => {
-      x.font = font(13); x.fillStyle = col(0.75); x.textAlign = 'left';
-      x.fillText('O₂  酸素', 0, 0);
-      this.bar(x, 0, 14 * u, 150 * u, 5 * u, S.o2, S.o2 < 0.15 ? red(0.9) : col(0.9), col(0.15));
-      x.font = font(34, 700); x.fillStyle = S.o2 < 0.15 ? red(0.95) : col(0.97);
-      x.fillText(`${Math.round(S.o2 * 100)}%`, 0, 48 * u);
-      x.font = font(14); x.fillStyle = col(0.85);
-      x.fillText(`残り ${hms(o2Left)}`, 0, 80 * u);
-      x.font = font(12); x.fillStyle = col(0.7);
-      x.fillText(`非常用ボンベ ${Math.round(S.reserve * 100)}%`, 0, 102 * u);
-      x.fillText('スーツ内 29.6 kPa', 0, 120 * u);
-      if (S.leakK > 0.01) { x.fillStyle = red(0.95); x.fillText(`漏れ ×${S.leakK.toFixed(0)}`, 0, 140 * u); }
+    side(XL, YT, 0.03, () => {
+      x.textAlign = 'left';
+      x.font = font(9.5); x.fillStyle = col(0.7);
+      x.fillText('O₂ 酸素', 0, 0);
+      this.bar(x, 0, 8 * u, BW, 2.5 * u, S.o2, S.o2 < 0.15 ? red(0.9) : col(0.85), col(0.15));
+      x.font = font(17, 700); x.fillStyle = S.o2 < 0.15 ? red(0.95) : col(0.95);
+      x.fillText(`${Math.round(S.o2 * 100)}%`, 0, 24 * u);
+      const pw = x.measureText(`${Math.round(S.o2 * 100)}%`).width;
+      x.font = font(10); x.fillStyle = col(0.8);
+      x.fillText(`残り ${hms(o2Left)}`, pw + 6 * u, 25 * u);
+      x.font = font(9); x.fillStyle = col(0.62);
+      x.fillText(`非常用 ${Math.round(S.reserve * 100)}%`, 0, 39 * u);
+      if (S.leakK > 0.01) { x.fillStyle = red(0.95); x.fillText(`漏れ ×${S.leakK.toFixed(0)}`, 0, 51 * u); }
     });
-    boxes.push([lx - 6, ly - 12 * u, lx + 170 * u, ly + 150 * u]);
-    // ---- right: power and the boosters
-    const B = S.spec.battery, Pp = S.spec.propulsion;
-    const rx = W * 0.865, ry = H * 0.3;
-    side(rx, ry, -0.045, () => {
-      x.font = font(13); x.fillStyle = col(0.75); x.textAlign = 'right';
-      x.fillText('バッテリー', 0, 0);
-      this.bar(x, -150 * u, 14 * u, 150 * u, 5 * u, S.battery, S.battery < 0.15 ? red(0.9) : col(0.9), col(0.15));
-      x.font = font(34, 700); x.fillStyle = S.battery < 0.15 ? red(0.95) : col(0.97);
-      x.fillText(`${Math.round(S.battery * 100)}%`, 0, 48 * u);
-      x.font = font(14); x.fillStyle = col(0.85);
-      x.fillText(`飛行可能 ${hms(S.flightLeft())}`, 0, 80 * u);
-      x.font = font(12); x.fillStyle = col(0.7);
-      x.fillText(`予備 ${S.spares.length ? S.spares.map((b) => Math.round(b * 100) + '%').join(' ') : 'なし'}`, 0, 102 * u);
+    boxes.push([XL - 6, YT - 10 * u, XL + BW + 40 * u, YT + 58 * u]);
+    // ---- top right: power and the boosters
+    const Pp = S.spec.propulsion;
+    side(XR, YT, -0.03, () => {
+      x.textAlign = 'right';
+      x.font = font(9.5); x.fillStyle = col(0.7);
+      x.fillText('電力', 0, 0);
+      this.bar(x, -BW, 8 * u, BW, 2.5 * u, S.battery, S.battery < 0.15 ? red(0.9) : col(0.85), col(0.15));
+      x.font = font(17, 700); x.fillStyle = S.battery < 0.15 ? red(0.95) : col(0.95);
+      const bt = `${Math.round(S.battery * 100)}%`;
+      x.fillText(bt, 0, 24 * u);
+      const bw = x.measureText(bt).width;
+      x.font = font(10); x.fillStyle = col(0.8);
+      x.fillText(`飛行 ${hms(S.flightLeft())}`, -bw - 6 * u, 25 * u);
+      x.font = font(9); x.fillStyle = col(0.62);
       const bst = Pp.boosters > 1 ? `L${S.boosterL > 0.5 ? '●' : '×'} R${S.boosterR > 0.5 ? '●' : '×'}` : `${S.boosterL > 0.5 ? '●' : '×'}`;
-      x.fillText(`ブースター ${bst}  ${s.boost ? '起動' : '待機'}`, 0, 120 * u);
-      x.fillText(`最大 ${Pp.vMax} m/s`, 0, 138 * u);
-      if (S.swapT > 0) { x.fillStyle = col(0.5 + 0.5 * Math.sin(this.t * 8)); x.fillText(`予備に交換中 ${S.swapT.toFixed(0)} 秒`, 0, 158 * u); }
+      x.fillText(`予備 ${S.spares.length ? S.spares.map((b) => Math.round(b * 100) + '%').join(' ') : 'なし'} ・ ブースター ${bst}`, 0, 39 * u);
+      if (S.swapT > 0) { x.fillStyle = col(0.5 + 0.5 * Math.sin(this.t * 8)); x.fillText(`予備に交換中 ${S.swapT.toFixed(0)} 秒`, 0, 51 * u); }
     });
-    boxes.push([rx - 170 * u, ry - 12 * u, rx + 6, ry + 165 * u]);
-    // ---- top: the suit, the time
-    x.font = font(12); x.fillStyle = col(0.6);
-    const d = new Date(g.time);
-    T(`${S.spec.name}  ${S.spec.gradeJP}    ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`, W / 2, H * 0.055, 'center', 12);
-    // ---- bottom: speed, mode, the call under way
+    boxes.push([XR - BW - 60 * u, YT - 10 * u, XR + 6, YT + 58 * u]);
+    // ---- bottom right: the speed, how it is flown, the call under way, the time
     const ref = this.refVel();
-    x.font = font(30, 700); x.fillStyle = col(0.97);
-    T(`${ref.v < 10 ? ref.v.toFixed(2) : ref.v.toFixed(0)} m/s`, W / 2, H * 0.745, 'center', 30);
-    x.font = font(12); x.fillStyle = col(0.75);
-    T(`${ref.name}に対する速度   ${s.boost ? 'ブースター' : '微調整スラスター'}   ${s.hold ? '自動停止 ON' : '自動停止 OFF'}`, W / 2, H * 0.792, 'center', 12);
-    if (s.rescue) { x.fillStyle = col(0.6 + 0.4 * Math.sin(this.t * 4)); T(this.rescueText(), W / 2, H * 0.7, 'center', 12); }
-    // ---- what just happened
-    this.events.forEach((e, i) => {
-      x.font = font(15, 700);
-      x.fillStyle = e.red ? red(Math.min(1, 2 - e.t / 4)) : col(Math.min(1, 2 - e.t / 4));
-      T(e.txt, W / 2, H * 0.11 + i * 24 * u, 'center', 15);
+    side(XR, YB, 0.03, () => {
+      x.textAlign = 'right';
+      x.font = font(17, 700); x.fillStyle = col(0.95);
+      x.fillText(`${ref.v < 10 ? ref.v.toFixed(2) : ref.v.toFixed(0)} m/s`, 0, 0);
+      x.font = font(9); x.fillStyle = col(0.7);
+      x.fillText(`${ref.name}に対して ・ ${s.boost ? 'ブースター' : '微調整'} ・ ${s.hold ? 'アシスト' : '慣性飛行'}`, 0, 14 * u);
+      let yy = 27 * u;
+      if (s.rescue) { x.fillStyle = col(0.55 + 0.45 * Math.sin(this.t * 4)); x.fillText(this.rescueText(), 0, yy); yy += 12 * u; }
+      const d = new Date(g.time);
+      x.fillStyle = col(0.45);
+      x.fillText(`${S.spec.name} ・ ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')} UTC`, 0, yy);
     });
-    // ---- the suit's figure and the systems that are out (bottom left)
-    this.figure(x, S, W * 0.1, H * 0.6, f, col, red);
-    boxes.push([W * 0.1 - 6, H * 0.6 - 16 * u, W * 0.1 + 130 * u, H * 0.6 + 130 * u]);
+    boxes.push([XR - 190 * u, YB - 14 * u, XR + 6, YB + 44 * u]);
+    // ---- what just happened: under the top left block, small (red ones stand out by colour)
+    this.events.forEach((e, i) => {
+      x.font = font(10.5, 700);
+      x.fillStyle = e.red ? red(Math.min(1, 2 - e.t / 4)) : col(Math.min(1, 2 - e.t / 4));
+      T(e.txt, XL, YT + (72 + i * 15) * u, 'left', 10.5);
+    });
+    // ---- bottom left: the suit's figure and the systems that are out
+    this.figure(x, S, XL, YB - 40 * u, u * 0.62, col, red);
+    boxes.push([XL - 6, YB - 46 * u, XL + 120 * u, YB + 50 * u]);
     // ---- markers: B-29, H8 (their labels keep clear of the rest)
-    x.shadowBlur = 3 * u;
-    this.markers(x, col, f);
+    x.shadowBlur = 2 * u;
+    this.markers(x, col, f, u);
     x.shadowBlur = 0;
     // ---- the camera's frame
-    if (this.camMode) this.viewfinder(x, W, H, f, col, font);
+    if (this.camMode) this.viewfinder(x, W, H, f, col, font, u);
     // ---- cracks in the visor
     this.cracks(x, S, W, H);
     x.globalAlpha = 1;
@@ -376,24 +396,20 @@ export class VisorHud {
     return { v: this.s.relSpeed ? this.s.relSpeed() : pl.vel.length(), name: h8 ? 'H8' : 'B-29' };
   }
 
-  rescueText() {
-    const R = this.s.rescue;
-    if (!R) return '';
-    if (R.who === 'b29') return 'B-29 が接近中';
-    if (R.who === 'h8') return 'H8 が向かっています';
-    if (R.towing) return `${R.station.st.name} のタグが曳航中`;
-    return `${R.station.st.name} のタグが向かっています（あと ${hms(R.eta - R.t)}）`;
-  }
+  rescueText() { return this.s.rescuer ? this.s.rescuer.text() : ''; }
 
-  markers(x, col, f) {
+  markers(x, col, f, u = f / 900) {
     const g = this.g, cam = g.engine.camera, W = this.W, H = this.H;
     const items = [];
     const pv = g.shipVis.root.matrixWorld;
     items.push({ name: 'B-29', p: _v.set(0, 0.5, -1).applyMatrix4(pv).clone(), d: g.player.pos.length() });
     if (g.h8 && !g.h8.docked && g.h8.mode !== 'lost' && g.h8.root) items.push({ name: 'H8', p: g.h8.root.getWorldPosition(new THREE.Vector3()), d: g.h8.root.getWorldPosition(new THREE.Vector3()).distanceTo(g.engine.camera.position) });
+    // the station's rescue craft on its way
+    const tm = this.s.rescuer && this.s.rescuer.marker(g.origin);
+    if (tm) items.push(tm);
     cam.updateMatrixWorld();
     _m.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
-    x.font = `600 ${Math.round(12 * f / 900)}px -apple-system, "Hiragino Sans", sans-serif`;
+    x.font = `600 ${Math.round(10 * u)}px -apple-system, "Hiragino Sans", sans-serif`;
     for (const it of items) {
       if (it.d < 6) continue;
       const q = it.p.clone().applyMatrix4(_m);
@@ -410,15 +426,15 @@ export class VisorHud {
         x.fillStyle = col(0.8); x.beginPath(); x.moveTo(12, 0); x.lineTo(-6, -7); x.lineTo(-6, 7); x.closePath(); x.fill();
         x.restore();
       } else {
-        const r = 14 * f / 900;
+        const r = 11 * u;
         x.strokeStyle = col(0.85); x.lineWidth = 1.5;
         for (const [ax, ay] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) { x.beginPath(); x.moveTo(sx + ax * r, sy + ay * r * 0.4); x.lineTo(sx + ax * r, sy + ay * r); x.lineTo(sx + ax * r * 0.4, sy + ay * r); x.stroke(); }
       }
       // the label under it, moved on down (or up) until it is clear of what is already there
       x.fillStyle = col(0.9); x.textAlign = 'center';
       const label = `${it.name}  ${fmtD(it.d)}`;
-      const w = x.measureText(label).width, lh = 16 * f / 900;
-      let ly = sy + 26 * f / 900;
+      const w = x.measureText(label).width, lh = 14 * u;
+      let ly = sy + 21 * u;
       const hit = (yy) => (this._boxes || []).some((b) => sx + w / 2 > b[0] && sx - w / 2 < b[2] && yy + lh / 2 > b[1] && yy - lh / 2 < b[3]);
       for (let k = 0; k < 4 && hit(ly); k++) ly += (sy < H / 2 ? 1 : -1) * lh * 1.2;
       if (hit(ly)) continue;
@@ -428,8 +444,7 @@ export class VisorHud {
   }
 
   /** the suit as a little figure, each part coloured by its state; the systems that are out */
-  figure(x, S, X, Y, f, col, red) {
-    const sc = f / 900;
+  figure(x, S, X, Y, sc, col, red) {
     const c = (k) => { const hp = S.parts[k].hp; return hp > 0.75 ? col(0.75) : hp > 0.35 ? 'rgba(255,200,80,0.9)' : red(0.95); };
     x.save(); x.translate(X, Y); x.scale(sc, sc);
     x.lineWidth = 3;
@@ -439,14 +454,15 @@ export class VisorHud {
     x.strokeStyle = c('pack'); x.strokeRect(44, 15, 9, 28);
     x.strokeStyle = c('arms'); x.beginPath(); x.moveTo(18, 18); x.lineTo(8, 46); x.moveTo(42, 18); x.lineTo(52, 46); x.stroke();
     x.strokeStyle = c('legs'); x.beginPath(); x.moveTo(24, 50); x.lineTo(22, 88); x.moveTo(36, 50); x.lineTo(38, 88); x.stroke();
-    x.font = '600 12px -apple-system, "Hiragino Sans", sans-serif'; x.textAlign = 'left';
-    let y = 104;
-    for (const [k, v] of Object.entries(S.sys)) if (v < 0.5) { x.fillStyle = v < 0.15 ? red(0.95) : 'rgba(255,200,80,0.9)'; x.fillText(`${SYSTEMS_JP[k] || k} ${v < 0.15 ? '故障' : '低下'}`, 0, y); y += 16; }
-    if (S.injury > 0.15) { x.fillStyle = red(0.9); x.fillText(`負傷 ${Math.round(S.injury * 100)}%`, 0, y); }
+    x.font = '600 15px -apple-system, "Hiragino Sans", sans-serif'; x.textAlign = 'left';
+    // (the systems that are out, beside the figure)
+    let y = 8;
+    for (const [k, v] of Object.entries(S.sys)) if (v < 0.5) { x.fillStyle = v < 0.15 ? red(0.95) : 'rgba(255,200,80,0.9)'; x.fillText(`${SYSTEMS_JP[k] || k} ${v < 0.15 ? '故障' : '低下'}`, 66, y); y += 19; }
+    if (S.injury > 0.15) { x.fillStyle = red(0.9); x.fillText(`負傷 ${Math.round(S.injury * 100)}%`, 66, y); }
     x.restore();
   }
 
-  viewfinder(x, W, H, f, col, font) {
+  viewfinder(x, W, H, f, col, font, u = f / 900) {
     const s = this.s, cam = s.cam;
     const m = Math.min(W, H) * 0.08;
     x.strokeStyle = col(0.85); x.lineWidth = 2;
@@ -455,10 +471,10 @@ export class VisorHud {
       x.beginPath(); x.moveTo(X, Y + (ay ? -1 : 1) * m * 0.5); x.lineTo(X, Y); x.lineTo(X + (ax ? -1 : 1) * m * 0.5, Y); x.stroke();
     }
     x.beginPath(); x.moveTo(W / 2 - 14, H / 2); x.lineTo(W / 2 + 14, H / 2); x.moveTo(W / 2, H / 2 - 14); x.lineTo(W / 2, H / 2 + 14); x.stroke();
-    x.font = font(17, 700); x.fillStyle = col(0.95); x.textAlign = 'left';
+    x.font = font(14, 700); x.fillStyle = col(0.95); x.textAlign = 'left';
     x.fillText(`${Math.round(cam.f)} mm${cam.d > 1.01 ? `  デジタル ×${cam.d.toFixed(1)}` : ''}`, m * 1.2, m * 1.25);
-    x.font = font(12); x.fillStyle = col(0.7);
-    x.fillText(`光学 ${FOCAL[0]}–${FOCAL[1]} mm ・ デジタル ×${DIGITAL_MAX}   画角 ${cam.hfov().toFixed(1)}°`, m * 1.2, m * 1.25 + 22 * f / 900);
+    x.font = font(9.5); x.fillStyle = col(0.65);
+    x.fillText(`光学 ${FOCAL[0]}–${FOCAL[1]} mm ・ デジタル ×${DIGITAL_MAX} ・ 画角 ${cam.hfov().toFixed(1)}°`, m * 1.2, m * 1.25 + 17 * u);
     const knob = this.el.querySelector('.vz-knob');
     if (knob) knob.style.bottom = `${cam.fraction() * 100}%`;
     if (cam.flash > 0) { x.fillStyle = `rgba(255,255,255,${cam.flash * 0.6})`; x.fillRect(0, 0, W, H); }

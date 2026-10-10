@@ -19,6 +19,7 @@ void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(p
 const SCREEN_FRAG = /* glsl */`
 uniform sampler2D tUI; uniform sampler2D tFeed; uniform float uFeed; uniform vec4 uFeedRect;
 uniform float uPower; uniform float uGlitch; uniform float uTime; uniform float uBright; uniform float uGrid;
+uniform sampler2D tLum; uniform float uExpBias; uniform float uSteady;
 varying vec2 vUv;
 float h(vec2 p){ return fract(sin(dot(p, vec2(12.9898,78.233))) * 43758.5453); }
 void main(){
@@ -42,11 +43,17 @@ void main(){
   vec2 d = vUv - 0.5; c *= 1.0 - dot(d, d) * 0.35;
   if (uGlitch > 0.0) c += (h(vUv * 300.0 + uTime) - 0.5) * 0.25 * uGlitch;
   float on = uPower;
-  gl_FragColor = vec4(c * uBright * on + vec3(0.004, 0.006, 0.008), 1.0);
+  // a screen's own light: as bright to the eye whatever the eye has adapted to (the picture's
+  // exposure is undone for it, as on H8's display) — dark pages stay dark against a black sky,
+  // the text stays crisp against the sunlit Earth
+  float steady = uSteady > 0.5 ? clamp(texture2D(tLum, vec2(0.5)).r, 0.05, 3.0) / max(0.02, uExpBias * 0.34) : 1.0;
+  gl_FragColor = vec4((c * uBright * on + vec3(0.004, 0.006, 0.008)) * steady, 1.0);
 }`;
 
 /** a panel lying on a big curved screen (a section of the sphere round its centre), in the
- * panel's own frame: u across (to the right as seen from the centre), v up */
+ * panel's own frame: u across (to the right as seen from the centre), v up. outward: a film laid
+ * on the sphere's outside, seen from outside it (its face turned out, u to the right as seen from
+ * there) */
 function curvedPanel(C, frame) {
   const NU = 24, NV = 12, inv = frame.clone().invert();
   const pos = [], uv = [], idx = [];
@@ -55,11 +62,11 @@ function curvedPanel(C, frame) {
     const az = C.az0 + (C.az1 - C.az0) * i / NU, el = C.el0 + (C.el1 - C.el0) * j / NV;
     p.set(Math.sin(az) * Math.cos(el), Math.sin(el), -Math.cos(az) * Math.cos(el)).multiplyScalar(C.R).add(C.c).applyMatrix4(inv);
     pos.push(p.x, p.y, p.z);
-    uv.push(i / NU, j / NV);
+    uv.push(C.outward ? 1 - i / NU : i / NU, j / NV);
   }
   for (let j = 0; j < NV; j++) for (let i = 0; i < NU; i++) {
     const a = j * (NU + 1) + i, b = a + 1, c = a + NU + 1, e = c + 1;
-    idx.push(a, b, c, b, e, c);
+    if (C.outward) idx.push(a, c, b, b, c, e); else idx.push(a, b, c, b, e, c);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
@@ -142,6 +149,7 @@ export class Monitors {
       uniforms: {
         tUI: { value: tex }, tFeed: { value: null }, uFeed: { value: 0 }, uFeedRect: { value: new THREE.Vector4(0, 0, 1, 1) },
         uPower: { value: 1 }, uGlitch: { value: 0 }, uTime: { value: 0 }, uBright: { value: 1.6 }, uGrid: { value: 0.1 },
+        tLum: { value: null }, uExpBias: { value: 1 }, uSteady: { value: 0 },
       },
       vertexShader: SCREEN_VERT, fragmentShader: SCREEN_FRAG,
     });
@@ -153,6 +161,8 @@ export class Monitors {
     mesh.matrixAutoUpdate = false;
     mesh.layers.set(LAYER_NEAR);
     parent.add(mesh);
+    // its text drawn again at the screen's own resolution (sharp at any quality)
+    if (g.engine.crisp) g.engine.crisp.add(mesh);
     // bezel + glass (a panel on a big screen is the screen's own pixels: none)
     if (!slot.curve) {
       const bez = new THREE.Mesh(new THREE.BoxGeometry(slot.w + 0.035, slot.h + 0.035, 0.03), g.shipVis.M.plasticK);
@@ -161,7 +171,7 @@ export class Monitors {
       bez.castShadow = true; bez.receiveShadow = true;
       parent.add(bez);
     }
-    const rate = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[slot.id] || 4;
+    const rate = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4, h8sh: 6 }[slot.id] || 4;
     const m = { slot, id: slot.id, canvas, kit, tex, mat, mesh, W, H, t: Math.random(), rate, baseRate: rate, tab: 0, boot: 0 };
     m.lo = { canvas, kit, tex, W, H };
     this.list.push(m);
@@ -178,7 +188,7 @@ export class Monitors {
     const w = low2 ? 240 : low ? 320 : 480, h = low2 ? 135 : low ? 180 : 270;
     if (this.feedRT && this.feedRT.width !== w) { this.feedRT.setSize(w, h); this.feedLDR.setSize(w, h); }
     for (const m of this.list) {
-      const r = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4 }[m.id] || 4;
+      const r = { nav: 8, status: 6, cam: 3, airlock: 6, h8nav: 8, h8sys: 6, h8cam: 4, h8sh: 6 }[m.id] || 4;
       m.baseRate = low2 ? Math.max(1, Math.round(r * 0.35)) : low ? Math.max(2, Math.round(r * 0.6)) : r;
       if (m.rate < 15) m.rate = m.baseRate;
     }
@@ -270,6 +280,11 @@ export class Monitors {
       // when its own page is redrawn)
       if (m.feed && d < feedD && (inView || d < 1.5)) { feedD = d; feedWanted = true; this.feedSrc = m.feedSrc || null; }
       m.mat.uniforms.uTime.value = time % 100;
+      // (the eye's adaptation, for the screen's steady brightness)
+      const ex = g.engine.exposure && g.engine.exposure.texture;
+      m.mat.uniforms.tLum.value = ex || null;
+      m.mat.uniforms.uSteady.value = ex ? 1 : 0;
+      m.mat.uniforms.uExpBias.value = g.engine.grade.get('uExposureBias');
       if (m.slot.h8) {
         // H8's screens run on H8's power and computers (B-29's troubles do not reach them)
         m.mat.uniforms.uPower.value = g.h8 ? g.h8.screenPower() : 1;
@@ -401,7 +416,7 @@ export class Monitors {
       const on = m.page === id;
       K.rect(i * w + 1.5, 2, w - 3, 22, { fill: on ? 'rgba(95,208,255,0.22)' : 'rgba(255,255,255,0.03)', stroke: on ? COL.cyan : 'rgba(150,190,230,0.2)', r: 5 });
       K.text(label, i * w + w / 2, 17, { size: 11, color: on ? '#fff' : COL.cyan, align: 'center', weight: on ? 700 : 500 });
-      if (P.length > 1) K.buttons.push({ x: i * w, y: 0, w, h: 26, onTap: () => { if (m.page !== id) { m.page = id; this.setFeed(m, false); } } });
+      if (P.length > 1) K.buttons.push(Object.assign(K.textBox(label, i * w + w / 2, 13, 11, on ? 700 : 500), { onTap: () => { if (m.page !== id) { m.page = id; this.setFeed(m, false); } } }));
     });
     const d = formatDate(g.time);
     K.text(al.active ? (al.silenced ? '警報（消音中）' : '警 報') : `${d.date}  ${d.time}`, 504, 18, { size: al.active ? 12 : 11, color: al.active ? '#fff' : COL.text, align: 'right', mono: !al.active, weight: al.active ? 700 : 400 });
@@ -460,7 +475,14 @@ export class Monitors {
     if (g.h8) {
       if (g.h8.mode !== 'docked' && g.h8.mode !== 'lost') {
         const [hx, hy] = proj(g.h8.flight.pos);
-        if (Math.hypot(hx - cx, hy - cy) < 140) { K.circle(hx, hy, 3.5, { fill: COL.amber, stroke: null }); K.text('H8', hx + 6, hy - 5, { size: 11, color: COL.amber, weight: 700 }); }
+        if (Math.hypot(hx - cx, hy - cy) < 140) {
+          K.circle(hx, hy, 3.5, { fill: COL.amber, stroke: null });
+          // (its label where it does not run into a station's or B-29's: below, or left of the dot)
+          const clash = (lx, ly) => placed.some(([px, py]) => Math.abs(px - lx) < 70 && Math.abs(py - ly) < 14) || (Math.abs(shx + 8 - lx) < 40 && Math.abs(shy + 13 - ly) < 14);
+          let lx = hx + 6, ly = hy - 5, al = 'left';
+          if (clash(lx, ly)) { ly = hy + 14; if (clash(lx, ly)) { lx = hx - 6; ly = hy - 5; al = 'right'; } }
+          K.text('H8', lx, ly, { size: 11, color: COL.amber, weight: 700, align: al });
+        }
       }
       this.drawH8Strip(K, 8, H - 90);
     }
@@ -707,6 +729,8 @@ export class Monitors {
     const rt = g.damage.reactorTemp || 560;
     K.text('CORE', 170, 58, { size: 11, color: COL.dim }); K.bar(210, 50, 280, 9, (rt - 300) / 700, rt > 800 ? COL.red : COL.cyan);
     K.text(Math.round(rt) + ' K', 490, 80, { size: 11, color: COL.text, align: 'right', mono: true });
+    // (on a tabbed screen its tab row over the top, last: the page is never a dead end)
+    if (this._tabs) this.header(K, '状況', H);
   }
 
   draw_living(K, m, H) { this.draw_sub(K, m, H, ['状態', 'カメラ', '音楽', '照明', '扉']); }
@@ -719,7 +743,7 @@ export class Monitors {
     tabs.forEach((t, i) => {
       K.rect(i * tw + 2, 30, tw - 4, 24, { fill: m.tab === i ? 'rgba(95,208,255,0.2)' : 'rgba(255,255,255,0.03)', stroke: m.tab === i ? COL.cyan : COL.line, r: 6 });
       K.text(t, i * tw + tw / 2, 47, { size: 12, color: COL.text, align: 'center', weight: 600 });
-      K.buttons.push({ x: i * tw, y: 30, w: tw, h: 24, onTap: () => { m.tab = i; } });
+      K.buttons.push(Object.assign(K.textBox(t, i * tw + tw / 2, 43, 12, 600), { onTap: () => { m.tab = i; } }));
     });
     const tab = tabs[m.tab] || tabs[0];
     this.setFeed(m, tab === 'カメラ', [0.04, 0.06, 0.92, 0.72]);
@@ -778,7 +802,7 @@ export class Monitors {
     K.button(10, 54, 160, 40, mode === 'dep' ? '減圧中…' : '減圧', () => g.systems.airlockCycle('dep'), { style: mode === 'dep' ? 'on' : 'normal', size: 13 });
     K.button(176, 54, 160, 40, mode === 'rep' ? '加圧中…' : '加圧', () => g.systems.airlockCycle('rep'), { style: mode === 'rep' ? 'on' : 'normal', size: 13 });
     const canOpen = p < 2 && g.player.suit;
-    K.button(342, 54, 160, 40, g.hatch.target > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => g.systems.hatchTapped(), { style: g.hatch.target > 0.5 ? 'warn' : canOpen ? 'normal' : 'disabled', size: 13 });
+    K.button(342, 54, 160, 40, g.hatch.target > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => g.systems.hatchTapped(), { style: g.hatch.target > 0.5 ? 'warn' : 'normal', size: 13 });     // (the hatch itself says why it will not open)
     K.text(g.player.suit ? '宇宙服 装着' : '宇宙服 未装着', 10, H - 12, { size: 11, color: g.player.suit ? COL.green : COL.amber });
   }
 

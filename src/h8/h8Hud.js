@@ -274,10 +274,11 @@ export class H8Hud {
     if (hidden(_fwd) !== 'dead') {
       this.drawFocusFrame(ctx, fx0, fy0, fx1, fy1, this.dwellK, this.pulse, best && this.dwell.id ? best : null);
     }
-    // ---- orbit directions (small, dim)
+    // ---- the way ahead along the orbit (small, faint; the rest of the orbit's directions are left
+    // off: the display keeps out of the way of what is outside)
     if (orbit) {
       for (const [k, dir] of Object.entries(orbit)) {
-        if (!dir) continue;
+        if (!dir || k !== 'pro') continue;
         _v.copy(g.camWorld).add(origin).addScaledVector(dir, 1e7);
         proj(_v, sp);
         if (!sp.ok || sp.x < 0 || sp.x > W || sp.y < 0 || sp.y > H) continue;
@@ -285,21 +286,30 @@ export class H8Hud {
         this.drawOrbitMark(ctx, sp.x, sp.y, k);
       }
     }
-    // ---- markers on the rest
-    ctx.lineWidth = 1.4;
+    // ---- markers on the rest: the nearest few, a small diamond; a name beside only the ones worth
+    // reading (B-29, the stations, a threat, the Moon), and not where two would run together
+    ctx.lineWidth = 1.2;
     let n = 0;
-    const others = cands.filter((c) => !c.locked).sort((a, b) => a.dist - b.dist);
+    const others = cands.filter((c) => !c.locked).sort((a, b) => (b.threat ? 1 : 0) - (a.threat ? 1 : 0) || a.dist - b.dist);
+    const named = [];
     for (const c of others) {
-      if (n >= 28) break;
+      if (n >= 8) break;
       proj(c.pos, sp);
       if (!sp.ok || sp.x < -20 || sp.x > W + 20 || sp.y < -20 || sp.y > H + 20) continue;
       if (hidden(c.pos)) continue;
       n++;
       const col = c.threat ? C.red : c.kind === 'b29' ? C.amber : c.kind === 'body' ? C.white : C.dim;
       ctx.strokeStyle = col; ctx.fillStyle = col;
-      ctx.beginPath(); ctx.moveTo(sp.x, sp.y - 6); ctx.lineTo(sp.x + 6, sp.y); ctx.lineTo(sp.x, sp.y + 6); ctx.lineTo(sp.x - 6, sp.y); ctx.closePath(); ctx.stroke();
-      ctx.font = `500 11px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
-      ctx.fillText(c.short || c.name, sp.x + 10, sp.y);
+      ctx.globalAlpha = c.threat ? 1 : 0.75;
+      const r = c.threat ? 5.5 : 4;
+      ctx.beginPath(); ctx.moveTo(sp.x, sp.y - r); ctx.lineTo(sp.x + r, sp.y); ctx.lineTo(sp.x, sp.y + r); ctx.lineTo(sp.x - r, sp.y); ctx.closePath(); ctx.stroke();
+      const worth = c.threat || c.kind === 'b29' || c.kind === 'station' || c.kind === 'body';
+      if (worth && !named.some((q) => Math.abs(q[0] - sp.x) < 90 && Math.abs(q[1] - sp.y) < 16)) {
+        named.push([sp.x, sp.y]);
+        ctx.font = `500 10.5px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+        ctx.fillText(c.short || c.name, sp.x + 8, sp.y);
+      }
+      ctx.globalAlpha = 1;
     }
     // ---- the locks: a box round the whole of each
     this.boxes.length = 0;
@@ -335,10 +345,9 @@ export class H8Hud {
         }
         this.drawCard(ctx, l, x0, y0, x1, y1, W, H, col, W8);
       } else {
-        ctx.font = `600 11.5px ${FONT}`; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
-        ctx.fillText(`${c.short || c.name}  ${fmtDist(c.dist)}`, x0, y1 + 4);
+        ctx.font = `600 10.5px ${FONT}`; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'top';
+        ctx.fillText(c.short || c.name, x0, y1 + 3);
       }
-      if (l.t < 0.8 && Math.floor(l.t * 8) % 2 === 0) { ctx.font = `700 11px ${MONO}`; ctx.fillStyle = col; ctx.textAlign = 'left'; ctx.textBaseline = 'bottom'; ctx.fillText('LOCK', x0, y0 - 3); }
       ctx.globalAlpha = 1;
     }
     // ---- breaking into an escape pod: H8's computer at work
@@ -443,9 +452,9 @@ export class H8Hud {
 
   drawFocusFrame(ctx, x0, y0, x1, y1, k, pulse, acq) {
     const inset = 10 * k;
-    ctx.strokeStyle = `rgba(160,236,255,${0.42 + 0.4 * Math.max(k, pulse)})`;
-    ctx.lineWidth = 1.4 + pulse;
-    const L = 18;
+    ctx.strokeStyle = `rgba(160,236,255,${0.26 + 0.5 * Math.max(k, pulse)})`;
+    ctx.lineWidth = 1.1 + pulse;
+    const L = 13;
     const a = x0 + inset, b = y0 + inset, c = x1 - inset, d = y1 - inset;
     for (const [X, Y, sx, sy] of [[a, b, 1, 1], [c, b, -1, 1], [a, d, 1, -1], [c, d, -1, -1]]) {
       ctx.beginPath(); ctx.moveTo(X, Y + sy * L); ctx.lineTo(X, Y); ctx.lineTo(X + sx * L, Y); ctx.stroke();
@@ -456,20 +465,18 @@ export class H8Hud {
       // acquiring: a bar fills along the bottom, the name of what is being locked
       ctx.fillStyle = 'rgba(160,236,255,0.85)';
       ctx.fillRect(a, d + 5, (c - a) * k, 2.5);
-      if (acq) { ctx.font = `600 12px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(`ロック中… ${acq.short || acq.name}`, a, d + 10); }
+      if (acq) { ctx.font = `600 11px ${FONT}`; ctx.textAlign = 'left'; ctx.textBaseline = 'top'; ctx.fillText(acq.short || acq.name, a, d + 10); }
     }
     if (pulse > 0) { ctx.fillStyle = `rgba(170,245,255,${0.08 * pulse})`; ctx.fillRect(a, b, c - a, d - b); }
   }
 
   drawOrbitMark(ctx, x, y, kind) {
-    const col = kind === 'pro' || kind === 'retro' ? 'rgba(140,255,175,0.8)' : 'rgba(150,215,245,0.6)';
+    const col = kind === 'pro' || kind === 'retro' ? 'rgba(140,255,175,0.55)' : 'rgba(150,215,245,0.45)';
     ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.4;
     ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.stroke();
     if (kind === 'pro') { ctx.beginPath(); ctx.moveTo(x - 6, y); ctx.lineTo(x - 12, y); ctx.moveTo(x + 6, y); ctx.lineTo(x + 12, y); ctx.moveTo(x, y - 6); ctx.lineTo(x, y - 12); ctx.stroke(); }
     if (kind === 'retro') { ctx.beginPath(); ctx.moveTo(x - 4, y - 4); ctx.lineTo(x + 4, y + 4); ctx.moveTo(x + 4, y - 4); ctx.lineTo(x - 4, y + 4); ctx.stroke(); }
     if (kind === 'nad') { ctx.beginPath(); ctx.arc(x, y, 2, 0, Math.PI * 2); ctx.fill(); }
-    ctx.font = `500 10px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'bottom';
-    ctx.fillText({ pro: '進行', retro: '逆行', zen: '天頂', nad: '天底' }[kind], x, y - 9);
   }
 
   /** a lock out of view: an arrow at the edge of the screen toward it */
@@ -501,17 +508,18 @@ export class H8Hud {
     const c = l.c;
     const lines = [];
     const cl = c.closing || 0;
-    lines.push({ t: `${fmtDist(c.dist)}   ${Math.abs(cl) < 0.05 ? '相対 0 m/s' : (cl > 0 ? '接近 ' : '離隔 ') + Math.abs(cl).toFixed(Math.abs(cl) > 100 ? 0 : 1) + ' m/s'}`, c: C.white, mono: true });
+    lines.push({ t: `${fmtDist(c.dist)}   ${Math.abs(cl) < 0.05 ? '0 m/s' : (cl > 0 ? '接近 ' : '離隔 ') + Math.abs(cl).toFixed(Math.abs(cl) > 100 ? 0 : 1) + ' m/s'}`, c: C.white, mono: true });
     const dm = this.damageOf(c);
-    if (dm) lines.push({ t: dm.text, c: dm.k > 0.5 ? C.red : dm.k > 0.15 ? C.amber : C.green, bar: dm.k });
-    if (c.extra && c.kind !== 'rock') lines.push({ t: c.extra, c: c.threat ? C.red : C.dim });
-    if (Wp && Wp.hitChance) {
+    if (dm && (dm.k > 0.02 || c.kind === 'rock')) lines.push({ t: dm.text, c: dm.k > 0.5 ? C.red : dm.k > 0.15 ? C.amber : C.green, bar: dm.k });
+    if (c.extra && c.threat) lines.push({ t: c.extra, c: C.red });
+    // the odds of a hit: only for what H8 might have to fire at
+    if (Wp && Wp.hitChance && (c.threat || c.kind === 'drone' || c.kind === 'pod' || c.kind === 'rock')) {
       const T = Wp.targets('h8').find((x) => x.id === c.id);
       if (T) {
         const p1 = Wp.hitChance(T, 'cannon'), p2 = Wp.hitChance(T, 'rail');
         const f = (p) => (p == null ? '—' : p >= 0.995 ? '99%' : p < 0.005 ? '<1%' : Math.round(p * 100) + '%');
-        lines.push({ t: `命中見込み  25mm ${f(p1)}  レール ${f(p2)}`, c: C.cyan });
-      } else if (c.dist > 30000) lines.push({ t: '射程外（30 km 超）', c: C.dim });
+        lines.push({ t: `命中 25mm ${f(p1)} ・ レール ${f(p2)}`, c: C.cyan });
+      } else if (c.dist > 30000) lines.push({ t: '射程外', c: C.dim, small: true });
     }
     // an escape pod: how near H8's computer is to being able to break into it
     let hs = null;
@@ -531,7 +539,7 @@ export class H8Hud {
       else if (hs.far) lines.push({ t: `侵入するには ${fmtDist(HACK_RANGE)} 以内へ`, c: C.dim, small: true });
       else if (!hs.busy && hs.ready) lines.push({ t: `侵入準備 ${Math.min(HACK_FOCUS, hs.focus).toFixed(1)} / ${HACK_FOCUS} 秒`, c: C.cyan, bar: 1 - Math.min(1, hs.focus / HACK_FOCUS) });
     }
-    lines.push({ t: l.aim ? '照準：指定点（枠内をタップで変更）' : '照準：中心（枠内をタップで指定）', c: l.aim ? C.amber : C.dim, small: true });
+    if (l.aim) lines.push({ t: '照準：指定点', c: C.amber, small: true });
     ctx.font = `600 12px ${FONT}`;
     let w = ctx.measureText(`◆ ${c.name}`).width + 24;
     for (const L of lines) { ctx.font = `${L.small ? 500 : 500} ${L.small ? 10.5 : 11.5}px ${L.mono ? MONO : FONT}`; w = Math.max(w, ctx.measureText(L.t).width + 20); }

@@ -112,8 +112,8 @@ export class Player {
    */
   update(dt, input, gLocal, env) {
     if (this.state === 'dead') return;
-    // look
-    const sens = 0.0042;
+    // look (quick: a short drag turns the head a long way)
+    const sens = 0.0064;
     this.yaw -= input.lookDX * sens;
     this.pitch -= input.lookDY * sens;
     const pLim = this.state === 'seated' ? (this.seat && this.seat.gimbal ? 1.5 : 1.2) : 1.5;
@@ -237,7 +237,7 @@ export class Player {
     // crouch automatically under low ceilings
     const wantCrouch = env.lowCeiling ? 1 : 0;
     this.crouch += (wantCrouch - this.crouch) * Math.min(1, dt * 6);
-    this.setColliderHeight(this.crouch > 0.5 ? CROUCH_HH : STAND_HH);
+    this.setColliderHeight(this.crouch > 0.5 || env.tuck ? CROUCH_HH : STAND_HH);
 
     // move with collision
     const delta = this.vel.clone().multiplyScalar(dt);

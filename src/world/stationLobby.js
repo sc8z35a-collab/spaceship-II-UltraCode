@@ -5,6 +5,9 @@
 // globe, a lounge facing the big forward window, a bar with back-lit bottles and a reception desk
 // under the station's name.
 import * as THREE from 'three';
+import { buildTerminal } from './akamoTerminal.js';
+import { ShirasagiLife } from './shirasagiLife.js';
+import { buildRingLift } from './ringLift.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { Builder, rng } from '../ship/geom.js';
 import { OPENINGS } from '../ship/hullShape.js';
@@ -787,6 +790,7 @@ export function buildLobby(renderer, def) {
   if (core) doors.push(new StationDoor({ c: V(BRIDGE_DOOR.x, floorY, BRIDGE.zc), normal: 'x', w: BRIDGE_DOOR.w, h: BRIDGE_DOOR.h, depth: BRIDGE_DOOR.depth, label: 'bridge', link: ['lobby', 'atrium'] }, M));
   for (const d of doors) { d.group.traverse((o) => o.layers.set(LAYER_NEAR)); group.add(d.group); }
 
+  let terminal = null;      // Shirasagi: AKAMO's terminal (akamoTerminal.js)
   const inLobby = (p) => {
     if (p.x > 2.9 && p.x < TUNNEL.xEnd + 0.3 && Math.abs(p.z - TUNNEL.zc) < TUNNEL.hv + 0.05 && p.y > floorY - 0.3 && p.y < TUNNEL.yc + TUNNEL.hu + 0.05) return true;
     const dx = p.x - xc, dy = p.y - yc;
@@ -794,6 +798,7 @@ export function buildLobby(renderer, def) {
   };
   /** which air section of the station a point is in (null: not inside) */
   const sectionAt = (p) => {
+    if (terminal && terminal.contains(p)) return 'akamo';
     if (core && core.contains(p)) return p.x < BRIDGE_DOOR.x ? 'lobby' : 'atrium';
     if (prom.contains(p)) return p.z < PROM_DOOR.z ? 'lobby' : 'promenade';
     return inLobby(p) ? 'lobby' : null;
@@ -821,8 +826,23 @@ export function buildLobby(renderer, def) {
     ring = buildRingInterior(def, M);
     ring.group.traverse((o) => o.layers.set(LAYER_NEAR));
     ring.terminal = { button: V(CORE.x + 1.55, CORE.y - 0.12, TERMINAL.z1 - 0.12), out: V(CORE.x, CORE.y - 0.4, TERMINAL.z1 - 1.3) };
+    // Shirasagi's first spoke: a real car between the hub and the deck (ringLift.js); the terminal's
+    // car stands where the transit tube ends, so the old step-out point moves in front of it
+    ring.lift = buildRingLift(M, ring);
+    group.add(ring.lift.shipGroup);
+    b.colliders.push(...ring.lift.shipColliders);
+    ring.terminal.out = V(CORE.x, CORE.y - 0.3, TERMINAL.z1 - 2.5);
   }
-  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring };
+  if (core) {
+    terminal = buildTerminal(M, lamp);
+    terminal.group.traverse((o) => o.layers.set(LAYER_NEAR));
+    group.add(terminal.group);
+    b.colliders.push(...terminal.colliders);
+    breachSpots.akamo = terminal.breachSpots;
+  }
+  // Shirasagi: its crew on their rounds, the escape pod hatches (shirasagiLife.js)
+  const life = core ? new ShirasagiLife(M, group) : null;
+  return { group, colliders: b.colliders, lamps, globe, globeMat, contains, sectionAt, breachSpots, hasAtrium: !!core, doors, materials: M, ring, terminal, life, update: terminal ? (dt, g) => { terminal.update(dt, g); life.update(dt, g); if (ring && ring.lift) ring.lift.update(dt, g); if (ring && ring.rooms) ring.rooms.update(dt, g); } : undefined };
 }
 
 /** paint the globe with the Earth colour map once it is available */
@@ -834,11 +854,34 @@ export function setGlobeTexture(lobby, tex) {
 }
 
 /** the module's outer shell for the station model (station-local, centred on the module axis) */
-export function lobbyShellExterior(b, cx, cy, cz) {
+export function lobbyShellExterior(b, cx, cy, cz, sky = false) {
   const { R: RR, z0, z1 } = LOBBY;
   const L = z1 - z0;
   const Ro = RR + 0.35;
-  b.cyl(Ro, Ro, L + 0.6, 'hull', [cx, cy, cz], [Math.PI / 2, 0, 0], 64, true);
+  {
+    // the skin, with the mouth of B-29's docking tunnel left open (the orange collar rings it) and,
+    // at Shirasagi, the skybridge's (its glass roof joins there)
+    const nT = 160, nZ = 80, za = -(L + 0.6) / 2, zb = (L + 0.6) / 2, P = [], N = [], U = [];
+    const hole = (th, z) => {
+      const y = Ro * Math.sin(th);
+      if (Math.cos(th) < -0.8 && Math.hypot(z - 0.95, y + 1.03) < 1.28) return true;
+      return sky && Math.cos(th) > 0.85 && z > 1.88 && z < 4.72 && y > -2.2 && y < 0.92;
+    };
+    const q = (t, z) => [cx + Ro * Math.cos(t), cy + Ro * Math.sin(t), cz + z];
+    for (let i = 0; i < nT; i++) for (let j = 0; j < nZ; j++) {
+      const ta = i / nT * Math.PI * 2, tb = (i + 1) / nT * Math.PI * 2, z0 = za + (zb - za) * j / nZ, z1 = za + (zb - za) * (j + 1) / nZ;
+      if (hole((ta + tb) / 2, (z0 + z1) / 2)) continue;
+      const A = q(ta, z0), B = q(tb, z0), C = q(tb, z1), D = q(ta, z1);
+      const na = [Math.cos(ta), Math.sin(ta), 0], nb = [Math.cos(tb), Math.sin(tb), 0];
+      const u0 = ta / (Math.PI * 2), u1 = tb / (Math.PI * 2), v0 = (z0 - za) / (zb - za), v1 = (z1 - za) / (zb - za);
+      for (const [p, n, u, v] of [[A, na, u0, v0], [B, nb, u1, v0], [C, nb, u1, v1], [A, na, u0, v0], [C, nb, u1, v1], [D, na, u0, v1]]) { P.push(...p); N.push(...n); U.push(u, v); }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(P, 3));
+    g.setAttribute('normal', new THREE.Float32BufferAttribute(N, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(U, 2));
+    b.add(g, 'hull', [0, 0, 0], [0, 0, 0]);
+  }
   for (const s of [-1, 1]) {
     b.cyl(Ro, Ro * 0.86, 0.9, 'hullDark', [cx, cy, cz + s * (L / 2 + 0.75)], [Math.PI / 2, 0, 0], 64);
     b.sphere(Ro * 0.86, 'hull', [cx, cy, cz + s * (L / 2 + 1.2)], 48, [1, 1, 0.32]);

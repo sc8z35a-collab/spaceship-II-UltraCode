@@ -48,6 +48,9 @@ export const SHELTER = (() => {
     sill: 0.72, tip: 0.655,
     // the suit's niche in the starboard wall
     niche: { z0: 0.97, z1: 1.66, y0: FY - 0.13, y1: 1.1, d: 0.58 },
+    // the screen laminated on the door: its half width (rad of azimuth), its elevations (from the
+    // cockpit's middle) — a little under the eye's line (el 0.37), 0.64 x 0.4 m
+    display: { hw: 0.236, el0: 0.1, el1: 0.388 },
   };
 })();
 const BREATH = 7.4e-4;                // kPa*m^3/s of O2 one person uses (the ship's own air model)
@@ -412,8 +415,26 @@ export class H8Shelter {
       // (a plane faces +z; turned to face away from the cockpit's middle at that azimuth)
       hb.add(pg, key, at(el, az, R + 0.036), [-el, Math.PI - az, 0]);
     };
-    flat(0.26, 0.07, 'labelIn', 0.38, S.az);
     flat(0.16, 0.05, 'labelIn', -0.12, S.az);
+    // the screen's lining: a thin dark margin round where the panel is laminated on
+    {
+      const D = SHELTER.display, Rm = R + 0.038;
+      const NA = 16, NE = 6, mA = 0.012, mE = 0.012;
+      const pos = [], idx = [];
+      for (let j = 0; j <= NE; j++) for (let i = 0; i <= NA; i++) {
+        const az = S.az - D.hw - mA + (2 * (D.hw + mA)) * i / NA, el = D.el0 - mE + (D.el1 - D.el0 + 2 * mE) * j / NE;
+        pos.push(...at(el, az, Rm));
+      }
+      for (let j = 0; j < NE; j++) for (let i = 0; i < NA; i++) {
+        const a = j * (NA + 1) + i, b = a + 1, c = a + NA + 1, d = c + 1;
+        idx.push(a, c, b, b, c, d);
+      }
+      const mg = new THREE.BufferGeometry();
+      mg.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      mg.setIndex(idx);
+      mg.computeVertexNormals();
+      hb.add(mg, 'padDark');
+    }
     for (const s of [-1, 1]) for (let k = 0; k < 6; k++) {
       const el = S.el0 + 0.06 + (S.el1 - S.el0 - 0.12) * (k + 0.5) / 6;
       flat(0.01, (S.el1 - S.el0 - 0.12) / 6 * R + 0.01, 'shelterRed', el, S.az + s * (S.hw - 0.025));
@@ -422,6 +443,7 @@ export class H8Shelter {
     h.traverse((o) => { if (o.isMesh) o.layers.set(LAYER_NEAR); });
     pivot.add(liner, h);
     this.liner = [liner, h];
+    this.doorPivot = pivot;
     // adrift the display (and its sliding panel) is gone: the shelter keeps the door's inside as
     // its own front wall
     const front = new THREE.Group();
@@ -438,16 +460,23 @@ export class H8Shelter {
     this.parts = parts;
   }
 
-  /** the screens (once the monitors exist): the console — every page of H8's, B-29's over the
-   * link — and the small outside view; the shutter over the suit */
+  /** the screen (once the monitors exist): one flexible panel laminated straight onto the inside
+   * of the door in front of him, bent with it (no frame, no bezel: the door's own lining round it)
+   * — the view out, the shelter's own state and every page of H8's (B-29's over the link); the
+   * shutter over the suit */
   init(g) {
     const { X } = SHELTER;
-    const eye = SHELTER.eye;
-    const face = (p) => eye.clone().sub(p).setY(0).normalize();
-    const pC = V(-(X - 0.035), 0.5, 1.17), pS = V(-(X - 0.035), 0.86, 1.22);
-    this.console = g.monitors.addSlot({ id: 'h8sys', pos: pC, n: face(pC), up: V(0, 1, 0), w: 0.3, h: 0.19, res: 640, h8: true }, this.group, DOCK);
-    this.screen = g.monitors.addSlot({ id: 'h8shcam', pos: pS, n: face(pS), up: V(0, 1, 0), w: 0.2, h: 0.1125, res: 360, h8: true }, this.group, DOCK);
-    for (const m of [this.console, this.screen]) if (m && m.mesh) m.mesh.layers.set(LAYER_NEAR);
+    const D = SHELTER.display, S = H8.shelter;
+    // (in the door's own frame: its pivot stands at the cockpit's middle, on the floor plane)
+    const c = V(0, Cc.y, 0), Rd = R + 0.04;
+    const az0 = S.az - D.hw, az1 = S.az + D.hw, el0 = D.el0, el1 = D.el1;
+    const em = (el0 + el1) / 2;
+    const dir = V(Math.sin(S.az) * Math.cos(em), Math.sin(em), -Math.cos(S.az) * Math.cos(em));
+    const pos = dir.clone().multiplyScalar(Rd).add(c);
+    const w = 2 * D.hw * Rd * Math.cos(em), h = (el1 - el0) * Rd;
+    const pivotPF = DOCK.clone().add(V(Cc.x, 0, Cc.z));
+    this.disp = g.monitors.addSlot({ id: 'h8sh', pos, n: dir, up: V(0, 1, 0), w, h, res: 1024, h8: true, shelter: true, curve: { c, R: Rd, az0, az1, el0, el1, outward: true } }, this.doorPivot || this.group, pivotPF);
+    if (this.disp && this.disp.mesh) this.disp.mesh.layers.set(LAYER_NEAR);
     // the shutter over the suit: a tap from the seat opens it, the next puts the suit on
     const C = g.interact, N = SHELTER.niche;
     const proxy = new THREE.Mesh(new THREE.BoxGeometry(0.2, N.y1 - FY - 0.1, N.z1 - N.z0 - 0.04), C.proxyMat);
@@ -740,6 +769,10 @@ export class H8Shelter {
     this.pod.visible = pod && !inside;
     if (this.liner) for (const l of this.liner) l.visible = !pod;
     if (this.podDoor) this.podDoor.visible = pod;
+    if (this.disp && this.disp.mesh) {
+      const host = pod ? this.podDoor : this.doorPivot;
+      if (host && this.disp.mesh.parent !== host) host.add(this.disp.mesh);
+    }
     const lit = this.battery > 0 && (this.occupied || this.door > 0.01 || pod || this.state !== 'home');
     M.shelterLamp.emissiveIntensity = lit ? 0.9 : 0;
     M.shelterRed.emissiveIntensity = lit ? 1.4 + (pod ? 0.8 * Math.sin(performance.now() / 300) : 0) : 0;

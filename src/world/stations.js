@@ -2,6 +2,7 @@
 // network of 5G relay base stations on circular orbits, rendered as 3D models up close and
 // blinking lights far away.
 import * as THREE from 'three';
+import { shirasagiCore, buildAkamoExterior } from './akamoBase.js';
 import { MU_EARTH, R_EARTH, OMEGA_EARTH, gmst, latLonToUnit, ecefToEci } from '../core/astro.js';
 import { Builder, rng } from '../ship/geom.js';
 import { assignLayers, LAYER_FAR, LAYER_MID, LAYER_NEAR, setLayersDeep } from '../core/layers.js';
@@ -284,14 +285,16 @@ function hubModel(def, M) {
   box([0, 0, 0], [2.7, 2.7, 116]);
   // Shirasagi: the pressurised transit tube inside the aft truss, from the core to the ring hub
   if (def.id === 'shirasagi') {
-    b.cyl(1.55, 1.55, 38 - coreR, 'hull', [0, 0, (coreR + 38) / 2], [Math.PI / 2, 0, 0], 24);
+    b.cyl(1.55, 1.55, 38 - coreR, 'hull', [0, 0, (coreR + 38) / 2], [Math.PI / 2, 0, 0], 24, true);
     for (let z = coreR + 3; z < 36; z += 4) b.torus(1.6, 0.08, 'gold', [0, 0, z], [0, 0, 0], 24);
-    b.cyl(2.45, 2.45, 3.4, 'hullDark', [0, 0, 38.1], [Math.PI / 2, 0, 0], 32);
+    b.cyl(2.45, 2.45, 3.4, 'hullDark', [0, 0, 38.1], [Math.PI / 2, 0, 0], 32, true);
+    b.add(new THREE.RingGeometry(1.55, 2.45, 32), 'hullDark', [0, 0, 36.4], [0, Math.PI, 0]);
   }
   // ---- core: big sphere with window bands, node modules on the spine
-  b.sphere(coreR, 'hull', [0, 0, 0], 48);
+  if (def.id === 'shirasagi') shirasagiCore(b, coreR, DOCK_AT);
+  else b.sphere(coreR, 'hull', [0, 0, 0], 48);
   for (const y of [-0.35, 0.35]) b.torus(coreR * Math.cos(y) + 0.05, 0.16, 'gold', [0, coreR * Math.sin(y), 0], [Math.PI / 2, 0, 0], 64);
-  for (let k = 0; k < 48; k++) {
+  for (let k = 0; k < (def.id === 'shirasagi' ? 0 : 48); k++) {
     const a = k / 48 * Math.PI * 2;
     for (const y of [-0.15, 0.15]) {
       const rr = coreR * Math.cos(y) + 0.02;
@@ -299,7 +302,7 @@ function hubModel(def, M) {
     }
   }
   sph([0, 0, 0], coreR + 0.4);
-  for (const z of [-24, 22]) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
+  for (const z of [-24, 22]) { if (def.id !== 'shirasagi' || z < 0) { b.push([0, 0, z]); module(b, 4.2, 18, 'hull', 8); b.pop(); } cap([0, 0, z - 11], [0, 0, z + 11], 4.6); }
   // ---- elevator terminal: the two ribbons run up through this tower (station y, at x = -+4.2);
   // at both ends a berth deck where the climbers dock (the berth gantries, traversers and
   // bridges are the elevator's own: see elevatorPort.js)
@@ -326,7 +329,7 @@ function hubModel(def, M) {
   // ---- the grand lobby (B-29's berth) and the service tube to the core under its floor
   const L = LOBBY_AT;
   const shell = new Builder();
-  lobbyShellExterior(shell, L.x, L.y, L.z);
+  lobbyShellExterior(shell, L.x, L.y, L.z, def.id === 'shirasagi');
   const RO = LOBBY.R + 0.36;
   const shellPt = (th, z) => [L.x + RO * Math.cos(th), L.y + RO * Math.sin(th), L.z + z];
   // warm window glows where the lobby has windows (same angles as inside)
@@ -340,8 +343,10 @@ function hubModel(def, M) {
   shell.torus(1.45, 0.16, 'hullOrange', [L.x - Math.sqrt(RO * RO - 1.03 * 1.03), L.y - 1.03, L.z + 0.95], [0, Math.PI / 2, 0], 32);
   // the promenade wing behind the lobby (same frame as the lobby: ship-local + DOCK_AT)
   const pe = promenadeShellExterior(shell, PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, DOCK_AT.z);
-  if (def.id === 'shirasagi') atriumExterior(shell, DOCK_AT);
+  const shellB = new Builder();
+  if (def.id === 'shirasagi') atriumExterior(shellB, DOCK_AT);
   const shellGroup = shell.build(M, { castShadow: false });
+  const bridgeShell = def.id === 'shirasagi' ? shellB.build(M, { castShadow: false }) : null;
   P.push({ type: 'cyl', a: new THREE.Vector3(L.x, L.y, L.z - 12.6), b: new THREE.Vector3(L.x, L.y, L.z + 12.6), r: RO + 0.08 });
   P.push({ type: 'cyl', a: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.za), b: new THREE.Vector3(PROM.x + DOCK_AT.x, PROM.y + DOCK_AT.y, pe.zb + PROM.R), r: pe.Ro + 0.05 });
   {
@@ -357,7 +362,7 @@ function hubModel(def, M) {
   // ---- garden dome at the bow
   const GD = [0, 0, -78];
   b.sphere(14, 'dome', GD, 48);
-  b.sphere(12.6, 'garden', [GD[0], GD[1] - 6.5, GD[2]], 40, [1, 0.42, 1]);
+  b.sphere(12.6, 'garden', [GD[0], GD[1] - 6.5, GD[2]], 40, [1, 0.14, 1]);
   for (let k = 0; k < 7; k++) b.torus(14.02, 0.12, 'metal', GD, [0, k / 7 * Math.PI, 0], 64);
   b.torus(14.05, 0.3, 'gold', GD, [Math.PI / 2, 0, 0], 64);
   for (let k = 0; k < 24; k++) { const a = R() * Math.PI * 2, r = R() * 9; b.sphere(0.35 + R() * 0.3, 'gardenLamp', [GD[0] + Math.cos(a) * r, GD[1] - 1.5 + R() * 2, GD[2] + Math.sin(a) * r], 8); }
@@ -393,17 +398,19 @@ function hubModel(def, M) {
       box([x, 0, z + (k ? 9 : -9)], [16.2, 0.4, 7.7]);
     }
   }
-  for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); }
+  for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); for (const zz of [65.5, 74.5]) b.box(0.5, 6, 0.5, 'radiatorPanel', [0, sy * 3.5, zz], null, 0.02); }
   // ---- H8's port on the forward truss
   h8Collar(b, 0, H8_PORT_HUB.y, H8_PORT_HUB.z);
   // ---- antennas, dishes, docked visitor, nav lights, strobes
   dish(b, 5.0, [6, 7, -100], [0, 0, -0.6]);
   dish(b, 3.0, [-6, 6, -96], [0.3, 0, 0.7]);
   box([0, 6, -98], [9, 5, 5]);
-  b.cyl(1.6, 1.6, 7, 'hull', [0, coreR + 4.2, -6], null, 24);
-  b.cyl(0.45, 1.6, 2.4, 'hull', [0, coreR + 8.9, -6], null, 24);
-  b.box(7.5, 2.2, 0.15, 'solarPanel', [0, coreR + 4.2, -6], null, 0);
-  cap([0, coreR, -6], [0, coreR + 10, -6], 2.2);
+  if (def.id !== 'shirasagi') {      // (Shirasagi's stands on AKAMO's berth drum instead)
+    b.cyl(1.6, 1.6, 7, 'hull', [0, coreR + 4.2, -6], null, 24);
+    b.cyl(0.45, 1.6, 2.4, 'hull', [0, coreR + 8.9, -6], null, 24);
+    b.box(7.5, 2.2, 0.15, 'solarPanel', [0, coreR + 4.2, -6], null, 0);
+    cap([0, coreR, -6], [0, coreR + 10, -6], 2.2);
+  }
   for (const z of [115, -115]) for (const [x, y] of [[2.4, 2.4], [-2.4, -2.4]]) { b.sphere(0.5, 'strobe', [x, y, z], 10); strobes.push([x, y, z]); }
   b.sphere(0.45, 'navR', [-2.4, 2.4, 115], 10);
   b.sphere(0.45, 'navG', [2.4, -2.4, 115], 10);
@@ -417,12 +424,22 @@ function hubModel(def, M) {
   b.pop();
   const g = b.build(Object.assign({}, M, { nameSign: sign }), { castShadow: false });
   g.add(shellGroup);
+  if (bridgeShell) { g.add(bridgeShell); g.userData.bridgeShell = bridgeShell; }
+  // Shirasagi: AKAMO's tower and berth drum, and the station grown round it (akamoBase.js)
+  if (def.id === 'shirasagi') {
+    const ak = buildAkamoExterior(M, DOCK_AT, { cap, sph, box });
+    g.add(ak.group);
+    g.userData.ring2 = ak.ring2;
+    g.userData.akBand = ak.band;
+    g.userData.akPods = ak.pods;
+  }
   // ---- rotating habitat ring
   const rb = new Builder();
   rb.torus(58, 3.6, 'hull', [0, 0, 0], [0, 0, 0], 128);
   rb.torus(58, 3.7, 'gold', [0, 0, 2.2], [0, 0, 0], 128);
   rb.torus(58, 3.7, 'gold', [0, 0, -2.2], [0, 0, 0], 128);
-  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2; rb.cyl(1.0, 1.0, 50, 'hullDark', [Math.cos(a) * 29, Math.sin(a) * 29, 0], [0, 0, a - Math.PI / 2], 12); }
+  // (the spokes stand over the ring's spoke halls, 7.5 degrees on from its x axis)
+  for (let k = 0; k < 6; k++) { const a = k / 6 * Math.PI * 2 + Math.PI / 24; rb.cyl(1.0, 1.0, 50, 'hullDark', [Math.cos(a) * 29, Math.sin(a) * 29, 0], [0, 0, a - Math.PI / 2], 12); }
   rb.cyl(5.2, 5.2, 8, 'hull', [0, 0, 0], [Math.PI / 2, 0, 0], 32);
   for (let k = 0; k < 180; k++) {
     const a = k / 180 * Math.PI * 2;
@@ -435,7 +452,7 @@ function hubModel(def, M) {
   for (let k = 0; k < 28; k++) { const a = k / 28 * Math.PI * 2; sph([Math.cos(a) * 58, Math.sin(a) * 58, 44], 4.3); }
   g.userData.ring = ring;
   g.userData.strobes = strobes;
-  g.userData.radius = 150;
+  g.userData.radius = def.id === 'shirasagi' ? 240 : 150;
   g.userData.proxies = P;
   g.userData.lobbyShell = shellGroup;
   g.userData.hub = true;
@@ -634,6 +651,8 @@ export class Stations {
         s.model.matrixWorld.copy(s.model.matrix);
         const shell = s.model.userData.lobbyShell;
         if (shell) shell.visible = this.shellHiddenFor !== s.id;
+        const bsh = s.model.userData.bridgeShell;
+        if (bsh) bsh.visible = this.bridgeHiddenFor !== s.id;
         // the Origin: its port's cover while no ship lies in it; its robots at work up close
         const cov = s.model.userData.portCover;
         if (cov) cov.visible = this.dockedId !== s.id;
@@ -648,6 +667,12 @@ export class Stations {
         // (about half a g on the deck: 0.28 rad/s at 60 m; the ring B-29 is docked to is turned by
         // the docking, together with its walkable inside)
         if (ring && !s.ringDriven) { ring.rotation.z += dt * 0.28 * s.ringK; ring.updateMatrix(); }
+        // (Shirasagi's second ring turns the other way; the AKAMO shaft's outside band gives way to
+        // the platform inside while B-29 is docked)
+        const ring2 = s.model.userData.ring2;
+        if (ring2) { ring2.rotation.z -= dt * 0.28 * s.ringK; ring2.updateMatrix(); }
+        if (s.model.userData.akBand) s.model.userData.akBand.visible = this.dockedId !== s.id;
+        if (s.model.userData.akPods) s.model.userData.akPods.visible = !(s.dmg && s.dmg.podsOut);
         s.model.updateMatrixWorld(true);
         const R = s.model.userData.radius || 70 * s.size;
         s.model.traverse((o) => { if (o.isMesh) assignLayers(o, Math.max(0, d - R), d + R); });

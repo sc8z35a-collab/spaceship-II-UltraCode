@@ -244,7 +244,10 @@ export class EscapePods {
     const lamps = new THREE.InstancedMesh(lg, this.portMats.lamp, ports.length * 2);
     ports.forEach((pt, i) => {
       const r = POD_GRADES[pt.grade].R * 1.12;
-      const q = new THREE.Quaternion().setFromUnitVectors(UP, pt.n);
+      // (a defined roll: the cover's lettering upright, its top toward the station's up)
+      const up0 = Math.abs(pt.n.y) < 0.9 ? V(0, 1, 0) : V(0, 0, -1);
+      const xc = up0.clone().addScaledVector(pt.n, -up0.dot(pt.n)).normalize(), zc = new THREE.Vector3().crossVectors(xc, pt.n);
+      const q = new THREE.Quaternion().setFromRotationMatrix(new THREE.Matrix4().makeBasis(xc, pt.n, zc));
       covers.setMatrixAt(i, _m.compose(pt.p.clone().addScaledVector(pt.n, 0.085), q, V(r, 1, r)));
       // (the lamps beside the ring, across from each other)
       const side = V(1, 0, 0).applyQuaternion(q);
@@ -657,6 +660,8 @@ export class EscapePods {
     p.w.set(0, 0, 0);
     this.look.yaw = 0; this.look.pitch = 0;
     this.switchT = 0;
+    // (its cabin built now, so the very first piloted frame already looks out of it)
+    if (!p.model || p.level !== QUALITY.level) this.buildModel(p);
     if (A.ready) { A.beep(1320, 0.08, 0.06, { direct: true }); A.beep(1760, 0.12, 0.06, { direct: true, when: 0.1 }); A.beep(2640, 0.22, 0.05, { direct: true, when: 0.22 }); }
     if (g.h8) g.h8.say('hachi_hack_done', { n: p.label }, { force: true });
   }
@@ -729,7 +734,18 @@ export class EscapePods {
       setTimeout(() => {
         if (!p.alive || this.remote !== p || p.ammo <= 0) return;
         const at = this.muzzle(p, new THREE.Vector3());
-        g.combat.fire({ kind: 'pd', pos: at, vel: p.vel, dir: new THREE.Vector3(0, 0, -1).applyQuaternion(p.q), owner: p, byPlayer: true, disp: 1.2 });
+        // (H8's focus ahead: the gun's gimbal leads it, reckoned against the pod's own motion; a
+        // target beyond its 20 degrees, it fires straight ahead)
+        const nose = new THREE.Vector3(0, 0, -1).applyQuaternion(p.q);
+        let dir = nose;
+        const T = g.weapons && g.weapons.focusTarget ? g.weapons.focusTarget() : null;
+        if (T && p.fc && T.ref !== p && T.pos) {
+          const aim = T.aimOff ? T.aimOff(new THREE.Vector3()).add(T.pos) : T.pos.clone();
+          p.fc.observe('rf', aim, T.vel || p.vel, null, 0.125);
+          const sol = p.fc.solve('rf', at, p.vel, aim);
+          if (sol && sol.aimDir.angleTo(nose) < 0.35) dir = sol.aimDir;
+        }
+        g.combat.fire({ kind: 'pd', round: p.fc ? p.fc.fire(at, p.vel, dir, 1.2) : undefined, pos: at, vel: p.vel, dir, owner: p, byPlayer: true, disp: 1.2 });
         p.ammo--;
         if (g.audio.ready) g.audio.beep(150, 0.05, 0.07, { direct: true, type: 'sawtooth' });
       }, i * 125);
@@ -763,8 +779,7 @@ export class EscapePods {
     }
     if (!this.list.length) { this.far.visible = false; this.drawRemote(); return; }
     const cam = g.engine.camera;
-    const H = g.engine.renderer.domElement.height;
-    const pxK = H / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const pxK = g.engine.pxPerRad(cam);
     this.fMat.uniforms.uScale.value = pxK;
     let nf = 0, builds = 0;
     for (const p of this.list) {

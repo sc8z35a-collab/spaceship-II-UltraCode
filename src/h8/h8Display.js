@@ -318,6 +318,18 @@ vec4 tabOne(sampler2D tex, vec3 u, vec3 c, vec3 ex, vec3 ey, vec4 R, float a){
 void main(){
   // the line of sight through this point: what is seen here lies that way
   vec3 d = normalize(vP - uEye);
+  // the tabs, in the display's own pixels
+  vec3 u = normalize(vP - uTabE);
+  vec4 t0 = tabOne(tTab0, u, uTabC[0], uTabX[0], uTabY[0], uTabR[0], uTabA[0]);
+  vec4 t1 = tabOne(tTab1, u, uTabC[1], uTabX[1], uTabY[1], uTabR[1], uTabA[1]);
+  vec4 t2 = tabOne(tTab2, u, uTabC[2], uTabX[2], uTabY[2], uTabR[2], uTabA[2]);
+  vec4 t3 = tabOne(tTab3, u, uTabC[3], uTabX[3], uTabY[3], uTabR[3], uTabA[3]);
+  vec3 TP = vec3(0.0); float TA = 0.0;
+  over(TP, TA, t0.rgb, t0.a); over(TP, TA, t1.rgb, t1.a); over(TP, TA, t2.rgb, t2.a); over(TP, TA, t3.rgb, t3.a);
+#ifdef CRISP
+  // drawn again at the screen's own resolution (crisp.js): the tabs alone, and what lies over them
+  if (TA <= 0.002) discard;
+#endif
   // (the glass is not magnified with the cameras' picture: its seams stay, a little fainter over a
   // magnified picture)
   float zoomFade = 1.0 - 0.5 * smoothstep(1.4, 3.0, uZoom);
@@ -330,7 +342,7 @@ void main(){
 #endif
   vec2 pan = floor(g);
   vec2 fg = fract(g) - 0.5;
-  float bez = max(aline(fg.x, 1.3), aline(fg.y, 1.3)) * zoomFade;
+  float bez = max(aline(fg.x, 1.0), aline(fg.y, 1.0)) * zoomFade;
   // a screen pixel's angle as seen from the cockpit's middle (what a fine line is drawn at)
   float pxa = clamp(length(fwidth(n)), 1e-5, 0.02);
   float bootK = uPower * 1.15 - dhs(pan) * 0.9;
@@ -339,20 +351,11 @@ void main(){
   // (bright text against the sun, not blinding in the dark)
   float lum = texture2D(tLum, vec2(0.5)).r;
   float gain = uTabK * clamp(lum, 0.05, 3.0) / max(0.02, uExpBias * 0.34);
-  // horizon and pitch ladder, seen from the eye
+  // the horizon alone, a fine faint line seen from the eye (no ladder of rungs: the display keeps
+  // out of the way of what is outside)
   float s = dot(d, uUp);
-  vec3 e1 = normalize(cross(uUp, abs(uUp.y) < 0.9 ? vec3(0.0, 1.0, 0.0) : vec3(1.0, 0.0, 0.0)));
-  vec3 e2 = cross(uUp, e1);
-  float az = atan(dot(d, e2), dot(d, e1));
   float el = asin(clamp(s, -1.0, 1.0)) * 57.2958;
-  float lad = aline(el, 1.6) * 0.75;
-  for (int k = 1; k <= 3; k++){
-    float a = k == 1 ? 10.0 : k == 2 ? 30.0 : 60.0;
-    float up = aline(el - a, 1.0);
-    float dn = aline(el + a, 1.0) * step(0.5, fract(az * 18.0 / 3.14159));
-    lad = max(lad, (up + dn) * 0.38);
-  }
-  lad *= uLadder * mix(0.35, 1.0, zoomFade);
+  float lad = aline(el, 1.1) * 0.42 * uLadder * mix(0.35, 1.0, zoomFade);
   // the parts
   vec3 cc; float ca, cdead;
   camFx(d, cc, ca, cdead);
@@ -360,21 +363,18 @@ void main(){
   damageFx(n, pxa, d, gain, lP, lA, gP, gA);
   // ---- back to front
   vec3 P = vec3(0.0); float A = 0.0;
+#ifdef CRISP
+  if (cdead > 0.5) discard;
+  over(P, A, min(TP / TA * gain, vec3(0.97)), TA * on);
+#else
   over(P, A, vec3(0.0), mix(1.0, 0.035, on));            // its own film (black while off)
   if (cdead > 0.5) over(P, A, cc, on);                   // the camera gone: black (its breakdown)
   else {
     over(P, A, cc, ca * on);
     over(P, A, vec3(0.5, 0.9, 1.0) * gain * 0.6, lad * 0.8 * on * (1.0 - ca));
-    // the tabs, in the display's own pixels
-    vec3 u = normalize(vP - uTabE);
-    vec4 t0 = tabOne(tTab0, u, uTabC[0], uTabX[0], uTabY[0], uTabR[0], uTabA[0]);
-    vec4 t1 = tabOne(tTab1, u, uTabC[1], uTabX[1], uTabY[1], uTabR[1], uTabA[1]);
-    vec4 t2 = tabOne(tTab2, u, uTabC[2], uTabX[2], uTabY[2], uTabR[2], uTabA[2]);
-    vec4 t3 = tabOne(tTab3, u, uTabC[3], uTabX[3], uTabY[3], uTabR[3], uTabA[3]);
-    vec3 TP = vec3(0.0); float TA = 0.0;
-    over(TP, TA, t0.rgb, t0.a); over(TP, TA, t1.rgb, t1.a); over(TP, TA, t2.rgb, t2.a); over(TP, TA, t3.rgb, t3.a);
     if (TA > 0.002) over(P, A, min(TP / TA * gain, vec3(0.97)), TA * on);
   }
+#endif
   // the damage over all it shows
   overP(P, A, lP * on, lA * on);
   // the whole display worn by H8's damage: clouded, unsteady, red creeping in all round (pulsing
@@ -396,8 +396,9 @@ void main(){
     float gb = step(1.0 - 0.35 * uGlitch, dhs(vec2(floor(asin(clamp(n.y, -1.0, 1.0)) * 120.0), floor(uTime * 24.0))));
     over(P, A, vec3(0.9, 0.18, 0.12) * gain, gb * 0.6 * uGlitch);
   }
-  // the seams between the panels, the cracked glass over all of it
-  over(P, A, vec3(0.012), bez * mix(0.75, 0.45, on));
+  // the seams between the panels (plain while it is off; hairlines, hardly there, while it shows
+  // the outside), the cracked glass over all of it
+  over(P, A, vec3(0.012), bez * mix(0.75, 0.13, on));
   overP(P, A, gP, gA);
   // a booting panel: a brief edge glow as it comes up
   P += vec3(0.4, 0.7, 1.0) * smoothstep(0.08, 0.0, abs(bootK - 0.04)) * (1.0 - step(0.999, uPower)) * 0.6;

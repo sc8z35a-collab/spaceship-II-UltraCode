@@ -239,16 +239,14 @@ export class H8Zoom {
     if (v.hud && v.hud.outl) v.hud.constructor.clipOut(ctx, v.hud.outl, W, H);
     const col = dig ? 'rgba(255,196,110,0.9)' : 'rgba(225,240,255,0.88)';
     ctx.strokeStyle = col; ctx.fillStyle = col; ctx.lineWidth = 1.2;
-    // the frame's corners and a faint thirds grid
+    // the frame's corners (no grid: the display keeps out of the way of the picture)
     const m = Math.min(W, H) * 0.05;
+    ctx.globalAlpha = 0.6;
     for (const [sx, sy] of [[-1, -1], [1, -1], [-1, 1], [1, 1]]) {
       const x = sx < 0 ? m : W - m, y = sy < 0 ? m : H - m;
-      ctx.beginPath(); ctx.moveTo(x, y + sy * -22); ctx.lineTo(x, y); ctx.lineTo(x + sx * -22, y); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x, y + sy * -16); ctx.lineTo(x, y); ctx.lineTo(x + sx * -16, y); ctx.stroke();
     }
-    ctx.strokeStyle = 'rgba(225,240,255,0.12)';
-    ctx.beginPath();
-    for (const k of [1 / 3, 2 / 3]) { ctx.moveTo(W * k, m); ctx.lineTo(W * k, H - m); ctx.moveTo(m, H * k); ctx.lineTo(W - m, H * k); }
-    ctx.stroke();
+    ctx.globalAlpha = 1;
     // the level: the horizon's tilt in the view
     const up = g.flight.pos.clone().normalize();
     const vq = g.viewQuat || g.camQuat;
@@ -262,39 +260,25 @@ export class H8Zoom {
     // read-outs, top left: magnification, focal length, optical / digital
     ctx.textBaseline = 'alphabetic'; ctx.textAlign = 'left';
     ctx.fillStyle = col;
-    ctx.font = `700 22px ${MONO}`;
-    const zs = `×${this.z < 10 ? this.z.toFixed(1) : this.z < 100 ? this.z.toFixed(1) : this.z.toFixed(0)}`;
-    ctx.fillText(zs, m + 8, m + 30);
+    // top left: the magnification, and beside it optical or digital and the focal length (small)
+    ctx.font = `700 19px ${MONO}`;
+    const zs = `×${this.z < 100 ? this.z.toFixed(1) : this.z.toFixed(0)}`;
+    ctx.fillText(zs, m + 8, m + 26);
     const zw = ctx.measureText(zs).width;
-    ctx.font = `600 11px ${FONT}`;
-    ctx.fillStyle = dig ? 'rgba(255,196,110,0.95)' : 'rgba(130,232,255,0.95)';
-    ctx.fillText(dig ? 'AIデジタル' : '光学', m + 14 + zw, m + 18);
-    ctx.fillStyle = col;
-    ctx.font = `500 11px ${MONO}`;
-    ctx.fillText(`${Math.round(this.focal()).toLocaleString()} mm`, m + 14 + zw, m + 31);
-    ctx.font = `500 11px ${MONO}`;
-    ctx.fillText(`光学 ×${this.optical.toFixed(1)}${dig ? `  デジタル ×${this.digital.toFixed(1)}` : ''}`, m + 8, m + 48);
-    // exposure, bottom left (sunlit space is "sunny 16"; the night side, earthshine)
-    const sc = g.space && g.space.sunColor;
-    const lit = sc ? Math.min(1, (sc.r + sc.g + sc.b) / 3) : 1;
-    const ev = 8 + 7 * lit;
-    const N = this.fNumber();
-    const t = (N * N) / Math.pow(2, ev - 2);
-    const sh = t >= 1 ? `${t.toFixed(1)}"` : `1/${Math.round(1 / Math.max(1e-5, t))}`;
-    ctx.fillText(`${sh}   F${N.toFixed(1)}   ISO ${dig ? 800 : 200}   IS ON`, m + 8, H - m - 34);
-    // top right: follow, the target, the photos taken
+    ctx.font = `600 10px ${FONT}`;
+    ctx.fillStyle = dig ? 'rgba(255,196,110,0.9)' : 'rgba(130,232,255,0.85)';
+    ctx.fillText(`${dig ? 'AIデジタル' : '光学'}  ${Math.round(this.focal()).toLocaleString()} mm`, m + 14 + zw, m + 25);
+    // top right: what it follows or focuses on (one line)
     ctx.textAlign = 'right';
-    const P = g.photos;
-    ctx.fillText(`撮影 ${P ? P.count : 0} 枚`, W - m - 8, m + 18);
+    ctx.font = `500 10.5px ${FONT}`;
     const H8h = v.hud, F = H8h && H8h.primary();
     if (this.follow && this.target) {
-      ctx.fillStyle = 'rgba(120,255,170,0.95)';
-      ctx.fillText(`● 自動追従  ${this.target.short || this.target.name}`, W - m - 8, m + 34);
+      ctx.fillStyle = 'rgba(120,255,170,0.9)';
+      ctx.fillText(`追従 ${this.target.short || this.target.name}`, W - m - 8, m + 24);
+    } else if (F) {
+      ctx.fillStyle = 'rgba(130,232,255,0.85)';
+      ctx.fillText(`AF ${F.c.short || F.c.name}`, W - m - 8, m + 24);
     }
-    if (F) {
-      ctx.fillStyle = 'rgba(130,232,255,0.95)';
-      ctx.fillText(`AF ● ${F.c.short || F.c.name}  ${F.c.dist < 9500 ? Math.round(F.c.dist) + ' m' : (F.c.dist / 1000).toFixed(1) + ' km'}`, W - m - 8, m + 50);
-    } else { ctx.fillStyle = 'rgba(225,240,255,0.55)'; ctx.fillText('AF ○  ∞', W - m - 8, m + 50); }
     // the zoom bar along the bottom: W — optical (white) | digital (amber) — T
     const bx0 = W * 0.26, bx1 = W * 0.74, by = H - m - 8;
     const ox = bx0 + (bx1 - bx0) * Math.log(OPT_MAX) / Math.log(Z_MAX);

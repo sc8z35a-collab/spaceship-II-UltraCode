@@ -8,6 +8,7 @@ export class Hud {
       down: document.getElementById('b-down'),
       exit: document.getElementById('b-exit'),
       cam: document.getElementById('b-cam'),
+      follow: document.getElementById('b-follow'),
       drop: document.getElementById('b-drop'),
       camUi: document.getElementById('cam-ui'),
       fade: document.getElementById('fx-fade'),
@@ -53,10 +54,16 @@ export class Hud {
     const floating = st === 'float' || st === 'eva';
     const climb = !!g.player.canClimb;
     const foc = !!(g.focus && !g.focus.out);
-    this.show('up', g.mode === 'walk' && !foc && (floating || climb));
-    this.show('down', g.mode === 'walk' && !foc && (floating || climb));
+    // (at the controls, flying where he looks: up and down slide the vessel)
+    const aimPil = g.mode === 'pilot' && !foc && !!(g.aim && g.aim.on) && !(g.player.seat && g.player.seat.shelter);
+    this.show('up', (g.mode === 'walk' && !foc && (floating || climb)) || aimPil);
+    this.show('down', (g.mode === 'walk' && !foc && (floating || climb)) || aimPil);
     this.show('exit', st === 'seated' || g.mode === 'camera' || foc);
     this.show('cam', (g.mode === 'pilot' || g.mode === 'camera') && !foc && !(g.player.seat && g.player.seat.shelter));
+    this.show('follow', g.mode === 'pilot' && !foc && !(g.player.seat && g.player.seat.shelter));
+    const fOn = !!(g.aim && g.aim.on);
+    if (this.last.fOn !== fOn) { this.last.fOn = fOn; this.el.follow.classList.toggle('active', fOn); }
+    g.input.aimFollow = fOn;
     this.show('drop', !!(g.systems && g.systems.held) && g.mode === 'walk' && !foc);
     this.show('camUi', g.mode === 'camera');
     // the guns: in a pilot seat (B-29's defence gun, or H8's cannon, railgun and missiles)
@@ -94,12 +101,14 @@ export class Hud {
       this.el.stickL.classList.toggle('hidden', foc); this.el.stickR.classList.toggle('hidden', foc);
       this.last.pil = undefined;
     }
-    if (!foc && pil !== this.last.pil) {
-      this.last.pil = pil;
+    // (flying where he looks there is no right stick: the right side turns the head)
+    const pilR = pil && !(g.mode === 'pilot' && fOn);
+    if (!foc && (pil !== this.last.pil || pilR !== this.last.pilR)) {
+      this.last.pil = pil; this.last.pilR = pilR;
       // (clear of the controls in the bottom corners)
-      for (const [s, x, y] of [[this.el.stickL, 0.2, 0.6], [this.el.stickR, 0.78, 0.58]]) {
-        s.classList.toggle('idle', pil);
-        if (pil) { s.style.left = (x * 100) + '%'; s.style.top = (y * 100) + '%'; }
+      for (const [s, x, y, on] of [[this.el.stickL, 0.2, 0.6, pil], [this.el.stickR, 0.78, 0.58, pilR]]) {
+        s.classList.toggle('idle', on);
+        if (on) { s.style.left = (x * 100) + '%'; s.style.top = (y * 100) + '%'; }
       }
     }
     // grade effect parameters

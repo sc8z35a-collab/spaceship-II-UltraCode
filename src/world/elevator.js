@@ -250,7 +250,7 @@ export class SpaceElevator {
       }
     }
     // ---- far line
-    this.engine.renderer.getDrawingBufferSize(this._size);
+    this._size.set(this.engine.rw, this.engine.rh);
     this.far.update(ax, origin, camWorld, sunDir, cut, gap, this._size);
     // ---- climbers: positions, far points, the nearest get models
     const C = this.traffic.climbers;
@@ -280,7 +280,7 @@ export class SpaceElevator {
     this.ptPhase.needsUpdate = true;
     this.points.geometry.attributes.position.needsUpdate = true;
     this.ptMat.uniforms.uTime.value = (t / 1000 * (st === 'damaged' || st === 'critical' ? 4 : 1)) % 10000;
-    this.ptMat.uniforms.uScale.value = this.engine.renderer.getPixelRatio();
+    this.ptMat.uniforms.uScale.value = this.engine.pr;
     near.sort((a, b) => a.d - b.d);
     const free = { P: this.pool.filter((m) => m.kind === 'P'), C: this.pool.filter((m) => m.kind === 'C') };
     const used = new Set();
@@ -317,7 +317,7 @@ export class SpaceElevator {
       const earthL = sc && sc.toEarth ? sc.toEarth : ax.clone().negate();
       const cam = this.engine.camera;
       const pxAngle = 2 * Math.tan(cam.fov * Math.PI / 360) / Math.max(1, this._size.y);
-      this.near.update(F, { sunL: sunDir, sunC, earthL, earthC, pxAngle, pixelRatio: this.engine.renderer.getPixelRatio(), time: tsec, lights, berths: berthEnv }, dt);
+      this.near.update(F, { sunL: sunDir, sunC, earthL, earthC, pxAngle, pixelRatio: this.engine.pr, time: tsec, lights, berths: berthEnv }, dt);
     } else this.near.update(null);
     // ---- anchor, counterweight, beam
     this.placeBig(this.anchor, E.anchorBerth * 0, origin, camWorld, 175, 3.5e5);
@@ -520,7 +520,7 @@ export class SpaceElevator {
       }
     }
     const cam = this.engine.camera;
-    const sc = this.engine.renderer.domElement.height / (2 * Math.tan(cam.fov * Math.PI / 360));
+    const sc = this.engine.pxPerRad(cam);
     this.fx.add.pts.material.uniforms.uScale.value = sc;
     this.fx.alpha.pts.material.uniforms.uScale.value = sc;
     this.fx.update(Math.min(dt, 0.1));
