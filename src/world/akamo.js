@@ -207,6 +207,27 @@ export class Akamo {
     return { pos: pr.applyQuaternion(qi).add(ride.off), quat: qi.clone().multiply(qr) };
   }
 
+  /**
+   * The escorts in formation with the cabin. No thruster of theirs could match its run (80 km/s in a
+   * couple of minutes), so once called along they lock on to the tower's guide field like the cabin
+   * itself: each closes on its place beside it (at most 8 km/s while catching up) and then moves
+   * exactly as the cabin does. Their own flight computers go on steering on top of that.
+   */
+  holdEscorts(dt) {
+    const g = this.g;
+    const T = this._he || (this._he = { p: new THREE.Vector3(), v: new THREE.Vector3(), d: new THREE.Vector3() });
+    const hold = (who, F) => {
+      if (!this.follow[who] || !F) return;
+      this.escortPoint(who, T.p, T.v);
+      T.d.copy(T.p).sub(F.pos);
+      const gap = T.d.length(), close = Math.min(gap / 1.5, 8000);
+      F.vel.copy(T.v);
+      if (gap > 1e-3) F.vel.addScaledVector(T.d, close / gap);
+    };
+    hold('b29', g.docking && g.docking.state === 'free' ? g.flight : null);
+    hold('h8', g.h8 && g.h8.flight && g.h8.mode === 'free' ? g.h8.flight : null);
+  }
+
   /** the cabin back at the bottom with Kaito: H8 goes home to B-29, B-29 back to its berth */
   followHome() {
     const g = this.g;
@@ -239,6 +260,7 @@ export class Akamo {
       if (b.textContent !== txt) b.textContent = txt;
       b.classList.toggle('on', on);
       b.style.opacity = this.follow[w] || on ? '' : '0.45';
+      b.disabled = !(this.follow[w] || on);
     }
   }
 
@@ -396,9 +418,11 @@ export class Akamo {
     this.motion();
     // ---- the ride frame: its pose and the felt pull
     if (g.ride === this.rideObj) this.updateRide(dt);
+    // ---- the escorts called along keep their places beside the cabin through its whole run
+    if (g.ride === this.rideObj) this.holdEscorts(dt);
     // ---- H8 / B-29 called along (the buttons only while Kaito rides AKAMO)
     // (the escort's view closed with the ride, or once the camera mode was left another way)
-    if (this.viewFrom && (g.mode !== 'camera' || g.ride !== this.rideObj || (this.viewFrom === 'h8' && !(g.h8 && g.h8.flight)))) {
+    if (this.viewFrom && (g.mode !== 'camera' || g.ride !== this.rideObj || !this.follow[this.viewFrom] || (this.viewFrom === 'h8' && !(g.h8 && g.h8.flight)))) {
       if (g.mode === 'camera') this.closeView(); else this.viewFrom = null;
     }
     this.updatePanel(g.ride === this.rideObj);
