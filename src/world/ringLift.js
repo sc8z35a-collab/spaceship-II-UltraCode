@@ -389,6 +389,12 @@ export function buildRingLift(M, R) {
       step(dt, g); applyCols(); st.stepped = true;
       // the rider goes with the car, moved with it outright (no contest with its floor's contact)
       if (rider && st.dr !== 0 && D.inRing) { _w.copy(pl.pos).addScaledVector(U, st.dr); pl.teleport(_w); }
+      // (never left sunk into the car's floor: his middle at least his half height over it)
+      if (rider && D.inRing) {
+        _w.copy(pl.pos).sub(st.C);
+        const s = _w.dot(U), top = st.rf - (pl.crouch > 0.5 ? 0.5 : 0.8);
+        if (s > top + 0.06) { _w.addScaledVector(U, top - s).add(st.C); pl.teleport(_w); }
+      }
     },
     update(dt, g) {
       if (!st.cols) return;

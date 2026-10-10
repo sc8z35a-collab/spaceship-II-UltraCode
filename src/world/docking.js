@@ -351,6 +351,7 @@ export class Docking {
     const g = this.g, R = this.lobby && this.lobby.ring;
     // (Shirasagi's first spoke has a real car, ringLift.js: the hub's panel and its hall's button call it)
     if (R && R.lift && this.state === 'docked' && (down || R.lift.nearHall(this.ringState.pos))) { R.lift.call(down ? 'top' : 'deck'); return; }
+    if (R && R.lift && this.state === 'docked' && !down) { if (this.g.statusLine) this.g.statusLine.note('この昇降口は点検中です — 第1エレベーター（ハブ行き）をご利用ください', 4); if (this.g.audio && this.g.audio.beep) this.g.audio.beep(520, 0.12, 0.05, { direct: true }); return; }
     if (!R || this.riding || this.state !== 'docked' || g.player.state === 'dead') return;
     if (down === this.inRing) return;
     const st = this.station.dmg ? this.station.dmg.status : 'ok';
