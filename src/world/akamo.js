@@ -222,12 +222,14 @@ export class Akamo {
       this.escortPoint(who, T.p, T.v);
       T.d.copy(T.p).sub(F.pos);
       const gap = T.d.length(), close = Math.min(gap / 1.5, 8000);
-      // (the speed it wants, reached at no more than 600 m/s² so a late join never jumps)
-      const want = T.p.copy(T.v);
-      if (gap > 1e-3) want.addScaledVector(T.d, close / gap);
-      T.d.copy(want).sub(F.vel);
-      const dv = T.d.length(), lim = 600 * Math.max(dt, 1e-3);
-      if (dv > lim) F.vel.addScaledVector(T.d, lim / dv); else F.vel.copy(want);
+      // (carried exactly with the cabin's own motion, however hard it boosts; only its speed against
+      // the cabin eases toward the closing speed it wants, at no more than 1200 m/s², so a late
+      // join never jumps)
+      const rel = T.p.copy(F.vel).sub(T.v);
+      const dv = gap > 1e-3 ? T.d.multiplyScalar(close / gap).sub(rel) : T.d.copy(rel).negate();
+      const n = dv.length(), lim = 1200 * Math.max(dt, 1e-3);
+      if (n > lim) rel.addScaledVector(dv, lim / n); else rel.add(dv);
+      F.vel.copy(T.v).add(rel);
     };
     hold('b29', g.docking && g.docking.state === 'free' ? g.flight : null);
     hold('h8', g.h8 && g.h8.flight && g.h8.mode === 'free' ? g.h8.flight : null);
