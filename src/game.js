@@ -378,7 +378,7 @@ export class Game {
     }
     // out in a suit: its own thrusters and boosters fly him
     env.suit = this.suits && pl.suit ? this.suits : null;
-    let lookInp = this.mode === 'camera' || focused || aiming ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
+    let lookInp = this.mode === 'camera' || focused || aiming || remote ? Object.assign({}, inp, { lookDX: 0, lookDY: 0 }) : inp;
     // through H8's zoom the head turns slower (the view is magnified)
     const zm = this.h8 && pl.seat === this.h8.seat ? this.h8.zoom.z : 1;
     if (zm > 1.01) lookInp = Object.assign({}, lookInp, { lookDX: lookInp.lookDX / zm, lookDY: lookInp.lookDY / zm });

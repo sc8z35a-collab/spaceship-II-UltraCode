@@ -360,7 +360,7 @@ export function buildPod(grade, armed, level, label, station) {
           // (the cabin has no lamp: the screens' and strips' glow on them)
           c.person.root.traverse((o) => {
             if (!o.isMesh) return;
-            const lit = (m) => { if (!m || !m.emissive) return m; const q = m.clone(); q.emissive.copy(q.color).multiplyScalar(0.32); q.emissiveIntensity = 1; (c.mats || (c.mats = [])).push(q); return q; };
+            const lit = (m) => { if (!m || !m.emissive) return m; const q = m.clone(); q.emissive.setRGB(0.36, 0.44, 0.55); if (q.map) q.emissiveMap = q.map; q.emissiveIntensity = 1; (c.mats || (c.mats = [])).push(q); return q; };
             o.material = Array.isArray(o.material) ? o.material.map(lit) : lit(o.material);
           });
           const room = Math.sqrt(Math.max(0.05, Rl * Rl - c.seat.x * c.seat.x)) - c.seat.y - 0.05;
