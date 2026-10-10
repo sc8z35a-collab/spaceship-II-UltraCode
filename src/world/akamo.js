@@ -191,7 +191,7 @@ export class Akamo {
     const qi = T.q.copy(ride.quat).invert();
     if (i === 0) {
       const P = T.a.copy(F.pos).sub(origin).applyQuaternion(qi).add(ride.off);       // the ship, in the cabin's frame
-      const tgt = ride.off.clone().add(T.b.set(0, 1.2, 0));                             // the cabin's middle
+      const tgt = g.player.pos.clone();                                                  // Kaito in the cabin (the frame his eye lives in)
       const away = P.clone().sub(tgt).normalize();
       // (between the ship and the cabin, a little up: the ship's own hull out of the way)
       const dist = P.distanceTo(tgt);
