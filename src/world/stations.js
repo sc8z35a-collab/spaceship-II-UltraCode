@@ -398,7 +398,7 @@ function hubModel(def, M) {
       box([x, 0, z + (k ? 9 : -9)], [16.2, 0.4, 7.7]);
     }
   }
-  for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); }
+  for (const sy of [-1, 1]) { b.box(0.25, 26, 12, 'radiatorPanel', [0, sy * 18, 70], null, 0); box([0, sy * 18, 70], [0.6, 13.2, 6.2]); for (const zz of [65.5, 74.5]) b.box(0.5, 6, 0.5, 'radiatorPanel', [0, sy * 3.5, zz], null, 0.02); }
   // ---- H8's port on the forward truss
   h8Collar(b, 0, H8_PORT_HUB.y, H8_PORT_HUB.z);
   // ---- antennas, dishes, docked visitor, nav lights, strobes
