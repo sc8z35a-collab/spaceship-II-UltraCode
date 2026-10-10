@@ -729,6 +729,8 @@ export class Monitors {
     const rt = g.damage.reactorTemp || 560;
     K.text('CORE', 170, 58, { size: 11, color: COL.dim }); K.bar(210, 50, 280, 9, (rt - 300) / 700, rt > 800 ? COL.red : COL.cyan);
     K.text(Math.round(rt) + ' K', 490, 80, { size: 11, color: COL.text, align: 'right', mono: true });
+    // (on a tabbed screen its tab row over the top, last: the page is never a dead end)
+    if (this._tabs) this.header(K, '状況', H);
   }
 
   draw_living(K, m, H) { this.draw_sub(K, m, H, ['状態', 'カメラ', '音楽', '照明', '扉']); }
