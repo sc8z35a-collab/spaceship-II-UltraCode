@@ -414,6 +414,7 @@ export class SuitRescue {
         // beside him: he flies on in H8's coordinates; it holds where it is and opens its neck
         if (!h.solo) s.transferToH8();
         if (h.goal) h.goal('hold');
+        s.hold = true;          // (the suit holds station by H8 too, or the two drift apart)
         R.phase = 'here';
         h.say('hachi_kaito_here', {}, { force: true });
       }
@@ -444,6 +445,7 @@ export class SuitRescue {
     const g = this.g, R = this.R, pl = g.player;
     if (!R || (R.phase !== 'here')) return;
     R.phase = 'board';
+    this.s.hold = false;        // (now the flight computer follows the way in, not a hold)
     R.canBoard = null;
     if (R.who === 'b29') {
       const o = g.hatch.o;
