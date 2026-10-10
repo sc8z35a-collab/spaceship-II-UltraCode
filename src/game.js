@@ -281,7 +281,7 @@ export class Game {
     // (the lean-in itself is animated per drawn frame: focusPose)
     const F = this.focus;
     const focused = !!(F && !F.out) || !!this.cine;
-    if (!limp && !focused && (this.mode === 'pilot' || this.mode === 'camera')) {
+    if (!limp && !focused && (this.mode === 'pilot' || (this.mode === 'camera' && !(this.akamo && this.akamo.viewFrom)))) {
       flightIn = { throttle: inp.moveY, yaw: inp.moveX, pitch: inp.ry, roll: inp.rx };
     }
     // flying a stolen escape pod from H8's seat: the sticks are the pod's, H8 holds as it is

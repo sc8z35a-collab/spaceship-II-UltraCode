@@ -371,8 +371,7 @@ export class SuitRescue {
     }
     if (R.phase === 'board') {
       this.openB29(R);
-      if ((g.player && !g.player.outside) || this.flyIn(R, g.hatch.open > 0.85)) {
-        this.tuck = false;
+      if (this.flyIn(R, g.hatch.open > 0.85)) {
         R.phase = 'in';
         s.autoV = null;
         this.say('suit_b29_in');
@@ -489,7 +488,7 @@ export class SuitRescue {
     // (stuck on something on the way in (a boom, an array, a rim): back off and slip round it, a
     // wider way each time, the other side each time)
     const far = pl.pos.distanceTo(w);
-    const waiting = !open && (R.gate <= 0 || R.wp.length <= 2);       // (held at the hatch on purpose)
+    const waiting = !open && far < 1.2 && (R.gate <= 0 || R.wp.length <= 2);       // (held at the hatch on purpose)
     if (!waiting && R.last && pl.pos.distanceTo(R.last) < 0.003 && far > 0.3) R.stuck = (R.stuck || 0) + 1; else R.stuck = 0;
     R.last = (R.last || new THREE.Vector3()).copy(pl.pos);
     if (R.stuck > 50 && R.wp.length < 14) {

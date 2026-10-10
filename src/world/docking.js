@@ -522,7 +522,7 @@ export class Docking {
       const h = this.g.hatch;
       P.t += dt;
       if (this.state !== 'docked' || h.target > 0.5) this.pendingUndock = null;      // opened again
-      else if (h.sealed) { if (this.undock(P.after) === false) this.pendingUndock = null; }
+      else if (h.sealed) { if (this.undock(P.after) === false) { this.pendingUndock = null; const A = this.g.akamo, ap = this.g.autopilot; if (A && A.follow) { A.follow.b29 = false; if (A.viewFrom === 'b29') A.closeView(); if (ap && A.b29Target && ap.target === A.b29Target) ap.disengage(true); } } }
       else if (P.t > 25) { this.pendingUndock = null; this.g.asphalt.say('st_dock_hatch', {}, { force: true }); }
     }
   }

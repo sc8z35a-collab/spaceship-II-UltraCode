@@ -103,7 +103,7 @@ function drawConsole(c) {
   x.strokeStyle = '#7dff9a'; x.beginPath();
   for (let i = 0; i <= 60; i++) { const xx = 10 + i * (W - 20) / 60, yy = 116 - Math.cos(i * 0.23) * 10; if (i) x.lineTo(xx, yy); else x.moveTo(xx, yy); }
   x.stroke();
-  x.fillStyle = '#9fd7ff'; x.font = '600 13px monospace'; x.textAlign = 'left'; x.fillText('RING ω 0.280  G 0.48', 12, 15);
+  x.fillStyle = '#9fd7ff'; x.font = '600 13px monospace'; x.textAlign = 'left'; x.fillText('RING CONTROL · ONLINE', 12, 15);
   x.fillStyle = 'rgba(125,255,154,0.9)'; x.fillRect(W - 60, 132, 48, 10);
 }
 function drawTread(c) {
