@@ -413,7 +413,16 @@ export class Akamo {
         this.chime();
         if (aboard) this.say(this.end === 'top' ? 'ak_arrive_top' : 'ak_arrive_bottom');
         // back at the bottom: Kaito steps back into the station's (B-29's) frame (B-29 there)
-        if (this.end === 'bottom' && aboardRide) { this.followHome(); if (this.isDockedHere()) this.leaveRide(); else this.say('ak_wait_b29'); }
+        if (this.end === 'bottom' && aboardRide) {
+          this.followHome();
+          if (this.isDockedHere()) this.leaveRide();
+          else {
+            this.say('ak_wait_b29');
+            this.waitB29 = true;
+            // (B-29 sent away during the ride: it is called back to its berth, or Kaito is shut in)
+            if (this.st && g.docking.state === 'free' && !(g.damage && g.damage.broken) && !this.b29Return) { g.autopilot.engage(this.st.id); this.b29Return = true; }
+          }
+        }
       }
     }
     setDoors(this.cab, this.doors);
@@ -441,7 +450,10 @@ export class Akamo {
     // ---- the cabin's room at the bottom berth (walkable while it is in and B-29 is docked)
     this.setBerth(this.state !== 'run' && this.end === 'bottom' && this.isDockedHere());
     // B-29 sent back to its berth: once it holds at Shirasagi, it docks again
-    if (this.b29Return && g.autopilot.state === 'hold' && g.autopilot.target === this.st && g.docking.state === 'free') { this.b29Return = false; g.docking.request(); }
+    if (this.b29Return && g.autopilot.state === 'hold' && g.autopilot.target && this.st && (g.autopilot.target === this.st || g.autopilot.target.id === this.st.id) && g.docking.state === 'free') { this.b29Return = false; g.docking.request(); }
+    // (and once it is docked, the cabin waiting at the bottom lets him out)
+    if (this.waitB29 && g.ride === this.rideObj && this.end === 'bottom' && this.state !== 'run' && this.isDockedHere()) { this.waitB29 = false; this.leaveRide(); }
+    if (this.waitB29 && g.ride !== this.rideObj) this.waitB29 = false;
     // ---- the people
     this.updatePeople(dt, aboard || aboardRide);
     // ---- what Kaito hears and feels aboard

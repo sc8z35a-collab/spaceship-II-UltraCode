@@ -248,7 +248,7 @@ export function buildRingLift(M, R) {
         break;
       case 'xfer': {        // a blink while the frame changes over (the doors shut)
         st.xfer += dt;
-        if (st.xfer < 0.05) g.hud && g.hud.setFade && g.hud.setFade(1);
+        if (st.xfer < 0.3) g.hud && g.hud.setFade && g.hud.setFade(1);
         if (st.xfer > 0.4 && st.xferDir) { (st.xferDir === 'in' ? intoRing : outOfRing)(g); st.xferDir = null; }
         if (st.xfer > 0.7) { g.hud && g.hud.setFade && g.hud.setFade(0); st.phase = st.dest === st.at ? 'opening' : 'move'; }
         break;
@@ -282,7 +282,7 @@ export function buildRingLift(M, R) {
     D.inRing = true;
     pl.teleport(p.clone());
     pl.up.copy(U).negate();
-    pl.yaw = -Math.PI / 2; pl.pitch = 0; pl.state = 'float';
+    pl.yaw = -Math.PI / 2; pl.pitch = 0; if (pl.state !== 'dead') pl.state = 'float';
     pl.eyeLocal.copy(p).addScaledVector(pl.up, 0.7);
     D.storeRingState();
     D.toRenderSpace();
