@@ -1025,7 +1025,7 @@ export class H8Vessel {
   /** B-29's walls are there for Kaito unless he is away (in H8 or its shelter) */
   syncAway() {
     const g = this.g, away = this.solo;
-    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); for (const d of Object.values(g.doors || {})) if (d.col) d.col.col.setEnabled(!away); if (this.hatch && this.hatch.col) this.hatch.col.col.setEnabled(!away); }
     const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
     if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
   }
@@ -1414,7 +1414,7 @@ export class H8Vessel {
     const extOn = this.mode === 'docked' || (this.crew && this.mode === 'free');
     if (extOn !== this._extOn) { this._extOn = extOn; for (const c of this.extCols) c.setEnabled(extOn); }
     const away = this.solo;
-    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); }
+    if (away !== this._away) { this._away = away; for (const c of g.b29Static || []) c.setEnabled(!away); for (const d of Object.values(g.doors || {})) if (d.col) d.col.col.setEnabled(!away); if (this.hatch && this.hatch.col) this.hatch.col.col.setEnabled(!away); }
     // Kaito outside while away from B-29: HACHI keeps H8 still beside him
     if (this.solo && g.player.outside && this.pilot.goal) { this.goal('hold'); this.say('hachi_eva_hold', {}, { minGap: 30 }); }
     // ---- H8's own airlock (the shaft), the circuits' sparks, first aid from outside
