@@ -448,23 +448,25 @@ export class FireControl {
   /**
    * The shot at a tracked target from a muzzle (from, moving with fromVel): the solution, kept
    * for a moment and refined from the last one. aim: the point on the target to hit (ECI; its
-   * track's position when omitted)
+   * track's position when omitted); aimDv: how much faster that point moves than the target's
+   * middle (its turning carries it round)
    */
-  solve(id, from, fromVel, aim) {
+  solve(id, from, fromVel, aim, aimDv = null) {
     const T = this.tracks.get(id);
     if (!T) return null;
     const S = this.sol && this.sol.id === id ? this.sol : null;
     const P = aim || T.pos;
+    const V = aimDv ? T.vel.clone().add(aimDv) : T.vel;
     // the full solution (by flying the shot) a dozen or so times a second; in between, the
     // straight-line lead of the moment with the correction the last full solution found (it
     // changes slowly: the differences of gravity and drag along the way)
-    const lead = leadDir(from, fromVel, P, T.vel, this.am.v0, new THREE.Vector3(), T.acc);
+    const lead = leadDir(from, fromVel, P, V, this.am.v0, new THREE.Vector3(), T.acc);
     if (!lead) { this.sol = null; return null; }
     let sol;
     if (S && this.solAge < this.every) {
       sol = { id, dir: lead.clone().add(S.corr).normalize(), tof: lead.t + S.dTof, miss: S.miss, ok: S.ok, corr: S.corr, dTof: S.dTof };
     } else {
-      sol = solveAim({ from, fromVel, tPos: P, tVel: T.vel, tAcc: T.acc, am: this.am, env: this.env, dir0: S ? lead.clone().add(S.corr).normalize() : lead, iters: S ? 2 : 4 });
+      sol = solveAim({ from, fromVel, tPos: P, tVel: V, tAcc: T.acc, am: this.am, env: this.env, dir0: S ? lead.clone().add(S.corr).normalize() : lead, iters: S ? 2 : 4 });
       if (!sol) { this.sol = null; return null; }
       sol.corr = sol.dir.clone().sub(lead);
       sol.dTof = sol.tof - lead.t;

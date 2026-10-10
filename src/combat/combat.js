@@ -197,7 +197,7 @@ export class Combat {
       const dir = o.dir.clone();
       r = {
         kind: o.kind, R, pos: o.pos.clone(), prev: o.pos.clone(), vel: o.vel.clone().addScaledVector(dir, R.speed),
-        dir, owner: o.owner || null, age: 0, life: R.life, byPlayer: !!o.byPlayer, target: o.target || null, done: false,
+        dir, owner: o.owner || null, age: 0, life: R.life, byPlayer: !!o.byPlayer, target: o.target || null, aimOff: o.aimOff || null, done: false,
         boost: 0,
       };
     }
@@ -351,13 +351,17 @@ export class Combat {
       const mt = r.target;
       if (!best && test && r.kind === 'missile' && mt && mt.alive !== false && mt.dead !== true && mt.pos) {
         const tv = mt.vel || r.vel;
+        // (round the point in focus when it went for one)
+        const off = r._offOk ? r._off : null;
         const q0 = r.prev.clone().sub(mt.pos);
         const q1 = r.pos.clone().sub(_v.copy(mt.pos).addScaledVector(tv, dt));
+        if (off) { q0.sub(off); q1.sub(off); }
         const seg = q1.sub(q0), L2 = seg.lengthSq();
         const s = L2 > 1e-9 ? Math.max(0, Math.min(1, -q0.dot(seg) / L2)) : 0;
         const cp = q0.addScaledVector(seg, s);
-        const R = mt.R || mt.radius || 1;
+        const R = off ? Math.min(mt.R || mt.radius || 1, 8) : mt.R || mt.radius || 1;
         if (cp.length() < 5 + R) {
+          if (off) cp.add(off);
           const tg = T.find((x) => x.ref === mt) || { kind: mt.kind || 'drone', ref: mt, pos: mt.pos, vel: tv, R };
           best = { tg, f: s, point: cp.clone(), n: cp.clone().normalize(), prox: true };
         }
@@ -388,7 +392,11 @@ export class Combat {
     // the motor lights once it is clear of the launcher: a bright flash
     if (was < 0 && r.boost >= 0) this.flash(r.pos, [1.0, 0.8, 0.5], 3.2, 0.25, r.vel);
     if (r.boost < 0 || !tg || tg.alive === false || !tg.pos) return;
+    // (the point in focus on it, when one was locked: the line of sight runs to that point)
+    const off = r.aimOff ? r.aimOff(r._off || (r._off = new THREE.Vector3())) : null;
+    r._offOk = !!(off && off.lengthSq() < 1e8);
     const rel = tg.pos.clone().sub(r.pos), vrel = (tg.vel || r.vel).clone().sub(r.vel);
+    if (r._offOk) rel.add(off);
     const d = rel.length();
     const los = rel.clone().divideScalar(Math.max(1, d));
     const closing = -vrel.dot(los);

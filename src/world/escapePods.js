@@ -734,7 +734,18 @@ export class EscapePods {
       setTimeout(() => {
         if (!p.alive || this.remote !== p || p.ammo <= 0) return;
         const at = this.muzzle(p, new THREE.Vector3());
-        g.combat.fire({ kind: 'pd', pos: at, vel: p.vel, dir: new THREE.Vector3(0, 0, -1).applyQuaternion(p.q), owner: p, byPlayer: true, disp: 1.2 });
+        // (H8's focus ahead: the gun's gimbal leads it, reckoned against the pod's own motion; a
+        // target beyond its 20 degrees, it fires straight ahead)
+        const nose = new THREE.Vector3(0, 0, -1).applyQuaternion(p.q);
+        let dir = nose;
+        const T = g.weapons && g.weapons.focusTarget ? g.weapons.focusTarget() : null;
+        if (T && p.fc && T.ref !== p && T.pos) {
+          const aim = T.aimOff ? T.aimOff(new THREE.Vector3()).add(T.pos) : T.pos.clone();
+          p.fc.observe('rf', aim, T.vel || p.vel, null, 0.125);
+          const sol = p.fc.solve('rf', at, p.vel, aim);
+          if (sol && sol.aimDir.angleTo(nose) < 0.35) dir = sol.aimDir;
+        }
+        g.combat.fire({ kind: 'pd', round: p.fc ? p.fc.fire(at, p.vel, dir, 1.2) : undefined, pos: at, vel: p.vel, dir, owner: p, byPlayer: true, disp: 1.2 });
         p.ammo--;
         if (g.audio.ready) g.audio.beep(150, 0.05, 0.07, { direct: true, type: 'sawtooth' });
       }, i * 125);
