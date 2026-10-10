@@ -477,7 +477,7 @@ export class SuitRescue {
     // the centimetre, tucked up)
     const tight = R.wp.length <= (R.who === 'b29' ? 3 : 2);
     this.tuck = tight;
-    while (w && pl.pos.distanceTo(w) < (tight ? 0.07 : 0.4) && (R.wp.length > 1 || open)) {
+    while (w && pl.pos.distanceTo(w) < (tight ? 0.3 : 0.4) && (R.wp.length > 1 || open)) {
       if (!w.detour) R.tries = 0;
       R.wp.shift(); R.gate--;
       w = R.wp[0];
