@@ -218,14 +218,18 @@ export class Akamo {
     const g = this.g;
     const T = this._he || (this._he = { p: new THREE.Vector3(), v: new THREE.Vector3(), d: new THREE.Vector3() });
     const hold = (who, F) => {
-      if (!this.follow[who] || !F) return;
+      if (!this.follow[who] || !F) { if (this._heRel) this._heRel[who] = null; return; }
       this.escortPoint(who, T.p, T.v);
       T.d.copy(T.p).sub(F.pos);
       const gap = T.d.length(), close = Math.min(gap / 1.5, 8000);
       // (carried exactly with the cabin's own motion, however hard it boosts; only its speed against
       // the cabin eases toward the closing speed it wants, at no more than 1200 m/s², so a late
       // join never jumps)
-      const rel = T.p.copy(F.vel).sub(T.v);
+      // (its speed against the cabin is kept here, so the cabin's own boost between steps is carried
+      // in full and never read as the escort falling behind)
+      const RS = this._heRel || (this._heRel = {});
+      if (!RS[who] || RS[who].F !== F) RS[who] = { F, v: new THREE.Vector3().copy(F.vel).sub(T.v) };
+      const rel = RS[who].v;
       const dv = gap > 1e-3 ? T.d.multiplyScalar(close / gap).sub(rel) : T.d.copy(rel).negate();
       const n = dv.length(), lim = 1200 * Math.max(dt, 1e-3);
       if (n > lim) rel.addScaledVector(dv, lim / n); else rel.add(dv);
