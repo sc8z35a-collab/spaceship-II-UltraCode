@@ -310,8 +310,8 @@ export class Gameplay {
     const g = this.g, h = g.hatch, ls = g.lifeSupport;
     if (h.target > 0.5) { h.target = 0; g.audio.mech(h.o.center, 'hatch', { open: false }); return; }
     const p = ls.pressure('airlock'), beyond = ls.portAmbient ?? ls.ambient;
-    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
-    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); return; }
+    if (!g.player.suit && !this.breathable(beyond)) { g.asphalt.say('hatch_nosuit', {}, { minGap: 6 }); g.audio.denied(h.o.center); if (g.statusLine) g.statusLine.note('ハッチの外は真空です — 宇宙服を着てから', 4); return; }
+    if (Math.abs(p - beyond) > 4) { g.asphalt.say('hatch_press', {}, { minGap: 6 }); g.audio.denied(h.o.center); if (g.statusLine) g.statusLine.note('気圧が合っていません — エアロックを' + (p > beyond ? '減圧' : '加圧') + 'してから', 4); return; }
     h.target = 1;
     g.audio.mech(h.o.center, 'hatch', { open: true });
   }
@@ -421,7 +421,7 @@ export class Gameplay {
   startRepair(it) {
     const g = this.g;
     if (it.h8) { this.startH8Repair(it); return; }
-    if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); return; }
+    if (this.held !== 'kit') { g.asphalt.say('need_kit', {}, { minGap: 15 }); if (g.statusLine) g.statusLine.note('ここは修理が必要です — 修理キット（廊下の工具棚）を持ってきてタップ', 4.5); return; }
     if (it.state !== 'active') { g.asphalt.say('repair_patch', {}, { minGap: 15 }); return; }
     if (!it.repairable) { g.asphalt.say('repair_cannot', {}, { minGap: 20 }); return; }
     const need = it.kind === 'pipe' ? 'clamps' : it.kind === 'breach' ? 'patches' : it.kind === 'crack' || it.kind === 'fracture' ? 'sealant' : 'parts';

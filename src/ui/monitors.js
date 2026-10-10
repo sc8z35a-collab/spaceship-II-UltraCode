@@ -800,7 +800,7 @@ export class Monitors {
     K.button(10, 54, 160, 40, mode === 'dep' ? '減圧中…' : '減圧', () => g.systems.airlockCycle('dep'), { style: mode === 'dep' ? 'on' : 'normal', size: 13 });
     K.button(176, 54, 160, 40, mode === 'rep' ? '加圧中…' : '加圧', () => g.systems.airlockCycle('rep'), { style: mode === 'rep' ? 'on' : 'normal', size: 13 });
     const canOpen = p < 2 && g.player.suit;
-    K.button(342, 54, 160, 40, g.hatch.target > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => g.systems.hatchTapped(), { style: g.hatch.target > 0.5 ? 'warn' : canOpen ? 'normal' : 'disabled', size: 13 });
+    K.button(342, 54, 160, 40, g.hatch.target > 0.5 ? 'ハッチ 閉' : 'ハッチ 開', () => g.systems.hatchTapped(), { style: g.hatch.target > 0.5 ? 'warn' : 'normal', size: 13 });     // (the hatch itself says why it will not open)
     K.text(g.player.suit ? '宇宙服 装着' : '宇宙服 未装着', 10, H - 12, { size: 11, color: g.player.suit ? COL.green : COL.amber });
   }
 
