@@ -195,7 +195,7 @@ export class Akamo {
       const away = P.clone().sub(tgt).normalize();
       // (between the ship and the cabin, a little up: the ship's own hull out of the way)
       const dist = P.distanceTo(tgt);
-      const pos = tgt.clone().addScaledVector(away, Math.min(dist * 0.6, h8 ? 32 : 45)).add(T.b.set(0, h8 ? 4 : 7, 0));
+      const pos = tgt.clone().addScaledVector(away, Math.min(dist * 0.6, h8 ? 15 : 20)).add(T.b.set(0, h8 ? 3 : 4, 0));
       const quat = new THREE.Quaternion().setFromRotationMatrix(T.m.lookAt(pos, tgt, T.Y));
       return g.lookExternal({ pos, quat, orbit: tgt }, dt);
     }
