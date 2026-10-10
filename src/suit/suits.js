@@ -71,6 +71,7 @@ function assistAcc(want, asked, boosting, fwd, rel, S, Fn, tk, autoV, out) {
   return Math.min(1, out.length() / Math.max(1e-4, aMax)) * (big ? 1 : 0.18);
 }
 const ZERO = V(0, 0, 0);
+const _eg = new THREE.Vector3();
 const _e1 = new THREE.Vector3(), _e2 = new THREE.Vector3(), _e3 = new THREE.Vector3(), _qe = new THREE.Quaternion(), _qe2 = new THREE.Quaternion(), _eu = new THREE.Euler();
 const gravE = (p, out) => { const r = p.length(); return out.copy(p).multiplyScalar(-MU_EARTH / (r * r * r)); };
 // (the avatar's joints: its attitude, what moves it)
@@ -326,7 +327,8 @@ export class Suits {
 
   /** the camera override for the render (game.js): the sequence's eye */
   pose() {
-    if (!this.seq) return null;
+    // (its first frame, before the sequence has its timings: the ordinary view)
+    if (!this.seq || !this.seq.L) return null;
     this._last = this.seq;
     return this.seqPose(this.seq.t);
   }
@@ -662,7 +664,7 @@ export class Suits {
     const coming = !!(this.rescuer && this.rescuer.approaching && this.rescuer.approaching());
     // (this step's fall first, as the vessel has already had its own: the speed against it is then
     // the one the step ends with, and the assist flies what it is asked, not g·dt off it)
-    E.v.addScaledVector(gravE(E.p, _v), h);
+    E.v.addScaledVector(gravE(E.p, _eg), h);
     const rel = _e2.copy(E.v).sub(F.vel);
     const a = _e3.set(0, 0, 0);
     let thrusting = false;
@@ -713,8 +715,10 @@ export class Suits {
       if (sp > E.vCap) E.v.copy(F.vel).addScaledVector(r2, E.vCap / sp);
     }
     // (the step he was taken up on was already made with the frame)
+    // (the step as the vessel takes its own, gravity's half-step included: at rest beside it he
+    // stays where he is instead of sinking toward the Earth by half g h^2 each step)
     if (E.fresh) E.fresh = false;
-    else E.p.addScaledVector(E.v, h);
+    else E.p.addScaledVector(E.v, h).addScaledVector(_eg, -0.5 * h * h);
     // where that is in the frame now: the step his body takes there (what is in the way stops it)
     pl.vel.copy(this.toLocal(F, E.p, _e1)).sub(pl.pos).divideScalar(Math.max(1e-4, dt));
     return thrusting;
