@@ -610,12 +610,54 @@ export class RingRooms {
     for (const ch of this.group.children) { if (ch === this.dyn) continue; ch.traverse((o) => { if (!ref && o.isMesh) ref = o; }); if (ref) break; }
     this.mask = ref ? ref.layers.mask : 1;
     this.dyn.traverse((o) => { o.layers.mask = this.mask; });
+    this.makeTaps(g);
+  }
+
+  /** things to tap in the rooms: a clear box over each real thing */
+  makeTaps(g) {
+    if (!g.interact) return;
+    const say = (t) => { if (g.statusLine) g.statusLine.note(t, 4); if (g.audio && g.audio.beep) g.audio.beep(1180, 0.06, 0.05, { direct: true }); };
+    if (!this.tapM) {
+      const mat = new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false });
+      const spots = {
+        mess: [[-6.5, -1.92, 1.0, 0.85, 1.8, 0.6, () => say('ドリンクサーバー：冷たい緑茶をもらった（0.48G だと少しゆっくり注がれる）')]],
+        clinic: [[3.9, -1.48, 0.8, 2.0, 1.6, 1.3, () => say('医療スキャン：異常なし — 心拍 72・SpO2 98%')]],
+        quarters: [[-3.75, -(this.ctx.hw - 0.62), 0.64, 2.1, 1.12, 1.25, () => this.rest(g)]],
+        control: [[4.2, 1.5, 1.2, 1.4, 0.8, 1.4, () => {
+          if (!this.holo) return;
+          const big = this.holo.root.scale.x < 1.2;
+          this.holo.root.scale.setScalar(big ? 1.8 : 1);
+          say('ホロテーブル：白鷺の全体図を' + (big ? '拡大' : '通常表示'));
+        }]],
+        gym: [[-1.8, 1.58, 0.6, 2.0, 1.2, 0.8, () => say('ランニングマシン：ここでは体重がおよそ半分。地球の倍は走れそう')]],
+      };
+      this.tapM = [];
+      for (const r of this.rooms) for (const [x, z, y, w, h, d, fn] of spots[r.kind] || []) {
+        const aDeg = r.am + x / (this.ctx.RF * D2R);
+        const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+        this.toRing(aDeg, 0, y, z, m.position);
+        m.quaternion.setFromAxisAngle(_Z, aDeg * D2R + Math.PI / 2);
+        m.layers.mask = this.mask;
+        this.dyn.add(m);
+        this.tapM.push([m, fn]);
+      }
+    }
+    this.taps = this.tapM.map(([m, fn]) => g.interact.addMesh(m, fn, { maxDist: 2.6 }));
+  }
+
+  /** a nap in a capsule: the eyes close a moment */
+  rest(g) {
+    if (this.restT > 0) return;
+    this.restT = 3.2;
+    if (g.statusLine) g.statusLine.note('カプセルで少し仮眠した', 4);
   }
 
   detach(g) {
     if (this.cols) for (const c of this.cols) g.phys.world.removeCollider(c, true);
     this.cols = null;
     for (const d of this.doors) d.col = null;
+    if (this.taps && g.interact) for (const t of this.taps) g.interact.remove(t);
+    this.taps = null;
   }
 
   update(dt, g) {
@@ -628,6 +670,11 @@ export class RingRooms {
     const alarm = s === 'critical' || s === 'failed' || s === 'destroyed';
     this.updateDoors(dt, g, p);
     this.updateFolk(dt, p, alarm);
+    if (this.restT > 0 && g.hud && g.hud.setFade) {
+      this.restT -= dt;
+      const k = this.restT > 1.6 ? (3.2 - this.restT) / 1.6 : this.restT / 1.6;
+      g.hud.setFade(this.restT > 0 ? Math.max(0, Math.min(1, k)) : 0);
+    }
     if (this.pa == null) return;
     const near = (kind) => { const r = this.rooms.find((q) => q.kind === kind); return !!r && Math.abs(wrapDeg(this.pa - r.am)) < 14; };
     const T = this.drawT, R = this.R, k = st && st.ringK != null ? st.ringK : 1, om = 0.28 * k, G = om * om * this.ctx.RF / 9.81;
